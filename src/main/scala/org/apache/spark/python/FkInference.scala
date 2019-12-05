@@ -35,6 +35,10 @@ object FkInference {
     case _ => false
   }
 
+  // TODO: We might be able to use an attribute name to infer if the attribute is a foreign key or not.
+  // There is the earlier study to use attribute name strings for type inferences:
+  //  * Vraj Shah and Arun Kumar, The ML Data Prep Zoo: Towards Semi-Automatic Data Preparation for ML,
+  //    Proceedings of DEEM'19, Article 11, 2019, https://doi.org/10.1145/3329486.3329499.
   def computeFkScoreFromName(X: String, Y: String): Double = {
     val likely = (s: String) => if (Seq("id", "key", "sk").exists(s.contains)) 0.5 else 0.0
     likely(X) + likely(Y)
