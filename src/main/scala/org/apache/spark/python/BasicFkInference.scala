@@ -81,7 +81,11 @@ object BasicFkInference extends Logging {
             val rowCount = tableStats.rowCount.map { cnt => s"bigint(${cnt.toLong}) /* rowCount */" }
               .getOrElse("COUNT(1)")
             val distinctCounts = fields.map { f =>
-              val aggFunc = s"COUNT(DISTINCT ${f.name})"
+              val aggFunc = if (sparkSession.sessionState.conf.fkInferenceApproxCountEnabled) {
+                s"APPROX_COUNT_DISTINCT(${f.name})"
+              } else {
+                s"COUNT(DISTINCT ${f.name})"
+              }
               attrStatMap.get(f.name).map {
                 distinctCntOpt => distinctCntOpt.map { v => s"bigint(${v.toLong}) /* ${f.name} */" }
                   .getOrElse(aggFunc)

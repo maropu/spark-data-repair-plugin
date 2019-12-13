@@ -45,6 +45,13 @@ object ScavengerConf {
     .doc("Sampling size to infer FK constraints in catalog tables.")
     .intConf
     .createWithDefault(1000)
+
+  val FK_INFERENCE_APPROX_COUNT_ENABLED = buildConf("spark.scavenger.fkInference.approxCount.enabled")
+    .internal()
+    .doc("Whether to use approximate distinct counting for FK constraint inference.")
+    .booleanConf
+    .createWithDefault(true)
+
 }
 
 class ScavengerConf(conf: SQLConf) {
@@ -53,6 +60,7 @@ class ScavengerConf(conf: SQLConf) {
   private val reader = new ConfigReader(conf.settings)
 
   def fkInferenceSamplingSize: Int = getConf(FK_INFERENCE_SAMPLING_SIZE)
+  def fkInferenceApproxCountEnabled: Boolean = getConf(FK_INFERENCE_APPROX_COUNT_ENABLED)
 
   /**
    * Return the value of configuration property for the given key. If the key is not set yet,
