@@ -43,6 +43,7 @@ object BasicFkInference extends Logging {
         leftDistinctCount == rightDistinctCount
   }
 
+  // Enumerates 1-ary(unary) inclusion dependencies in pairs of given `tables`
   def infer(sparkSession: SparkSession, tables: Seq[TableIdentifier]): ResultType = {
     val tableCandidates = tables.flatMap { table =>
       val fields = sparkSession.table(table.identifier).schema.filter { f =>
@@ -134,6 +135,8 @@ object BasicFkInference extends Logging {
           : Option[(String, (String, (String, String)))] = pair match {
             case Seq(((leftField, leftDistinctCount), (leftTableName, leftCount)),
               ((rightField, rightDistinctCount), (rightTableName, rightCount)))
+                //  TODO: I think we can remove more unnecessary inclusion checks by using
+                // statistics, e.g., value ranges.
                 if leftDistinctCount == rightDistinctCount =>
 
               val (largerTable, smallerTable) = if (leftCount >= rightCount) {

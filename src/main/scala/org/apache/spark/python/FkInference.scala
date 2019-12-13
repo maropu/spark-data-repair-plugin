@@ -55,6 +55,9 @@ object NoopFkInference {
 case class FkInference(sparkSession: SparkSession, tpe: FkInferType.Value) {
   import FkInference._
 
+  //  TODO: Needs to implement more sophisticated FK detection algorithms:
+  //   * Kruse, Sebastian, et al., Fast Approximate Discovery of Inclusion Dependencies,
+  //     Proceedings of BTW'17, 2017, https://dl.gi.de/handle/20.500.12116/629
   val doInfer = tpe match {
     case FkInferType.SCHEMA_ONLY => SchemaOnlyFkInference.infer _
     case FkInferType.BASIC => BasicFkInference.infer _
