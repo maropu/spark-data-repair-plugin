@@ -35,6 +35,11 @@ entity-relation diagrams with constraints by [SchemaSpy](http://schemaspy.org/).
 ## References for Future Work
 
  - Eduardo H. M. Pena, Eduardo C. de Almeida, and Felix Naumann, Discovery of Approximate (and Exact) Denial Constraints, Proceedings of the VLDB Endowment , 13(3), p266-278, 2019.
+ - Tobias Bleifuß, Sebastian Kruse, and Felix Naumann, Efficient Denial Constraint Discovery with Hydra, Proceedings of VLDB Endowment, 11(3), 2017.
+ - Kruse, S., et al., Fast Approximate Discovery of Inclusion Dependencies, BTW, p207-226, 2017.
+ - Hai Liu, Dongqing Xiao, Pankaj Didwania, and Mohamed Y. Eltabakh, Exploiting Soft and Hard Correlations in Big Data Query Optimization, Proceedings of the VLDB Endowment, 9(12), 2016.
  - Thorsten Papenbrock and Felix Naumann, A Hybrid Approach to Functional Dependency Discovery, Proceedings of SIGMOD'16, p821-833, 2016.
  - Z. Abedjan, L. Golab, and F. Naumann, Profiling Relational Data: A Survey, VLDB Journal, 24(4), p557–581, 2015.
+ - X. Chu, I. F. Ilyas, and P. Papotti, Discovering Denial Constraints, PVLDB, 6(13), p1498–1509, 2013.
+ - I. F. Ilyas, V. Markl, P. Haas, P. Brown, and A. Aboulnaga, CORDS: Automatic Discovery of Correlations and Soft Functional Dependencies, Proceedings of SIGMOD'04, p647–658, 2004.
 
