@@ -21,12 +21,14 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicInteger
 
 import org.apache.commons.lang.RandomStringUtils
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.python.ScavengerConf._
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.plans.logical.LeafNode
 import org.apache.spark.sql.types._
+import org.apache.spark.util.Utils
 
 import io.github.maropu.Utils._
 
@@ -34,6 +36,10 @@ case class EntityWithStats(name: String, numRows: Long, columnStats: Seq[(Struct
 
 object BasicFkInference extends Logging {
   import org.apache.spark.python.FkInference._
+
+  private def getRandomString(prefix: String = ""): String = {
+    s"$prefix${Utils.getFormattedClassName(this)}_${RandomStringUtils.randomNumeric(12)}"
+  }
 
   private def isValidAttrPair(pair: Seq[((StructField, Long), (String, Long))]): Boolean = pair match {
     case Seq(((leftField, leftDistinctCount), leftTable),
@@ -151,25 +157,25 @@ object BasicFkInference extends Logging {
                   (leftTableName, leftField.name, leftCount))
               }
 
-              val largerTempView = s"largerTempView_${RandomStringUtils.randomNumeric(12)}"
+              val largerTempView = getRandomString("largerTempView_")
               val sampleRatio = {
-                val fkInferenceSamplingSize = sparkSession.sessionState.conf.fkInferenceSamplingSize
-                100.0 * Math.min(fkInferenceSamplingSize.toDouble / largerTable._3, 1.0)
+                val samplingSize = sparkSession.sessionState.conf.samplingSize
+                100.0 * Math.min(samplingSize.toDouble / largerTable._3, 1.0)
               }
               sparkSession.sql(
                 s"""
                    |CACHE TABLE $largerTempView AS
                    |  SELECT *
-                   |    FROM ${largerTable._1}
-                   |    TABLESAMPLE ($sampleRatio PERCENT)
+                   |  FROM ${largerTable._1}
+                   |  TABLESAMPLE ($sampleRatio PERCENT)
                  """.stripMargin)
 
               val largerTempViewCount = sparkSession.table(largerTempView).count
               val resultDf = sparkSession.sql(
                 s"""
                    |SELECT COUNT(1) = $largerTempViewCount
-                   |  FROM $largerTempView l, ${smallerTable._1} r
-                   |  WHERE l.${largerTable._2} = r.${smallerTable._2}
+                   |FROM $largerTempView l, ${smallerTable._1} r
+                   |WHERE l.${largerTable._2} = r.${smallerTable._2}
                """.stripMargin)
 
               sparkSession.sql(s"DROP VIEW $largerTempView")

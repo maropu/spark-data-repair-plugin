@@ -23,14 +23,15 @@ import java.util.UUID
 
 import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
-import org.apache.spark.python.{FkInferType, FkInference}
+import org.apache.spark.python.{FkInferType, FkInference, IntegrityConstraintDiscovery}
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.types._
 import org.apache.spark.util.Utils
 
 import io.github.maropu.SchemaSpyLauncher
 
-/** An Python API entry point to call a SchemaSpy command. */
+/** A Python API entry point to call a SchemaSpy command. */
 object ScavengerApi extends Logging {
 
   private val JDBC_DRIVERS_HOME = "JDBC_DRIVERS_HOME"
@@ -54,58 +55,81 @@ object ScavengerApi extends Logging {
   }
 
   private def getTempOutputPath(): String = {
-    s"${System.getProperty("java.io.tmpdir")}/schemaspy-${UUID.randomUUID.toString}.output"
+    s"${System.getProperty("java.io.tmpdir")}/scavenger-${UUID.randomUUID.toString}.output"
   }
 
-  // To call this function, just say a lien below;
-  // >>> spySchema('-dbhelp')
-  def run(args: String): Unit = {
-    SchemaSpyLauncher.run(args.split(" "): _*)
+  private def schemaSpyMetaTemplate(tableContent: String): String = {
+    s"""
+       |<schemaMeta xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://schemaspy.org/xsd/6/schemameta.xsd" >
+       |  <comments>AUTO-GENERATED</comments>
+       |  <tables>
+       |    $tableContent
+       |  </tables>
+       |</schemaMeta>
+     """.stripMargin
   }
 
-  // To call this function, just say a lien below;
-  // >>> schemaspy.setDbName('postgres').setDriverName('postgresql').setProps('host=localhost,port=5432').run().show()
-  def run(userDefinedOutputPath: String, dbName: String, driverName: String, props: String): String = {
-    val outputPath = if (userDefinedOutputPath.isEmpty) {
-      getTempOutputPath()
-    } else {
-      userDefinedOutputPath
+  private def getSqliteDriverName(): String = {
+    s"sqlite-jdbc-${getEnvOrFail(JDBC_SQLITE_VERSION)}.jar"
+  }
+
+  private def getPostgresqlDriverName(): String = {
+    s"postgresql-${getEnvOrFail(JDBC_POSTGRESQL_VERSION)}.jar"
+  }
+
+  private def getJdbcDriverFile(driverName: String): File = {
+    val driversHome = getEnvOrFail(JDBC_DRIVERS_HOME)
+    val driverPath = s"$driversHome/$driverName"
+    val driverFile = new File(driverPath)
+    if (!driverFile.exists()) {
+      throw new SparkException(s"'$driverName' does not exist in $driverPath.")
+    }
+    driverFile
+  }
+
+  private def dumpSparkCatalog(spark: SparkSession, tables: Seq[TableIdentifier]): File = {
+    Class.forName("org.sqlite.JDBC")
+    val tempDir = Utils.createTempDir(namePrefix = "scavenger")
+    val dbFile = new File(tempDir, "generated.db")
+    val conn = DriverManager.getConnection(s"jdbc:sqlite:${dbFile.getAbsolutePath}")
+    val stmt = conn.createStatement()
+
+    def toSQLiteTypeName(dataType: DataType): Option[String] = dataType match {
+      case IntegerType => Some("INTEGER")
+      case StringType => Some("TEXT")
+      case _ => None
     }
 
-    val tempDir = Utils.createTempDir(namePrefix = "schemaspy")
-    val jdbcDriversHome = getEnvOrFail(JDBC_DRIVERS_HOME)
-    val (driverType, jdbcDriverName, dbSpecificProps) = driverName match {
-      case "sqlite" =>
-        val jdbcVersion = getEnvOrFail(JDBC_SQLITE_VERSION)
-        ("sqlite-xerial",
-          s"sqlite-jdbc-$jdbcVersion.jar",
+    tables.foreach { t =>
+      val schema = spark.table(t.quotedString).schema
+      val attrDefs = schema.flatMap { f => toSQLiteTypeName(f.dataType).map(tpe => s"${f.name} $tpe") }
+      if (attrDefs.nonEmpty) {
+        val ddlStr =
           s"""
-             |schemaspy.db=$dbName
-           """.stripMargin)
-      case "postgresql" =>
-        val jdbcVersion = getEnvOrFail(JDBC_POSTGRESQL_VERSION)
-        val propsMap = props.split(",").map { prop => prop.split("=").toSeq }.map {
-          case Seq(k, v) => k -> v
-          case prop => throw new SparkException(s"Illegal property format: ${prop.mkString(",")}")
-        }.toMap
-        ("pgsql",
-          s"postgresql-$jdbcVersion.jar",
-          s"""
-             |schemaspy.db=$dbName
-             |schemaspy.host=${propsMap.getOrElse("host", "")}
-             |schemaspy.port=${propsMap.getOrElse("port", "")}
-           """.stripMargin)
-      case _ =>
-        throw new SparkException(s"Unknown JDBC driver: $driverName")
-    }
-    val jdbcDriverPath = s"$jdbcDriversHome/$jdbcDriverName"
-    if (!new File(jdbcDriverPath).exists()) {
-      throw new SparkException(s"'$jdbcDriverName' does not exist in $jdbcDriversHome.")
-    }
+             |CREATE TABLE ${t.identifier} (
+             |  ${attrDefs.mkString(",\n")}
+             |);
+           """.stripMargin
 
+        logDebug(
+          s"""
+             |SQLite DDL String from a Spark schema: `${schema.toDDL}`:
+             |$ddlStr
+           """.stripMargin)
+
+        stmt.execute(ddlStr)
+      }
+    }
+    conn.close()
+    dbFile
+  }
+
+  private def generatePropFile(f: => (String, String)): File = {
+    val tempDir = Utils.createTempDir(namePrefix = "scavenger")
     val propFile = new File(tempDir, "schemaspy.properties")
     val propWriter = new PrintWriter(propFile, "UTF-8")
     try {
+      val (jdbcDriverPath, dbSpecificProps) = f
       propWriter.write(
         s"""
            |schemaspy.dp=$jdbcDriverPath
@@ -116,19 +140,92 @@ object ScavengerApi extends Logging {
     } finally {
       propWriter.close()
     }
+    propFile
+  }
+
+  private def generateMetaFile(tableContent: => String): File = {
+    val tempDir = Utils.createTempDir(namePrefix = "scavenger")
+    val metaFile = new File(tempDir, "meta.xml")
+    val metaWriter = new PrintWriter(metaFile, "UTF-8")
+    try {
+      metaWriter.write(schemaSpyMetaTemplate(tableContent))
+    } finally {
+      metaWriter.close()
+    }
+    metaFile
+  }
+
+  // To call this function, just say a lien below;
+  // >>> spySchema('-dbhelp')
+  def run(args: String): Unit = {
+    SchemaSpyLauncher.run(args.split(" "): _*)
+  }
+
+  private def runSchemaSpy(
+      jdbcDriverTypeName: String,
+      userDefinedOutputPath: String,
+      propFile: File,
+      doProfileFunc: Option[Unit => File] = None): String = {
+
+    val additionalConfigs = doProfileFunc.map { f =>
+      val metaFile = f()
+      Seq("-meta", metaFile.getAbsolutePath)
+    }.getOrElse {
+      Seq.empty
+    }
+
+    val outputPath = if (userDefinedOutputPath.nonEmpty) {
+      userDefinedOutputPath
+    } else {
+      getTempOutputPath()
+    }
 
     SchemaSpyLauncher.run(Seq(
       "-configFile", propFile.getAbsolutePath,
-      "-t", driverType,
+      "-t", jdbcDriverTypeName,
       "-cat", "%",
       "-o", outputPath
-    ): _*)
+    ) ++ additionalConfigs: _*)
 
     outputPath
   }
 
   // To call this function, just say a lien below;
-  // >>> schemaspy.setDbName('default').setInferType('basic').infer().show()
+  // >>> schemaspy.setDbName('postgres').setDriverName('postgresql').setProps('host=localhost,port=5432').run().show()
+  def run(userDefinedOutputPath: String, dbName: String, driverName: String, props: String): String = {
+    val (driverTypeName, jdbcDriverName, dbSpecificProps) = driverName match {
+      case "sqlite" =>
+        ("sqlite-xerial",
+          getSqliteDriverName(),
+          s"""
+             |schemaspy.db=$dbName
+           """.stripMargin)
+      case "postgresql" =>
+        val propsMap = props.split(",").map { prop => prop.split("=").toSeq }.map {
+          case Seq(k, v) => k -> v
+          case prop => throw new SparkException(s"Illegal property format: ${prop.mkString(",")}")
+        }.toMap
+        ("pgsql",
+          getPostgresqlDriverName(),
+          s"""
+             |schemaspy.db=$dbName
+             |schemaspy.host=${propsMap.getOrElse("host", "")}
+             |schemaspy.port=${propsMap.getOrElse("port", "")}
+           """.stripMargin)
+      case _ =>
+        throw new SparkException(s"Unknown JDBC driver: $driverName")
+    }
+
+    val propFile = generatePropFile {
+      val jdbcDriverFile = getJdbcDriverFile(jdbcDriverName)
+      (jdbcDriverFile.getAbsolutePath, dbSpecificProps)
+    }
+
+    runSchemaSpy(driverTypeName, userDefinedOutputPath, propFile)
+  }
+
+  // To call this function, just say a lien below;
+  // >>> scavenger.setDbName('default').setInferType('basic').infer().show()
   def infer(userDefinedOutputPath: String, dbName: String, inferType: String): String = {
     withSparkSession { sparkSession =>
       val fkInferType = inferType match {
@@ -138,111 +235,69 @@ object ScavengerApi extends Logging {
         case _ => throw new IllegalArgumentException(s"Unsupported inferType: $inferType")
       }
 
-      val outputPath = if (userDefinedOutputPath.isEmpty) {
-        getTempOutputPath()
-      } else {
-        userDefinedOutputPath
-      }
-
-      val tempDir = Utils.createTempDir(namePrefix = "schemaspy")
-      val jdbcDriversHome = getEnvOrFail(JDBC_DRIVERS_HOME)
-      val jdbcVersion = getEnvOrFail(JDBC_SQLITE_VERSION)
-      val jdbcDriverName = s"sqlite-jdbc-$jdbcVersion.jar"
-      val jdbcDriverPath = s"$jdbcDriversHome/$jdbcDriverName"
-      if (!new File(jdbcDriverPath).exists()) {
-        throw new SparkException(s"'$jdbcDriverName' does not exist in $jdbcDriverPath.")
-      }
-
       val tables = sparkSession.sessionState.catalog.listTables(dbName)
 
-      val dbPath = {
-        Class.forName("org.sqlite.JDBC")
-        val dbFile = new File(tempDir, "generated.db")
-        val conn = DriverManager.getConnection(s"jdbc:sqlite:${dbFile.getAbsolutePath}")
-        val stmt = conn.createStatement()
-
-        def toSQLiteTypeName(dataType: DataType): Option[String] = dataType match {
-          case IntegerType => Some("INTEGER")
-          case StringType => Some("TEXT")
-          case _ => None
-        }
-
-        tables.foreach { t =>
-          val schema = sparkSession.table(t.quotedString).schema
-          val attrDefs = schema.flatMap { f => toSQLiteTypeName(f.dataType).map(tpe => s"${f.name} $tpe") }
-          if (attrDefs.nonEmpty) {
-            val ddlStr =
-              s"""
-                 |CREATE TABLE ${t.identifier} (
-                 |  ${attrDefs.mkString(",\n")}
-                 |);
-               """.stripMargin
-
-            logDebug(
-              s"""
-                 |SQLite DDL String from a Spark schema: `${schema.toDDL}`:
-                 |$ddlStr
-               """.stripMargin)
-
-            stmt.execute(ddlStr)
-          }
-        }
-        conn.close()
-        dbFile.getAbsolutePath
+      val propFile = generatePropFile {
+        val jdbcDriverFile = getJdbcDriverFile(getSqliteDriverName())
+        val dbFile = dumpSparkCatalog(sparkSession, tables)
+        (jdbcDriverFile.getAbsolutePath, s"schemaspy.db=${dbFile.getAbsolutePath}")
       }
 
-      val propFile = new File(tempDir, "schemaspy.properties")
-      val propWriter = new PrintWriter(propFile, "UTF-8")
-      try {
-        propWriter.write(
-          s"""
-             |schemaspy.dp=$jdbcDriverPath
-             |schemaspy.db=$dbPath
-             |schemaspy.u=${System.getProperty("user.name")}
-             |schemaspy.s=%
-         """.stripMargin)
-      } finally {
-        propWriter.close()
+      runSchemaSpy("sqlite-xerial", userDefinedOutputPath, propFile, Some(_ => {
+        generateMetaFile {
+          val fkConstraints = FkInference(sparkSession, fkInferType).infer(tables)
+          fkConstraints.map { case (table, fkDefs) =>
+            val constraintMap: Map[String, Seq[String]] = if (true) {
+              IntegrityConstraintDiscovery.exec(sparkSession, table)
+            } else {
+              Map.empty
+            }
+
+            s"""
+               |<table name="$table" comments="">
+               |  ${fkDefs.map { fk =>
+                      val constraints = constraintMap.get(fk._1).map(_.mkString(",")).getOrElse("")
+                      s"""
+                         |<column name="${fk._1}" comments="$constraints">
+                         |  <foreignKey table="${fk._2._1}" column="${fk._2._2}" />
+                         |</column>
+                       """.stripMargin
+                  }.mkString("\n")}
+               |</table>
+             """.stripMargin
+          }.mkString("\n")
+        }}))
+    }
+  }
+
+  // To call this function, just say a lien below;
+  // >>> scavenger.constraints().setDbName('default').setTableName('t').infer().show()
+  def inferConstraints(userDefinedOutputPath: String, dbName: String, tableName: String): String = {
+    withSparkSession { sparkSession =>
+      val table = sparkSession.sessionState.catalog.listTables(dbName)
+        .find(_.table == tableName).getOrElse {
+          throw new SparkException(s"Table '$tableName' does not exist in database '$dbName'.")
+        }
+
+      val propFile = generatePropFile {
+        val jdbcDriverFile = getJdbcDriverFile(getSqliteDriverName())
+        val dbFile = dumpSparkCatalog(sparkSession, table :: Nil)
+        (jdbcDriverFile.getAbsolutePath, s"schemaspy.db=${dbFile.getAbsolutePath}")
       }
 
-      val metaFile = new File(tempDir, "meta.xml")
-      val metaWriter = new PrintWriter(metaFile, "UTF-8")
-      try {
-        val fkConstraints = FkInference(sparkSession, fkInferType).infer(tables)
-        metaWriter.write(
+      runSchemaSpy("sqlite-xerial", userDefinedOutputPath, propFile, Some(_ => {
+        generateMetaFile {
+          val constraintMap = IntegrityConstraintDiscovery.exec(sparkSession, table.table)
           s"""
-             |<schemaMeta xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://schemaspy.org/xsd/6/schemameta.xsd" >
-             |  <comments>AUTO-GENERATED</comments>
-             |  <tables>
-             |    ${fkConstraints.map { case (table, fkDefs) =>
-                    s"""
-                       |<table name="$table">
-                       |  ${fkDefs.map { fk =>
-                            s"""
-                               |<column name="${fk._1}">
-                               |  <foreignKey table="${fk._2._1}" column="${fk._2._2}" />
-                               |</column>
-                             """.stripMargin
-                          }.mkString("\n")}
-                       |</table>
-                     """.stripMargin
+             |<table name="$tableName" comments="">
+             |  ${constraintMap.map { case (columnName, constraints) =>
+                  s"""
+                     |<column name="$columnName" comments="${constraints.mkString(",")}" />
+                   """.stripMargin
                 }.mkString("\n")}
-             |  </tables>
-             |</schemaMeta>
-           """.stripMargin)
-      } finally {
-        metaWriter.close()
-      }
-
-      SchemaSpyLauncher.run(Seq(
-        "-configFile", propFile.getAbsolutePath,
-        "-meta", metaFile.getAbsolutePath,
-        "-t", "sqlite-xerial",
-        "-cat", "%",
-        "-o", outputPath
-      ): _*)
-
-      outputPath
+             |</table>
+             """.stripMargin
+        }}))
     }
   }
 }

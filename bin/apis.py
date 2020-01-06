@@ -80,6 +80,23 @@ class SchemaSpy(SchemaSpyBase):
 # Defines singleton variables for SchemaSpy
 schemaspy = SchemaSpy.getOrCreate()
 
+class ScavengerConstraints(SchemaSpyBase):
+
+    # TODO: Prohibit instantiation directly
+    def __init__(self, output, dbName):
+        super().__init__()
+        self.output = output
+        self.dbName = dbName
+        self.tableName = ''
+
+    def setTableName(self, tableName):
+        self.tableName = tableName
+        return self
+
+    def infer(self):
+        resultPath = sc._jvm.ScavengerApi.inferConstraints(self.output, self.dbName, self.tableName)
+        return SchemaSpyResult(resultPath)
+
 class Scavenger(SchemaSpyBase):
 
     __instance = None
@@ -97,6 +114,9 @@ class Scavenger(SchemaSpyBase):
     @staticmethod
     def getOrCreate():
         return Scavenger()
+
+    def constraints(self):
+        return ScavengerConstraints(self.output, self.dbName)
 
     def setInferType(self, inferType):
         self.inferType = inferType
