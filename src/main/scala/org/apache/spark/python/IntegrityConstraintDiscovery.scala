@@ -28,8 +28,6 @@ import org.apache.spark.util.Utils
 
 object IntegrityConstraintDiscovery extends Logging {
 
-  private val DC2FD_CONVERSION_ENABLED = true
-
   private val BITMASK_EQUAL = 1         // 'mask & BITMASK_EQUAL > 0' means '='; '!=' otherwise
   private val BITMASK_GREATER_THAN = 2  // 'mask & BITMASK_GREATER_THAN > 0' means '>'; '<=' otherwise
   private val BITMASK_LESS_THAN = 4     // 'mask & BITMASK_LESS_THAN > 0' means '<'; '>=' otherwise
@@ -176,8 +174,10 @@ object IntegrityConstraintDiscovery extends Logging {
                   ev(pos) = ev(pos) ^ 1
                   ev
                 }
-                // TODO: Currently, it generates DC candidates just by negating
-                // a single predicate held in `evVec`.
+                // TODO: We need to compute a minimal cover of the evidence set for searching denial
+                // constraints. Currently, the code below just prints DC candidates;
+                // it negates a single predicate among them in `evVec` because they cannot
+                // be satisfied simultaneously.
                 val dcCandidates = (0 until numSymbols).map(negateSinglePredicate)
                 dcCandidates.flatMap { dcCandidate  =>
                   val violateConstraint = evMap.get(dcCandidate)
