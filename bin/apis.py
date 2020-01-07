@@ -18,8 +18,10 @@
 #
 
 """
-An API set for Attribute Dependency Analyzer
+An API set for Integrity Constraint Analyzer
 """
+
+from pyspark.sql import DataFrame, SparkSession
 
 class SchemaSpyResult():
     """A result container class for SchemaSpy"""
@@ -72,6 +74,12 @@ class SchemaSpy(SchemaSpyBase):
     def setProps(self, props):
         self.props = props
         return self
+
+    def catalogToDataFrame(self):
+        jdf = sc._jvm.ScavengerApi.catalogToDataFrame(self.dbName, self.driverName, self.props)
+        spark = SparkSession.builder.getOrCreate()
+        df = DataFrame(jdf, spark._wrapped)
+        return df
 
     def run(self):
         resultPath = sc._jvm.ScavengerApi.run(self.output, self.dbName, self.driverName, self.props)
