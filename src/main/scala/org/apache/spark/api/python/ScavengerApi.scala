@@ -400,12 +400,18 @@ object ScavengerApi extends Logging {
 
       runSchemaSpy("sqlite-xerial", userDefinedOutputPath, propFile, Some(_ => {
         generateMetaFile {
-          val constraintMap = IntegrityConstraintDiscovery.exec(sparkSession, table.table)
+          val tck = IntegrityConstraintDiscovery.tableConstraintsKey
+          val (tableConstraints, columnConstraints) =
+            IntegrityConstraintDiscovery.exec(sparkSession, table.table)
+              .map { case (k, v) => k -> v.mkString(",") }
+              .partition { v => v._1 == tck }
+
+          val tableComment = tableConstraints.values.headOption.getOrElse("")
           s"""
-             |<table name="$tableName" comments="">
-             |  ${constraintMap.map { case (columnName, constraints) =>
+             |<table name="$tableName" comments="$tableComment">
+             |  ${columnConstraints.filterNot(_._1 == tck).map { case (col, columnComment) =>
                   s"""
-                     |<column name="$columnName" comments="${constraints.mkString(",")}" />
+                     |<column name="$col" comments="$columnComment" />
                    """.stripMargin
                 }.mkString("\n")}
              |</table>

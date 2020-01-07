@@ -19,6 +19,7 @@ package org.apache.spark.python
 
 import org.apache.commons.lang.RandomStringUtils
 
+import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
 import org.apache.spark.python.ScavengerConf._
 import org.apache.spark.sql.catalyst.plans.logical.LeafNode
@@ -28,6 +29,8 @@ import org.apache.spark.sql.types._
 import org.apache.spark.util.Utils
 
 object IntegrityConstraintDiscovery extends Logging {
+
+  val tableConstraintsKey = "__TABLE_CONSTRAINTS_KEY__"
 
   private val BITMASK_EQUAL = 1         // 'mask & BITMASK_EQUAL > 0' means '='; '!=' otherwise
   private val BITMASK_GREATER_THAN = 2  // 'mask & BITMASK_GREATER_THAN > 0' means '>'; '<=' otherwise
@@ -257,7 +260,7 @@ object IntegrityConstraintDiscovery extends Logging {
                       val Y = fieldNames.last
                       Some(fieldNames.head -> s"FD($X=>$Y)")
                     } else {
-                      Some(dcVecWithField.head._1.name -> dcVecWithField.map { case (f, ev) =>
+                      Some(tableConstraintsKey -> dcVecWithField.map { case (f, ev) =>
                         s"X.${f.name} ${if (ev > 0) "=" else "!="} Y.${f.name}"
                       }.mkString("DC(", ",", ")"))
                     }
@@ -277,6 +280,9 @@ object IntegrityConstraintDiscovery extends Logging {
   }
 
   def exec(sparkSession: SparkSession, table: String): Map[String, Seq[String]] = {
+    if (sparkSession.table(table).schema.map(_.name).contains(tableConstraintsKey)) {
+      throw new SparkException(s"$tableConstraintsKey cannot be used as a column name.")
+    }
     val constraints = denialConstraints(sparkSession, table) ++ checkConstraints(sparkSession, table) ++
       catalogStats(sparkSession, table)
     constraints.groupBy(_._1).map { case (k, v) =>
