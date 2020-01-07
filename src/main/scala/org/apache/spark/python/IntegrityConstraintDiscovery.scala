@@ -21,6 +21,7 @@ import org.apache.commons.lang.RandomStringUtils
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.python.ScavengerConf._
+import org.apache.spark.sql.catalyst.plans.logical.LeafNode
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
@@ -75,19 +76,39 @@ object IntegrityConstraintDiscovery extends Logging {
       }
     }
     if (fields.nonEmpty) {
-      val minMaxAggExprs = fields.map(_.name).flatMap { columnName =>
-        s"CAST(MIN($columnName) AS STRING)" :: s"CAST(MAX($columnName) AS STRING)" :: Nil
+      val tableStats = {
+        val df = sparkSession.table(table)
+        val tableNode = df.queryExecution.analyzed.collectLeaves().head.asInstanceOf[LeafNode]
+        tableNode.computeStats()
       }
-      val minMaxStat = sparkSession.sql(
+      val minMaxStatMap = tableStats.attributeStats.map {
+        kv => (kv._1.name, (kv._2.min, kv._2.max))
+      }
+      val minMaxAggExprs = fields.map(_.name).flatMap { columnName =>
+        def aggFunc(f: String, c: String) = s"CAST($f($c) AS STRING)"
+        val minFuncExpr = aggFunc("MIN", columnName)
+        val maxFuncExpr = aggFunc("MAX", columnName)
+        minMaxStatMap.get(columnName).map { case (minOpt, maxOpt) =>
+          val minExpr = minOpt.map(v => s"STRING($v)").getOrElse(minFuncExpr)
+          val maxExpr = maxOpt.map(v => s"STRING($v)").getOrElse(maxFuncExpr)
+          minExpr :: maxExpr :: Nil
+        }.getOrElse {
+          minFuncExpr :: maxFuncExpr :: Nil
+        }
+      }
+
+      val queryToComputeStats =
         s"""
            |SELECT ${minMaxAggExprs.mkString(", ")}
            |FROM $table
          """.stripMargin
-      ).take(1).head
 
+      logDebug(queryToComputeStats)
+
+      val minMaxStats = sparkSession.sql(queryToComputeStats).take(1).head
       fields.zipWithIndex.map { case (f, i) =>
-        val minValue = minMaxStat.getString(2 * i)
-        val maxValue = minMaxStat.getString(2 * i + 1)
+        val minValue = minMaxStats.getString(2 * i)
+        val maxValue = minMaxStats.getString(2 * i + 1)
         (f.name, s"CHK($minValue,$maxValue)")
       }
     } else {
