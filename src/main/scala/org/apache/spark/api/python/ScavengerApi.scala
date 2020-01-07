@@ -19,7 +19,7 @@ package org.apache.spark.api.python
 
 import java.io.{File, PrintWriter}
 import java.net.URL
-import java.sql.{Connection, Driver, DriverManager, ResultSet}
+import java.sql.{Connection, Driver, ResultSet, Statement}
 import java.util.UUID
 
 import scala.collection.mutable
@@ -40,6 +40,8 @@ object ScavengerApi extends Logging {
   private val JDBC_DRIVERS_HOME = "JDBC_DRIVERS_HOME"
   private val JDBC_SQLITE_VERSION = "JDBC_SQLITE_VERSION"
   private val JDBC_POSTGRESQL_VERSION = "JDBC_POSTGRESQL_VERSION"
+
+  private val emptyProp = new java.util.Properties()
 
   private def withSparkSession[T](f: SparkSession => T): T = {
     SparkSession.getActiveSession.map { sparkSession =>
@@ -91,39 +93,45 @@ object ScavengerApi extends Logging {
   }
 
   private def dumpSparkCatalog(spark: SparkSession, tables: Seq[TableIdentifier]): File = {
-    Class.forName("org.sqlite.JDBC")
-    val tempDir = Utils.createTempDir(namePrefix = "scavenger")
-    val dbFile = new File(tempDir, "generated.db")
-    val conn = DriverManager.getConnection(s"jdbc:sqlite:${dbFile.getAbsolutePath}")
-    val stmt = conn.createStatement()
+    val dbFile = new File(Utils.createTempDir(namePrefix = "scavenger"), "generated.db")
+    val connUrl = s"jdbc:sqlite:${dbFile.getAbsolutePath}"
 
-    def toSQLiteTypeName(dataType: DataType): Option[String] = dataType match {
-      case IntegerType => Some("INTEGER")
-      case StringType => Some("TEXT")
-      case _ => None
-    }
+    var conn: Connection = null
+    var stmt: Statement = null
+    try {
+      conn = getDriver(getSqliteDriverName(), "org.sqlite.JDBC").connect(connUrl, emptyProp)
+      stmt = conn.createStatement()
 
-    tables.foreach { t =>
-      val schema = spark.table(t.quotedString).schema
-      val attrDefs = schema.flatMap { f => toSQLiteTypeName(f.dataType).map(tpe => s"${f.name} $tpe") }
-      if (attrDefs.nonEmpty) {
-        val ddlStr =
-          s"""
-             |CREATE TABLE ${t.identifier} (
-             |  ${attrDefs.mkString(",\n")}
-             |);
-           """.stripMargin
-
-        logDebug(
-          s"""
-             |SQLite DDL String from a Spark schema: `${schema.toDDL}`:
-             |$ddlStr
-           """.stripMargin)
-
-        stmt.execute(ddlStr)
+      def toSQLiteTypeName(dataType: DataType): Option[String] = dataType match {
+        case IntegerType => Some("INTEGER")
+        case StringType => Some("TEXT")
+        case _ => None
       }
+
+      tables.foreach { t =>
+        val schema = spark.table(t.quotedString).schema
+        val attrDefs = schema.flatMap { f => toSQLiteTypeName(f.dataType).map(tpe => s"${f.name} $tpe") }
+        if (attrDefs.nonEmpty) {
+          val ddlStr =
+            s"""
+               |CREATE TABLE ${t.identifier} (
+               |  ${attrDefs.mkString(",\n")}
+               |);
+             """.stripMargin
+
+          logDebug(
+            s"""
+               |SQLite DDL String from a Spark schema: `${schema.toDDL}`:
+               |$ddlStr
+             """.stripMargin)
+
+          stmt.execute(ddlStr)
+        }
+      }
+    } finally {
+      if (stmt != null) stmt.close()
+      if (conn != null) conn.close()
     }
-    conn.close()
     dbFile
   }
 
@@ -228,17 +236,18 @@ object ScavengerApi extends Logging {
     // scalastyle:on
   }
 
+  // Loads a JDBC jar file on runtime and returns an implementation-specific `Driver`
+  private def getDriver(jdbcDriverName: String, className: String): Driver = {
+    val contextClassLoader = Thread.currentThread.getContextClassLoader
+    val classLoader = new MutableURLClassLoader(new Array[URL](0), contextClassLoader)
+    val jdbcDriverFile = getJdbcDriverFile(jdbcDriverName)
+    classLoader.addURL(jdbcDriverFile.toURI.toURL)
+    classLoader.loadClass(className).newInstance().asInstanceOf[Driver]
+  }
+
   // To call this function, just say a lien below;
   // >>> schemaspy.setDbName('postgres').setDriverName('postgresql').setProps('host=localhost,port=5432').catalogToDataFrame()
   def catalogToDataFrame(dbName: String, driverName: String, props: String): DataFrame = {
-    // Loads a JDBC jar file on runtime and returns an implementation-specific `Driver`
-    def getDriver(jdbcDriverName: String, className: String): Driver = {
-      val contextClassLoader = Thread.currentThread.getContextClassLoader
-      val classLoader = new MutableURLClassLoader(new Array[URL](0), contextClassLoader)
-      val jdbcDriverFile = getJdbcDriverFile(jdbcDriverName)
-      classLoader.addURL(jdbcDriverFile.toURI.toURL)
-      classLoader.loadClass(className).newInstance().asInstanceOf[Driver]
-    }
 
     def processResultSet(rs: ResultSet)(f: ResultSet => Unit): Unit = {
       try { while (rs.next()) { f(rs) } } finally { rs.close() }
@@ -258,7 +267,7 @@ object ScavengerApi extends Logging {
 
       var conn: Connection = null
       try {
-        conn = getDriver(jdbcDriverName, driverClassName).connect(connUrl, new java.util.Properties())
+        conn = getDriver(jdbcDriverName, driverClassName).connect(connUrl, emptyProp)
         val tables = mutable.ArrayBuffer[String]()
         val columnNames = Seq("tableName", "columnName", "type", "nullable", "isPrimaryKey", "isForeignKey")
         val columns = mutable.ArrayBuffer[(String, String, String, Boolean, Boolean, Boolean)]()

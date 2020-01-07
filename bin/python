@@ -80,6 +80,5 @@ PYTHONSTARTUP=${PACKAGE_APIS} \
   JDBC_DRIVERS_HOME=${JDBC_DRIVERS} \
   JDBC_SQLITE_VERSION=${SQLITE_JDBC_VERSION} \
   JDBC_POSTGRESQL_VERSION=${POSTGRESQL_JDBC_VERSION} \
-  exec pyspark --jars=${PACKAGE},${JDBC_DRIVERS}/sqlite-jdbc-{$SQLITE_JDBC_VERSION}.jar \
-    $(join_by " " ${SPARK_CONF[@]}) $(join_by " " ${ARGS[@]})
+  exec pyspark --jars=${PACKAGE} $(join_by " " ${SPARK_CONF[@]}) $(join_by " " ${ARGS[@]})
 
