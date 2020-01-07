@@ -29,7 +29,7 @@
   <artifactId>scavenger-plugin_2.11</artifactId>
   <version>0.1.0-spark2.4-EXPERIMENTAL</version>
   <packaging>jar</packaging>
-  <name>Scavenger: Analyze Integrity Constraints in Catalog Tables</name>
+  <name>Scavenger: Profile Relational Data in Spark Catalog Tables</name>
 
   <properties>
     <project.package.name>scavenger-plugin</project.package.name>

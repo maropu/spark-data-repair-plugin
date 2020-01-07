@@ -18,7 +18,7 @@
 #
 
 """
-An API set for Integrity Constraint Analyzer
+A Scavenger API Set for Data Profiling
 """
 
 from pyspark.sql import DataFrame, SparkSession

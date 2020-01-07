@@ -36,9 +36,11 @@ entity-relation diagrams with constraints by [SchemaSpy](http://schemaspy.org/).
 
 ## References for Future Work
 
+ - Vraj Shah and Arun Kumar, The ML Data Prep Zoo: Towards Semi-Automatic Data Preparation for ML, Proceedings of DEEM'19, Article 11, 2019.
  - Eduardo H. M. Pena, Eduardo C. de Almeida, and Felix Naumann, Discovery of Approximate (and Exact) Denial Constraints, Proceedings of the VLDB Endowment , 13(3), p266-278, 2019.
  - Tobias Bleifuß, Sebastian Kruse, and Felix Naumann, Efficient Denial Constraint Discovery with Hydra, Proceedings of VLDB Endowment, 11(3), 2017.
  - Kruse, S., et al., Fast Approximate Discovery of Inclusion Dependencies, BTW, p207-226, 2017.
+ - Theodoros Rekatsinas, Xu Chu, Ihab F. Ilyas, and Christopher Ré, Holoclean: Holistic Data Repairs with Probabilistic Inference, Proceedings of the VLDB Endowment, 10(11), 2017, http://www.holoclean.io/.
  - Hai Liu, Dongqing Xiao, Pankaj Didwania, and Mohamed Y. Eltabakh, Exploiting Soft and Hard Correlations in Big Data Query Optimization, Proceedings of the VLDB Endowment, 9(12), 2016.
  - Thorsten Papenbrock and Felix Naumann, A Hybrid Approach to Functional Dependency Discovery, Proceedings of SIGMOD'16, p821-833, 2016.
  - Z. Abedjan, L. Golab, and F. Naumann, Profiling Relational Data: A Survey, VLDB Journal, 24(4), p557–581, 2015.
