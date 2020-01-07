@@ -1,0 +1,179 @@
+$ git clone https://github.com/gregrahn/tpcds-kit.git
+$ cd tpcds-kit/tools
+$ make OS=MACOS
+$ createdb tpcds
+$ psql tpcds -f tpcds.sql
+$ psql -d tpcds
+tpcds=# \d
+                List of relations
+ Schema |          Name          | Type  | Owner
+--------+------------------------+-------+--------
+ public | call_center            | table | maropu
+ public | catalog_page           | table | maropu
+ public | catalog_returns        | table | maropu
+ public | catalog_sales          | table | maropu
+ public | customer               | table | maropu
+ public | customer_address       | table | maropu
+ public | customer_demographics  | table | maropu
+ public | date_dim               | table | maropu
+ public | dbgen_version          | table | maropu
+ public | household_demographics | table | maropu
+ public | income_band            | table | maropu
+ public | inventory              | table | maropu
+ public | item                   | table | maropu
+ public | promotion              | table | maropu
+ public | reason                 | table | maropu
+ public | ship_mode              | table | maropu
+ public | store                  | table | maropu
+ public | store_returns          | table | maropu
+ public | store_sales            | table | maropu
+ public | time_dim               | table | maropu
+ public | warehouse              | table | maropu
+ public | web_page               | table | maropu
+ public | web_returns            | table | maropu
+ public | web_sales              | table | maropu
+ public | web_site               | table | maropu
+(25 rows)
+
+SparkSession available as 'spark'.
+>>> df = schemaspy.setDbName('tpcds').setDriverName('postgresql').setProps('host=localhost,port=5432').catalogToDataFrame()
+>>> df.show(100, truncate=False)
++---------------+------------------------+-------+--------+------------+------------+
+|tableName      |columnName              |type   |nullable|isPrimaryKey|isForeignKey|
++---------------+------------------------+-------+--------+------------+------------+
+|call_center    |cc_call_center_sk       |int    |true    |true        |false       |
+|call_center    |cc_call_center_id       |char   |true    |false       |false       |
+|call_center    |cc_rec_start_date       |date   |false   |false       |false       |
+|call_center    |cc_rec_end_date         |date   |false   |false       |false       |
+|call_center    |cc_closed_date_sk       |int    |false   |false       |false       |
+|call_center    |cc_open_date_sk         |int    |false   |false       |false       |
+|call_center    |cc_name                 |varchar|false   |false       |false       |
+|call_center    |cc_class                |varchar|false   |false       |false       |
+|call_center    |cc_employees            |int    |false   |false       |false       |
+|call_center    |cc_sq_ft                |int    |false   |false       |false       |
+|call_center    |cc_hours                |char   |false   |false       |false       |
+|call_center    |cc_manager              |varchar|false   |false       |false       |
+|call_center    |cc_mkt_id               |int    |false   |false       |false       |
+|call_center    |cc_mkt_class            |char   |false   |false       |false       |
+|call_center    |cc_mkt_desc             |varchar|false   |false       |false       |
+|call_center    |cc_market_manager       |varchar|false   |false       |false       |
+|call_center    |cc_division             |int    |false   |false       |false       |
+|call_center    |cc_division_name        |varchar|false   |false       |false       |
+|call_center    |cc_company              |int    |false   |false       |false       |
+|call_center    |cc_company_name         |char   |false   |false       |false       |
+|call_center    |cc_street_number        |char   |false   |false       |false       |
+|call_center    |cc_street_name          |varchar|false   |false       |false       |
+|call_center    |cc_street_type          |char   |false   |false       |false       |
+|call_center    |cc_suite_number         |char   |false   |false       |false       |
+|call_center    |cc_city                 |varchar|false   |false       |false       |
+|call_center    |cc_county               |varchar|false   |false       |false       |
+|call_center    |cc_state                |char   |false   |false       |false       |
+|call_center    |cc_zip                  |char   |false   |false       |false       |
+|call_center    |cc_country              |varchar|false   |false       |false       |
+|call_center    |cc_gmt_offset           |numeric|false   |false       |false       |
+|call_center    |cc_tax_percentage       |numeric|false   |false       |false       |
+|catalog_page   |cp_catalog_page_sk      |int    |true    |true        |false       |
+|catalog_page   |cp_catalog_page_id      |char   |true    |false       |false       |
+|catalog_page   |cp_start_date_sk        |int    |false   |false       |false       |
+|catalog_page   |cp_end_date_sk          |int    |false   |false       |false       |
+|catalog_page   |cp_department           |varchar|false   |false       |false       |
+|catalog_page   |cp_catalog_number       |int    |false   |false       |false       |
+|catalog_page   |cp_catalog_page_number  |int    |false   |false       |false       |
+|catalog_page   |cp_description          |varchar|false   |false       |false       |
+|catalog_page   |cp_type                 |varchar|false   |false       |false       |
+|catalog_returns|cr_returned_date_sk     |int    |false   |false       |false       |
+|catalog_returns|cr_returned_time_sk     |int    |false   |false       |false       |
+|catalog_returns|cr_item_sk              |int    |true    |true        |false       |
+|catalog_returns|cr_refunded_customer_sk |int    |false   |false       |false       |
+|catalog_returns|cr_refunded_cdemo_sk    |int    |false   |false       |false       |
+|catalog_returns|cr_refunded_hdemo_sk    |int    |false   |false       |false       |
+|catalog_returns|cr_refunded_addr_sk     |int    |false   |false       |false       |
+|catalog_returns|cr_returning_customer_sk|int    |false   |false       |false       |
+|catalog_returns|cr_returning_cdemo_sk   |int    |false   |false       |false       |
+|catalog_returns|cr_returning_hdemo_sk   |int    |false   |false       |false       |
+|catalog_returns|cr_returning_addr_sk    |int    |false   |false       |false       |
+|catalog_returns|cr_call_center_sk       |int    |false   |false       |false       |
+|catalog_returns|cr_catalog_page_sk      |int    |false   |false       |false       |
+|catalog_returns|cr_ship_mode_sk         |int    |false   |false       |false       |
+|catalog_returns|cr_warehouse_sk         |int    |false   |false       |false       |
+|catalog_returns|cr_reason_sk            |int    |false   |false       |false       |
+|catalog_returns|cr_order_number         |int    |true    |true        |false       |
+|catalog_returns|cr_return_quantity      |int    |false   |false       |false       |
+|catalog_returns|cr_return_amount        |numeric|false   |false       |false       |
+|catalog_returns|cr_return_tax           |numeric|false   |false       |false       |
+|catalog_returns|cr_return_amt_inc_tax   |numeric|false   |false       |false       |
+|catalog_returns|cr_fee                  |numeric|false   |false       |false       |
+|catalog_returns|cr_return_ship_cost     |numeric|false   |false       |false       |
+|catalog_returns|cr_refunded_cash        |numeric|false   |false       |false       |
+|catalog_returns|cr_reversed_charge      |numeric|false   |false       |false       |
+|catalog_returns|cr_store_credit         |numeric|false   |false       |false       |
+|catalog_returns|cr_net_loss             |numeric|false   |false       |false       |
+|catalog_sales  |cs_sold_date_sk         |int    |false   |false       |false       |
+|catalog_sales  |cs_sold_time_sk         |int    |false   |false       |false       |
+|catalog_sales  |cs_ship_date_sk         |int    |false   |false       |false       |
+|catalog_sales  |cs_bill_customer_sk     |int    |false   |false       |false       |
+|catalog_sales  |cs_bill_cdemo_sk        |int    |false   |false       |false       |
+|catalog_sales  |cs_bill_hdemo_sk        |int    |false   |false       |false       |
+|catalog_sales  |cs_bill_addr_sk         |int    |false   |false       |false       |
+|catalog_sales  |cs_ship_customer_sk     |int    |false   |false       |false       |
+|catalog_sales  |cs_ship_cdemo_sk        |int    |false   |false       |false       |
+|catalog_sales  |cs_ship_hdemo_sk        |int    |false   |false       |false       |
+|catalog_sales  |cs_ship_addr_sk         |int    |false   |false       |false       |
+|catalog_sales  |cs_call_center_sk       |int    |false   |false       |false       |
+|catalog_sales  |cs_catalog_page_sk      |int    |false   |false       |false       |
+|catalog_sales  |cs_ship_mode_sk         |int    |false   |false       |false       |
+|catalog_sales  |cs_warehouse_sk         |int    |false   |false       |false       |
+|catalog_sales  |cs_item_sk              |int    |true    |true        |false       |
+|catalog_sales  |cs_promo_sk             |int    |false   |false       |false       |
+|catalog_sales  |cs_order_number         |int    |true    |true        |false       |
+|catalog_sales  |cs_quantity             |int    |false   |false       |false       |
+|catalog_sales  |cs_wholesale_cost       |numeric|false   |false       |false       |
+|catalog_sales  |cs_list_price           |numeric|false   |false       |false       |
+|catalog_sales  |cs_sales_price          |numeric|false   |false       |false       |
+|catalog_sales  |cs_ext_discount_amt     |numeric|false   |false       |false       |
+|catalog_sales  |cs_ext_sales_price      |numeric|false   |false       |false       |
+|catalog_sales  |cs_ext_wholesale_cost   |numeric|false   |false       |false       |
+|catalog_sales  |cs_ext_list_price       |numeric|false   |false       |false       |
+|catalog_sales  |cs_ext_tax              |numeric|false   |false       |false       |
+|catalog_sales  |cs_coupon_amt           |numeric|false   |false       |false       |
+|catalog_sales  |cs_ext_ship_cost        |numeric|false   |false       |false       |
+|catalog_sales  |cs_net_paid             |numeric|false   |false       |false       |
+|catalog_sales  |cs_net_paid_inc_tax     |numeric|false   |false       |false       |
+|catalog_sales  |cs_net_paid_inc_ship    |numeric|false   |false       |false       |
+|catalog_sales  |cs_net_paid_inc_ship_tax|numeric|false   |false       |false       |
++---------------+------------------------+-------+--------+------------+------------+
+only showing top 100 rows
+
+>>> from sklearn.feature_extraction.text import CountVectorizer
+>>> df = df.toPandas()
+>>> df
+tableName          columnName     type  nullable  isPrimaryKey  isForeignKey
+0    call_center   cc_call_center_sk      int      True          True         False
+1    call_center   cc_call_center_id     char      True         False         False
+2    call_center   cc_rec_start_date     date     False         False         False
+3    call_center     cc_rec_end_date     date     False         False         False
+4    call_center   cc_closed_date_sk      int     False         False         False
+..           ...                 ...      ...       ...           ...           ...
+424     web_site           web_state     char     False         False         False
+425     web_site             web_zip     char     False         False         False
+426     web_site         web_country  varchar     False         False         False
+427     web_site      web_gmt_offset  numeric     False         False         False
+428     web_site  web_tax_percentage  numeric     False         False         False
+
+[429 rows x 6 columns]
+
+>>> vec = CountVectorizer(analyzer='char', ngram_range=(2,2))
+>>> X = vec.fit_transform(df['columnName'])
+
+>>> print(vec.get_feature_names())
+['_a', '_b', '_c', '_d', '_e', '_f', '_g', '_h', '_i', '_l', '_m', '_n', '_o', '_p', '_q', '_r', '_s', '_t', '_u', '_v', '_w', '_y', '_z', 'a_', 'ac', 'ad', 'ag', 'ai', 'al', 'am', 'an', 'ap', 'ar', 'as', 'at', 'au', 'ax', 'ay', 'b_', 'ba', 'be', 'bi', 'bo', 'br', 'bu', 'c_', 'ca', 'cc', 'cd', 'ce', 'ch', 'ci', 'ck', 'cl', 'cm', 'co', 'cp', 'cr', 'cs', 'ct', 'cu', 'd_', 'da', 'dd', 'de', 'di', 'dl', 'dm', 'do', 'dr', 'du', 'dv', 'e_', 'ea', 'eb', 'ec', 'ed', 'ee', 'ef', 'eg', 'eh', 'ek', 'el', 'em', 'en', 'eo', 'ep', 'eq', 'er', 'es', 'et', 'ev', 'ew', 'ex', 'fa', 'fe', 'ff', 'fi', 'fl', 'fo', 'fs', 'ft', 'fu', 'fy', 'g_', 'ge', 'gi', 'gm', 'go', 'gr', 'gs', 'h_', 'ha', 'hd', 'hi', 'ho', 'hy', 'i_', 'ia', 'ib', 'ic', 'id', 'ie', 'if', 'il', 'im', 'in', 'io', 'ip', 'ir', 'is', 'it', 'iv', 'iz', 'k_', 'ke', 'kt', 'l_', 'la', 'ld', 'le', 'li', 'll', 'lo', 'lq', 'ls', 'lu', 'ly', 'm_', 'ma', 'mb', 'md', 'me', 'mi', 'mk', 'mo', 'mp', 'mt', 'mu', 'n_', 'na', 'nc', 'nd', 'ne', 'ng', 'ni', 'nk', 'nn', 'ns', 'nt', 'nu', 'nv', 'ny', 'o_', 'oc', 'od', 'of', 'og', 'ol', 'om', 'on', 'oo', 'op', 'or', 'os', 'ot', 'ou', 'ow', 'oy', 'p_', 'pa', 'pe', 'ph', 'pl', 'pm', 'po', 'pp', 'pr', 'pt', 'pu', 'q_', 'qo', 'qu', 'r_', 'ra', 'rc', 'rd', 're', 'rg', 'ri', 'rk', 'rl', 'rm', 'rn', 'ro', 'rp', 'rr', 'rs', 'rt', 'ry', 's_', 'sa', 'sc', 'se', 'sh', 'si', 'sk', 'sm', 'so', 'sp', 'sq', 'sr', 'ss', 'st', 'su', 't_', 'ta', 'te', 'th', 'ti', 'tm', 'to', 'tr', 'ts', 'tu', 'tv', 'ty', 'ua', 'ub', 'uc', 'uf', 'ui', 'ul', 'um', 'un', 'up', 'ur', 'us', 'ut', 'uy', 'v_', 've', 'vi', 'w_', 'wa', 'we', 'wh', 'wi', 'wp', 'wr', 'ws', 'x_', 'xt', 'y_', 'ye', 'yp', 'ze', 'zi']
+
+>>> print(X.toarray())
+[[0 0 2 ... 0 0 0]
+[0 0 2 ... 0 0 0]
+[0 0 0 ... 0 0 0]
+...
+[0 0 1 ... 0 0 0]
+[0 0 0 ... 0 0 0]
+[0 0 0 ... 0 0 0]]
+
