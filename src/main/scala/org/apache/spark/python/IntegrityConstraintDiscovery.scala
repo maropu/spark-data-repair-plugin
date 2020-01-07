@@ -67,6 +67,22 @@ object IntegrityConstraintDiscovery extends Logging {
     s"$prefix${Utils.getFormattedClassName(this)}_${RandomStringUtils.randomNumeric(12)}"
   }
 
+  private def catalogStats(sparkSession: SparkSession, table: String): Seq[(String, String)] = {
+    val df = sparkSession.table(table)
+    val tableNode = df.queryExecution.analyzed.collectLeaves().head.asInstanceOf[LeafNode]
+    tableNode.computeStats().attributeStats.map { case (a, stats) =>
+      val statStrings = Seq(
+        stats.distinctCount.map(v => s"distinctCnt=$v"),
+        // stats.min.map(v => s"min=$v"),
+        // stats.max.map(v => s"max=$v"),
+        stats.nullCount.map(v => s"nullCnt=$v")
+        // stats.avgLen.map(v => s"avgLen=$v"),
+        // stats.maxLen.map(v => s"maxLen=$v"),
+      ).flatten
+      a.name -> s"STATS(${statStrings.mkString(",")})"
+    }.toSeq
+  }
+
   private def checkConstraints(sparkSession: SparkSession, table: String): Seq[(String, String)] = {
     val fields = sparkSession.table(table).schema.filter { f =>
       f.dataType match {
@@ -261,7 +277,8 @@ object IntegrityConstraintDiscovery extends Logging {
   }
 
   def exec(sparkSession: SparkSession, table: String): Map[String, Seq[String]] = {
-    val constraints = denialConstraints(sparkSession, table) ++ checkConstraints(sparkSession, table)
+    val constraints = denialConstraints(sparkSession, table) ++ checkConstraints(sparkSession, table) ++
+      catalogStats(sparkSession, table)
     constraints.groupBy(_._1).map { case (k, v) =>
       (k, v.map(_._2))
     }
