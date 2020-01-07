@@ -66,16 +66,43 @@ object IntegrityConstraintDiscovery extends Logging {
     s"$prefix${Utils.getFormattedClassName(this)}_${RandomStringUtils.randomNumeric(12)}"
   }
 
-  private def isCondidateType(dataType: DataType): Boolean = dataType match {
-    case IntegerType => true
-    case StringType => true
-    case _ => false
+  private def checkConstraints(sparkSession: SparkSession, table: String): Seq[(String, String)] = {
+    val fields = sparkSession.table(table).schema.filter { f =>
+      f.dataType match {
+        case IntegerType => true
+        case FloatType | DoubleType => true
+        case _ => false
+      }
+    }
+    if (fields.nonEmpty) {
+      val minMaxAggExprs = fields.map(_.name).flatMap { columnName =>
+        s"CAST(MIN($columnName) AS STRING)" :: s"CAST(MAX($columnName) AS STRING)" :: Nil
+      }
+      val minMaxStat = sparkSession.sql(
+        s"""
+           |SELECT ${minMaxAggExprs.mkString(", ")}
+           |FROM $table
+         """.stripMargin
+      ).take(1).head
+
+      fields.zipWithIndex.map { case (f, i) =>
+        val minValue = minMaxStat.getString(2 * i)
+        val maxValue = minMaxStat.getString(2 * i + 1)
+        (f.name, s"CHK($minValue,$maxValue)")
+      }
+    } else {
+      Seq.empty
+    }
   }
 
-  def exec(sparkSession: SparkSession, table: String): Map[String, Seq[String]] = {
+  private def denialConstraints(sparkSession: SparkSession, table: String): Seq[(String, String)] = {
     withSQLConf(SQLConf.CROSS_JOINS_ENABLED.key -> "true") {
       val fields = sparkSession.table(table).schema.filter { f =>
-        isCondidateType(f.dataType)
+        f.dataType match {
+          case IntegerType => true
+          case StringType => true
+          case _ => false
+        }
       }
       if (fields.nonEmpty) {
         val (l, r) = ("leftTable", "rightTable")
@@ -162,7 +189,7 @@ object IntegrityConstraintDiscovery extends Logging {
             val numSymbols = 2
             val rtIdx = fields.length
 
-            fields.indices.combinations(numSymbols).flatMap { indices =>
+            val constraints = fields.indices.combinations(numSymbols).flatMap { indices =>
               val evMap = localEvidences.map { r =>
                 indices.map(r.getInt).toArray.toSeq -> r.getDouble(rtIdx)
               }.toMap
@@ -202,14 +229,20 @@ object IntegrityConstraintDiscovery extends Logging {
                   }
                 }
               }
-            }.toSeq.groupBy(_._1).map {
-              case (k, v) => (k, v.map(_._2))
             }
+            constraints.toSeq
           }
         }
       } else {
-        Map.empty
+        Seq.empty
       }
+    }
+  }
+
+  def exec(sparkSession: SparkSession, table: String): Map[String, Seq[String]] = {
+    val constraints = denialConstraints(sparkSession, table) ++ checkConstraints(sparkSession, table)
+    constraints.groupBy(_._1).map { case (k, v) =>
+      (k, v.map(_._2))
     }
   }
 }

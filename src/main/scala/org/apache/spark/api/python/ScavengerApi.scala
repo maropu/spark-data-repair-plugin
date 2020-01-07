@@ -367,18 +367,11 @@ object ScavengerApi extends Logging {
         generateMetaFile {
           val fkConstraints = FkInference(sparkSession, fkInferType).infer(tables)
           fkConstraints.map { case (table, fkDefs) =>
-            val constraintMap: Map[String, Seq[String]] = if (true) {
-              IntegrityConstraintDiscovery.exec(sparkSession, table)
-            } else {
-              Map.empty
-            }
-
             s"""
                |<table name="$table" comments="">
                |  ${fkDefs.map { fk =>
-                      val constraints = constraintMap.get(fk._1).map(_.mkString(",")).getOrElse("")
                       s"""
-                         |<column name="${fk._1}" comments="$constraints">
+                         |<column name="${fk._1}" comments="">
                          |  <foreignKey table="${fk._2._1}" column="${fk._2._2}" />
                          |</column>
                        """.stripMargin
