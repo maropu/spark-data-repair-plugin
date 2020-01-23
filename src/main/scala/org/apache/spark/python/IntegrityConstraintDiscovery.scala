@@ -32,6 +32,11 @@ object IntegrityConstraintDiscovery extends Logging {
 
   val tableConstraintsKey = "__TABLE_CONSTRAINTS_KEY__"
 
+  private val NUM_INTEGERESTINGNESS_SYMBOLS = 2
+  private val SYMBOL_EQUAL = "EQ"
+  private val SYMBOL_NOT_EQUAL = "IQ"
+  private val SYMBOL_NOT_GREATER_THAN = "GT"
+  private val SYMBOL_NOT_LESS_THAN = "LT"
   private val BITMASK_EQUAL = 1         // 'mask & BITMASK_EQUAL > 0' means '='; '!=' otherwise
   private val BITMASK_GREATER_THAN = 2  // 'mask & BITMASK_GREATER_THAN > 0' means '>'; '<=' otherwise
   private val BITMASK_LESS_THAN = 4     // 'mask & BITMASK_LESS_THAN > 0' means '<'; '>=' otherwise
@@ -225,12 +230,12 @@ object IntegrityConstraintDiscovery extends Logging {
                  |  ${colNames.mkString(", ")}
                """.stripMargin)
 
-            val localEvidences = evDf.collect()
-            val numSymbols = 2
+            val evidences = evDf.collect()
+            val numSymbols = NUM_INTEGERESTINGNESS_SYMBOLS
             val rtIdx = fields.length
 
             val constraints = fields.indices.combinations(numSymbols).flatMap { indices =>
-              val evMap = localEvidences.map { r =>
+              val evMap = evidences.map { r =>
                 indices.map(r.getInt).toArray.toSeq -> r.getDouble(rtIdx)
               }.toMap
 
@@ -251,21 +256,25 @@ object IntegrityConstraintDiscovery extends Logging {
                   if (violateConstraint.isEmpty ||
                       violateConstraint.head < sparkSession.sessionState.conf.constraintInferenceApproximateEpilon) {
                     val dcVecWithField = indices.map(fields).zip(dcCandidate).sortBy(_._2)
-                    // If `dcVec` has a single '!='(that is, the others are '='),
-                    // we can rewrite it to FD.
-                    if (sparkSession.sessionState.conf.constraintInferenceDc2fdConversionEnabled &&
-                        dcCandidate.count(_ == 0) == 1) {
-                      val fieldNames = dcVecWithField.map(_._1.name)
-                      val X = fieldNames.init.mkString(",")
-                      val Y = fieldNames.last
-                      Some(fieldNames.head -> s"FD($X=>$Y)")
-                    } else {
-                      Some(tableConstraintsKey -> dcVecWithField.map { case (f, ev) =>
-                        s"X.${f.name} ${if (ev > 0) "=" else "!="} Y.${f.name}"
-                      }.mkString("DC(", ",", ")"))
+                    // The format of denial constraints refers to the HoloClean one:
+                    //  - https://github.com/HoloClean/holoclean/blob/master/testdata/hospital_constraints.txt
+                    val predicates = dcVecWithField.map { case (f, ev) =>
+                      s"${if (ev > 0) SYMBOL_EQUAL else SYMBOL_NOT_EQUAL}(X.${f.name},Y.${f.name})"
                     }
+                    Seq(tableConstraintsKey -> s"X&amp;Y&amp;${predicates.mkString("&amp;")}") ++
+                      // If `dcVec` has a single '!='(that is, the others are '='),
+                      // we can rewrite it to FD.
+                      (if (sparkSession.sessionState.conf.constraintInferenceDc2fdConversionEnabled &&
+                          dcCandidate.count(_ == 0) == 1) {
+                        val fieldNames = dcVecWithField.map(_._1.name)
+                        val X = fieldNames.init.mkString(",")
+                        val Y = fieldNames.last
+                        fieldNames.head -> s"FD($X=>$Y)" :: Nil
+                      } else {
+                        Nil
+                      })
                   } else {
-                    None
+                    Nil
                   }
                 }
               }

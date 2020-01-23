@@ -403,7 +403,7 @@ object ScavengerApi extends Logging {
           val tck = IntegrityConstraintDiscovery.tableConstraintsKey
           val (tableConstraints, columnConstraints) =
             IntegrityConstraintDiscovery.exec(sparkSession, table.table)
-              .map { case (k, v) => k -> v.mkString(",") }
+              .map { case (k, v) => k -> v.mkString("&lt;br&gt;") }
               .partition { v => v._1 == tck }
 
           val tableComment = tableConstraints.values.headOption.getOrElse("")
