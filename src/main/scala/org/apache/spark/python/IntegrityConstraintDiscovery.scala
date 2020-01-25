@@ -32,14 +32,20 @@ object IntegrityConstraintDiscovery extends Logging {
 
   val tableConstraintsKey = "__TABLE_CONSTRAINTS_KEY__"
 
+  private val MAX_TARGET_FIELD_NUM = 100
   private val NUM_INTEGERESTINGNESS_SYMBOLS = 2
-  private val SYMBOL_EQUAL = "EQ"
-  private val SYMBOL_NOT_EQUAL = "IQ"
-  private val SYMBOL_NOT_GREATER_THAN = "GT"
-  private val SYMBOL_NOT_LESS_THAN = "LT"
-  private val BITMASK_EQUAL = 1         // 'mask & BITMASK_EQUAL > 0' means '='; '!=' otherwise
-  private val BITMASK_GREATER_THAN = 2  // 'mask & BITMASK_GREATER_THAN > 0' means '>'; '<=' otherwise
-  private val BITMASK_LESS_THAN = 4     // 'mask & BITMASK_LESS_THAN > 0' means '<'; '>=' otherwise
+  private val METADATA_EQUAL = ("EQ", "=", 1)
+  private val METADATA_NOT_EQUAL = ("IQ", "!=", 0)
+  private val METADATA_GREATER_THAN = ("GT", ">", 2)
+  private val METADATA_LESS_THAN = ("LT", "<", 4)
+  private val METADATA_PREDICATES = Seq(METADATA_EQUAL, METADATA_GREATER_THAN, METADATA_LESS_THAN)
+
+  private def negateSymbol(s: String) = s match {
+    case "EQ" => "IQ"
+    case "IQ" => "EQ"
+    case "GT" => "LTE"
+    case "LT" => "GTE"
+  }
 
   private def withSQLConf[T](pairs: (String, String)*)(f: => T): T= {
     val conf = SQLConf.get
@@ -140,6 +146,12 @@ object IntegrityConstraintDiscovery extends Logging {
     }
   }
 
+  private def isValidMetadata(md: (StructField, (String, String, Int))): Boolean = md match {
+    case (StructField(_, StringType, _, _), METADATA_EQUAL | METADATA_NOT_EQUAL) => true
+    case (StructField(_, _: NumericType, _, _), _) => true
+    case _ => false
+  }
+
   private def denialConstraints(sparkSession: SparkSession, table: String): Seq[(String, String)] = {
     withSQLConf(SQLConf.CROSS_JOINS_ENABLED.key -> "true") {
       val fields = sparkSession.table(table).schema.filter { f =>
@@ -150,13 +162,18 @@ object IntegrityConstraintDiscovery extends Logging {
         }
       }
       if (fields.nonEmpty) {
+        if (fields.length > MAX_TARGET_FIELD_NUM) {
+          throw new SparkException(s"Maximum field length is $MAX_TARGET_FIELD_NUM, " +
+            s"but ${fields.length} found.")
+        }
         val (l, r) = ("leftTable", "rightTable")
         val colNames = fields.map(_.name)
         val (evExprs, whereExprs) = {
           val exprs = colNames.map { colName =>
             val (lc, rc) = (s"$l.$colName", s"$r.$colName")
-            def evFunc(cmp: String, pos: Int) = s"SHIFTLEFT(CAST($lc $cmp $rc AS BYTE), $pos)"
-            val evs = Seq(evFunc("=", 0), evFunc(">", 1), evFunc("<", 2))
+            val evs = METADATA_PREDICATES.zipWithIndex.map { case ((_, cmp, _), pos) =>
+              s"SHIFTLEFT(CAST($lc $cmp $rc AS BYTE), $pos)"
+            }
             (s"(${evs.mkString(" | ")}) AS $colName",
               s"$lc != $rc")
           }
@@ -188,39 +205,45 @@ object IntegrityConstraintDiscovery extends Logging {
                |  ${colNames.mkString(", ")}
              """.stripMargin
 
-          logDebug(evQuery)
           val evVectors = sparkSession.sql(evQuery)
+          val totalEvCount = evVectors.groupBy().sum("cnt").collect.map { case Row(l: Long) => l }.head
+          logDebug(
+            s"""
+               |Number of evidences: $totalEvCount
+               |Number of aggregated evidences: ${evVectors.count}
+               |Query to compute evidences:
+               |$evQuery
+             """.stripMargin)
 
           if (log.isDebugEnabled()) {
             val exprs = colNames.map { colName =>
-              def maskFunc(mask: Int) = s"CAST($colName & $mask > 0 AS INT)"
-              val masks = Seq(maskFunc(BITMASK_EQUAL), maskFunc(BITMASK_GREATER_THAN),
-                maskFunc(BITMASK_LESS_THAN))
+              val masks = METADATA_PREDICATES.map { md => s"CAST($colName & ${md._3} > 0 AS INT)" }
               s"(${masks.mkString(" || ")}) AS $colName"
             }
             withTempView(sparkSession, evVectors.selectExpr(exprs :+ "cnt": _*)) { tempView =>
+              // Aggregated evidence bitmap
               sparkSession.sql(
                 s"""
                    |SELECT
-                   |  ${colNames.mkString(", ")}, SUM(cnt) AS cnt
+                   |  ${colNames.mkString(", ")}, SUM(cnt) AS rt
                    |FROM
                    |  $tempView
                    |GROUP BY
                    |  ${colNames.mkString(", ")}
                  """.stripMargin
-              ).show(numRows = 100, truncate = false)
+              ).show(numRows = 300, truncate = false)
             }
           }
 
           // TODO: Currently, it uses evidences for equality
-          val totalCount = evVectors.groupBy().sum("cnt").collect.map { case Row(l: Long) => l }.head
           val equalEv = colNames.map { colName =>
-            s"CAST($colName & $BITMASK_EQUAL > 0 AS INT) AS $colName"
+            s"CAST($colName & ${METADATA_EQUAL._3} > 0 AS INT) AS $colName"
           }
           withTempView(sparkSession, evVectors) { tempView =>
+            val numSymbols = NUM_INTEGERESTINGNESS_SYMBOLS
             val evDf = sparkSession.sql(
               s"""
-                 |SELECT ${colNames.mkString(", ")}, SUM(cnt / $totalCount) AS rt
+                 |SELECT ${colNames.mkString(", ")}, SUM(cnt) AS cnt
                  |FROM (
                  |  SELECT
                  |    ${equalEv.mkString(", ")}, cnt
@@ -230,56 +253,48 @@ object IntegrityConstraintDiscovery extends Logging {
                  |  ${colNames.mkString(", ")}
                """.stripMargin)
 
-            val evidences = evDf.collect()
-            val numSymbols = NUM_INTEGERESTINGNESS_SYMBOLS
-            val rtIdx = fields.length
-
-            val constraints = fields.indices.combinations(numSymbols).flatMap { indices =>
-              val evMap = evidences.map { r =>
-                indices.map(r.getInt).toArray.toSeq -> r.getDouble(rtIdx)
-              }.toMap
-
-              evMap.flatMap { case (evVec, _) =>
-                def negateSinglePredicate(pos: Int): Seq[Int] = {
-                  // Forcibly copy it
-                  val ev = evVec.map(x => x).toArray
-                  ev(pos) = ev(pos) ^ 1
-                  ev
-                }
-                // TODO: We need to compute a minimal cover of the evidence set for searching denial
-                // constraints. Currently, the code below just prints DC candidates;
-                // it negates a single predicate among them in `evVec` because they cannot
-                // be satisfied simultaneously.
-                val dcCandidates = (0 until numSymbols).map(negateSinglePredicate)
-                dcCandidates.flatMap { dcCandidate  =>
-                  val violateConstraint = evMap.get(dcCandidate)
-                  if (violateConstraint.isEmpty ||
-                      violateConstraint.head < sparkSession.sessionState.conf.constraintInferenceApproximateEpilon) {
-                    val dcVecWithField = indices.map(fields).zip(dcCandidate).sortBy(_._2)
-                    // The format of denial constraints refers to the HoloClean one:
-                    //  - https://github.com/HoloClean/holoclean/blob/master/testdata/hospital_constraints.txt
-                    val predicates = dcVecWithField.map { case (f, ev) =>
-                      s"${if (ev > 0) SYMBOL_EQUAL else SYMBOL_NOT_EQUAL}(X.${f.name},Y.${f.name})"
-                    }
-                    Seq(tableConstraintsKey -> s"X&amp;Y&amp;${predicates.mkString("&amp;")}") ++
-                      // If `dcVec` has a single '!='(that is, the others are '='),
-                      // we can rewrite it to FD.
-                      (if (sparkSession.sessionState.conf.constraintInferenceDc2fdConversionEnabled &&
-                          dcCandidate.count(_ == 0) == 1) {
-                        val fieldNames = dcVecWithField.map(_._1.name)
-                        val X = fieldNames.init.mkString(",")
-                        val Y = fieldNames.last
-                        fieldNames.head -> s"FD($X=>$Y)" :: Nil
-                      } else {
-                        Nil
-                      })
-                  } else {
-                    Nil
-                  }
+            // XXX
+            val approxEpsilon = sparkSession.sessionState.conf.constraintInferenceApproximateEpilon
+            val threshold = totalEvCount * (1.0 - approxEpsilon)
+            val queryToValidateConstraints = fields.combinations(numSymbols).flatMap { fs =>
+              (METADATA_NOT_EQUAL +: METADATA_PREDICATES).combinations(numSymbols).flatMap { metadataSeq =>
+                val exprs = fs.zip(metadataSeq).filter(isValidMetadata)
+                if (exprs.length == numSymbols) {
+                  // The format of denial constraints refers to the HoloClean one:
+                  //  - https://github.com/HoloClean/holoclean/blob/master/testdata/hospital_constraints.txt
+                  val aliasName = exprs.map(v => s"${negateSymbol(v._2._1)}(${v._1.name})").mkString("&amp;")
+                  val exprToValidateConstraint = exprs.map(v => s"${v._1.name} = ${v._2._3}").mkString(" OR ")
+                  // XXX
+                  Some((metadataSeq.map(_._1).zip(fs.map(_.name)),
+                    s"SUM(IF($exprToValidateConstraint, cnt, 0)) >= " +
+                    s"$threshold AS `$aliasName`"))
+                } else {
+                  None
                 }
               }
+            }.toSeq
+
+            // Computes minimal covers of the evidence set for searching denial constraints
+            val cDf = evDf.selectExpr(queryToValidateConstraints.map(_._2): _*)
+            // Sets false at NULL cells
+            val cRow = cDf.na.fill(false).collect().head
+            val metadataSeq = queryToValidateConstraints.map(_._1)
+            cDf.schema.zipWithIndex.flatMap { case (f, i) =>
+              if (cRow.getBoolean(i)) {
+                Seq(tableConstraintsKey -> s"X&amp;Y&amp;${f.name}") ++
+                  (if (sparkSession.sessionState.conf.constraintInferenceDc2fdConversionEnabled) {
+                    metadataSeq(i) match {
+                      case Seq(("EQ", x), ("IQ", y)) => y -> s"FD($y->$x)" :: Nil
+                      case Seq(("IQ", x), ("EQ", y)) => x -> s"FD($x->$y)" :: Nil
+                      case _ => Nil
+                    }
+                  } else {
+                    Nil
+                  })
+              } else {
+                Nil
+              }
             }
-            constraints.toSeq
           }
         }
       } else {

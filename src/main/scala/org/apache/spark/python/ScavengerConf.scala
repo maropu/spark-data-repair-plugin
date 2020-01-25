@@ -57,6 +57,7 @@ object ScavengerConf {
       .internal()
       .doc("Epsilon value for approximate constraint inferences")
       .doubleConf
+      .checkValue(v => 0.0 <= v && v < 1.0, "XXX")
       .createWithDefault(0.0)
 
   val CONSTRAINT_INFERENCE_DC2FD_CONVERSION_ENABLED =
