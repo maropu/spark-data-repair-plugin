@@ -17,7 +17,7 @@
 
 package org.apache.spark.api.python
 
-import java.io.{File, PrintWriter}
+import java.io.{File, FileWriter, PrintWriter}
 import java.net.URL
 import java.sql.{Connection, Driver, ResultSet, Statement}
 import java.util.UUID
@@ -60,7 +60,13 @@ object ScavengerApi extends Logging {
   }
 
   private def getTempOutputPath(): String = {
-    s"${System.getProperty("java.io.tmpdir")}/scavenger-${UUID.randomUUID.toString}.output"
+    val tempPath = s"${System.getProperty("java.io.tmpdir")}/scavenger-${UUID.randomUUID.toString}.output"
+    val tempDir = new File(tempPath)
+    if (tempDir.mkdir()) {
+      tempDir.getAbsolutePath
+    } else {
+      throw new SparkException(s"Cannot create a temporary directory: $tempPath")
+    }
   }
 
   private def schemaSpyMetaTemplate(tableContent: String): String = {
@@ -174,21 +180,15 @@ object ScavengerApi extends Logging {
 
   private def runSchemaSpy(
       jdbcDriverTypeName: String,
-      userDefinedOutputPath: String,
+      outputPath: String,
       propFile: File,
       doProfileFunc: Option[Unit => File] = None): String = {
-
+    assert(outputPath.nonEmpty, "Output path not specified")
     val additionalConfigs = doProfileFunc.map { f =>
       val metaFile = f()
       Seq("-meta", metaFile.getAbsolutePath)
     }.getOrElse {
       Seq.empty
-    }
-
-    val outputPath = if (userDefinedOutputPath.nonEmpty) {
-      userDefinedOutputPath
-    } else {
-      getTempOutputPath()
     }
 
     SchemaSpyLauncher.run(Seq(
@@ -336,12 +336,18 @@ object ScavengerApi extends Logging {
         throw new SparkException(s"Unknown JDBC driver: $driverName")
     }
 
+    val outputPath = if (userDefinedOutputPath.nonEmpty) {
+      userDefinedOutputPath
+    } else {
+      getTempOutputPath()
+    }
+
     val propFile = generatePropFile {
       val jdbcDriverFile = getJdbcDriverFile(jdbcDriverName)
       (jdbcDriverFile.getAbsolutePath, dbSpecificProps)
     }
 
-    runSchemaSpy(driverTypeName, userDefinedOutputPath, propFile)
+    runSchemaSpy(driverTypeName, outputPath, propFile)
   }
 
   // To call this function, just say a lien below;
@@ -357,13 +363,19 @@ object ScavengerApi extends Logging {
 
       val tables = sparkSession.sessionState.catalog.listTables(dbName)
 
+      val outputPath = if (userDefinedOutputPath.nonEmpty) {
+        userDefinedOutputPath
+      } else {
+        getTempOutputPath()
+      }
+
       val propFile = generatePropFile {
         val jdbcDriverFile = getJdbcDriverFile(getSqliteDriverName())
         val dbFile = dumpSparkCatalog(sparkSession, tables)
         (jdbcDriverFile.getAbsolutePath, s"schemaspy.db=${dbFile.getAbsolutePath}")
       }
 
-      runSchemaSpy("sqlite-xerial", userDefinedOutputPath, propFile, Some(_ => {
+      runSchemaSpy("sqlite-xerial", outputPath, propFile, Some(_ => {
         generateMetaFile {
           val fkConstraints = FkInference(sparkSession, fkInferType).infer(tables)
           fkConstraints.map { case (table, fkDefs) =>
@@ -392,19 +404,39 @@ object ScavengerApi extends Logging {
           throw new SparkException(s"Table '$tableName' does not exist in database '$dbName'.")
         }
 
+      val outputPath = if (userDefinedOutputPath.nonEmpty) {
+        userDefinedOutputPath
+      } else {
+        getTempOutputPath()
+      }
+
       val propFile = generatePropFile {
         val jdbcDriverFile = getJdbcDriverFile(getSqliteDriverName())
         val dbFile = dumpSparkCatalog(sparkSession, table :: Nil)
         (jdbcDriverFile.getAbsolutePath, s"schemaspy.db=${dbFile.getAbsolutePath}")
       }
 
-      runSchemaSpy("sqlite-xerial", userDefinedOutputPath, propFile, Some(_ => {
+      runSchemaSpy("sqlite-xerial", outputPath, propFile, Some(_ => {
         generateMetaFile {
           val tck = IntegrityConstraintDiscovery.tableConstraintsKey
-          val (tableConstraints, columnConstraints) =
-            IntegrityConstraintDiscovery.exec(sparkSession, table.table)
-              .map { case (k, v) => k -> v.mkString("&lt;br&gt;") }
-              .partition { v => v._1 == tck }
+          val constraints = IntegrityConstraintDiscovery.exec(sparkSession, table.table)
+          val (tableConstraints, columnConstraints) = constraints
+            .map { case (k, v) => k -> v.map(s => s.replace("&", "&amp;")).mkString("&lt;br&gt;") }
+            .partition { v => v._1 == tck }
+
+          // Writes constraints in a text file
+          constraints.get(IntegrityConstraintDiscovery.tableConstraintsKey).foreach { cs =>
+            var fileWriter: FileWriter = null
+            try {
+              val constraintFile = new File(outputPath, "constraints.txt")
+              fileWriter = new FileWriter(constraintFile)
+              fileWriter.write(cs.mkString("\n"))
+            } finally {
+              if (fileWriter != null) {
+                fileWriter.close()
+              }
+            }
+          }
 
           val tableComment = tableConstraints.values.headOption.getOrElse("")
           s"""
