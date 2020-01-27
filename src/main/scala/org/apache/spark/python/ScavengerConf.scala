@@ -54,11 +54,18 @@ object ScavengerConf {
 
   val CONSTRAINT_INFERENCE_APPROXIMATE_EPSILON =
     buildConf("spark.scavenger.constraintInference.approxEpsilon")
-      .internal()
       .doc("Epsilon value for approximate constraint inferences")
       .doubleConf
       .checkValue(v => 0.0 <= v && v < 1.0, "The epsilon value must be in [0.0, 1.0].")
       .createWithDefault(0.01)
+
+  val CONSTRAINT_INFERENCE_TOPK =
+    buildConf("spark.scavenger.constraintInference.topK")
+      .doc("Whether to only show topK entries for integrity constraint with high confidences. " +
+        "By setting this value to 0, this feature can be disabled.")
+      .intConf
+      .checkValue(v => v >= 0, "The topK value must not be negative.")
+      .createWithDefault(0)
 
   val CONSTRAINT_INFERENCE_DC2FD_CONVERSION_ENABLED =
     buildConf("spark.scavenger.constraintInference.dc2fdConversion.enabled")
@@ -76,6 +83,7 @@ class ScavengerConf(conf: SQLConf) {
   def samplingSize: Int = getConf(SAMPLING_SIZE)
   def fkInferenceApproxCountEnabled: Boolean = getConf(FK_INFERENCE_APPROX_COUNT_ENABLED)
   def constraintInferenceApproximateEpilon: Double = getConf(CONSTRAINT_INFERENCE_APPROXIMATE_EPSILON)
+  def constraintInferenceTopK: Int = getConf(CONSTRAINT_INFERENCE_TOPK)
   def constraintInferenceDc2fdConversionEnabled: Boolean = getConf(CONSTRAINT_INFERENCE_DC2FD_CONVERSION_ENABLED)
 
   /**

@@ -249,8 +249,8 @@ object IntegrityConstraintDiscovery extends Logging {
 
           // Holds minimal denial constrains;
           //  - keys have a type of a set (comparator name, field name), e.g., ("EQ", "ZipCode")
-          //  - values have denial constrains as strings, e.g.,
-          //    "EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.CountyName,t2.CountyName)"
+          //  - values have a type of a set (denial constrains, number of valid evidences), e.g.,
+          //    ("EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.CountyName,t2.CountyName)", 1000)
           //
           // TODO: We might be able to support the case of different attributes,
           // e.g., "EQ(t1.columnName1, t2.columnName2)".
@@ -259,17 +259,18 @@ object IntegrityConstraintDiscovery extends Logging {
           // have the same type and share at least 30% of common values [8]." cited by a paper below;
           //  * Eduardo H. M. Pena, Eduardo C. de Almeida, and Felix Naumann, Discovery of Approximate (and Exact)
           //    Denial Constraints, Proceedings of the VLDB Endowment , 13(3), p266-278, 2019.
-          val minimalMap = mutable.Map[Set[(String, String)], String]()
+          val minimalMap = mutable.Map[Set[(String, String)], (String, Long)]()
 
           val numSymbols = NUM_INTEGERESTINGNESS_SYMBOLS
+          val topK = sparkSession.sessionState.conf.constraintInferenceTopK
           val approxEpsilon = sparkSession.sessionState.conf.constraintInferenceApproximateEpilon
-          val threshold = totalEvCount * (1.0 - approxEpsilon)
+          val threshold = (totalEvCount * (1.0 - approxEpsilon)).toLong
 
           (2 until numSymbols + 1).foreach { level =>
             outputConsole(s"Starts processing level $level/$numSymbols...")
             // TODO: We need to split a query into multiple ones if `exprToValidateConstraints`
             // has many expressions.
-            val (metadataSeq, exprToComputeValidEvNum, aliasNames) = fields.combinations(level).flatMap { fs =>
+            val (metadataSeq, exprToComputeValidEvNum) = fields.combinations(level).flatMap { fs =>
               (METADATA_NOT_EQUAL +: METADATA_PREDICATES).combinations(level).flatMap { metadataSeq =>
                 // Checks if all the subsets are not minimal
                 def hasNoMinimalSubset = {
@@ -293,42 +294,42 @@ object IntegrityConstraintDiscovery extends Logging {
                     }
                   }.mkString(" OR ")
                   Some((metadataSeq.map(_._1).zip(fs.map(_.name)),
-                    s"SUM(IF($exprToValidateConstraint, cnt, 0))",
-                    aliasName))
+                    s"SUM(IF($exprToValidateConstraint, cnt, 0)) AS `$aliasName`"))
                 } else {
                   None
                 }
               }
-            }.toSeq.unzip3
+            }.toSeq.unzip
 
             // Computes minimal covers of the evidence set for searching denial constraints
             outputConsole(s"Starts processing ${exprToComputeValidEvNum.size} exprs to validate constraints...")
             if (exprToComputeValidEvNum.nonEmpty) {
-              if (isDebugEnabled) {
-                evVectors.selectExpr({
-                  exprToComputeValidEvNum.zip(aliasNames).map(v => s"${v._1} AS `${v._2}`")
-                }: _*).show(numRows = 1, truncate = 0, vertical = true)
-              }
-              val cDf = evVectors.selectExpr({
-                exprToComputeValidEvNum.zip(aliasNames).map { case (expr, name) =>
-                  s"$expr >= $threshold AS `$name`"
-                }
-              }: _*)
+              val cDf = evVectors.selectExpr(exprToComputeValidEvNum: _*)
+
               // Sets false at NULL cells
-              val cRow = cDf.na.fill(false).collect().head
+              val cRow = cDf.na.fill(0L).collect().head
               cDf.schema.zipWithIndex.foreach { case (f, i) =>
-                if (cRow.getBoolean(i)) {
-                  minimalMap += metadataSeq(i).toSet -> f.name
+                if (cRow.getLong(i) >= threshold) {
+                  minimalMap += metadataSeq(i).toSet -> (f.name, cRow.getLong(i))
                 }
               }
             }
           }
 
-          minimalMap.values.map { c =>
+          val minimalSeq = if (topK > 0) {
+            minimalMap.toSeq.sortBy(_._2._2).reverse.take(topK)
+          } else {
+            minimalMap.toSeq
+          }
+          if (isDebugEnabled) {
+            minimalSeq.zipWithIndex.foreach { case ((_, (constraint, n)), i) =>
+              outputConsole(s"[$i]$constraint: $n(${(totalEvCount - n + 0.0) / totalEvCount})")
+            }
+          }
+          minimalSeq.map { case (_, (c, _)) =>
             tableConstraintsKey -> s"${TUPLE_IDENTIFIERS._1}&${TUPLE_IDENTIFIERS._2}&$c"
-          }.toSeq ++
-            (if (sparkSession.sessionState.conf.constraintInferenceDc2fdConversionEnabled) {
-              minimalMap.keys.map(_.toSeq).flatMap {
+          } ++ (if (sparkSession.sessionState.conf.constraintInferenceDc2fdConversionEnabled) {
+              minimalSeq.map(_._1.toSeq).flatMap {
                 case Seq(("EQ", x), ("IQ", y)) => y -> s"FD($y->$x)" :: Nil
                 case Seq(("IQ", x), ("EQ", y)) => x -> s"FD($x->$y)" :: Nil
                 case _ => Nil
