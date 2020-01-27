@@ -30,9 +30,9 @@ case class DenialConstraints(entries: Seq[Seq[Predicate]], attrNames: Seq[String
 object DenialConstraints extends Logging {
 
   // TODO: These entries below must be synced with `IntegrityConstraintDiscovery`
-  private val opSigns = Seq("EQ", "IQ", "LTE", "GTE")
+  private val opSigns = Seq("EQ", "IQ", "LT", "GT")
   private val signMap: Map[String, String] =
-    Map("EQ" -> "=", "IQ" -> "!=", "LTE" -> "<=", "GTE" -> ">=")
+    Map("EQ" -> "=", "IQ" -> "!=", "LT" -> "<", "GT" -> ">")
 
   def toWhereCondition(predicates: Seq[Predicate], left: String, right: String): String = {
     predicates.map { p =>
@@ -48,7 +48,6 @@ object DenialConstraints extends Logging {
       val predicates = mutable.ArrayBuffer[Seq[Predicate]]()
       file.getLines().foreach { _.split("&").toSeq match {
           case t1 +: t2 +: constraints =>
-            // val predicate = s"""(EQ|IQ|LTE|GTE)\\($t1\\.(.*),$t2\\.(.*)\\)""".r
             val predicate = s"""(${opSigns.mkString("|")})\\($t1\\.(.*),$t2\\.(.*)\\)""".r
             val es = constraints.flatMap {
               case predicate(cmp, leftAttr, rightAttr) =>

@@ -50,8 +50,8 @@ object IntegrityConstraintDiscovery extends Logging {
   private def negateSymbol(s: String) = s match {
     case "EQ" => "IQ"
     case "IQ" => "EQ"
-    case "GT" => "LTE"
-    case "LT" => "GTE"
+    case "GT" => "LT"
+    case "LT" => "GT"
   }
 
   private def withSQLConf[T](pairs: (String, String)*)(f: => T): T= {
