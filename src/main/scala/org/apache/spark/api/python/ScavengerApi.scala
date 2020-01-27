@@ -26,9 +26,10 @@ import scala.collection.mutable
 
 import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
-import org.apache.spark.python.{FkInferType, FkInference, IntegrityConstraintDiscovery}
+import org.apache.spark.python.{DenialConstraints, FkInferType, FkInference, IntegrityConstraintDiscovery}
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.catalyst.TableIdentifier
+import org.apache.spark.sql.functions
 import org.apache.spark.sql.types._
 import org.apache.spark.util.{MutableURLClassLoader, Utils}
 
@@ -449,6 +450,62 @@ object ScavengerApi extends Logging {
              |</table>
              """.stripMargin
         }}))
+    }
+  }
+
+  // To call this function, just say a lien below;
+  // >>> scavenger.errors().setDbName('default').setTableName('t').detect()
+  def detectErrorCells(constraintFilePath: String, dbName: String, tableName: String, rowIdAttr: String): DataFrame = {
+    withSparkSession { sparkSession =>
+      val table = sparkSession.sessionState.catalog.listTables(dbName)
+        .find(_.table == tableName).getOrElse {
+          throw new SparkException(s"Table '$tableName' does not exist in database '$dbName'.")
+        }
+
+      // Checks if `table` has a column named `rowIdAttr`
+      val tableAttrNames = sparkSession.table(table.identifier).schema.map(_.name).toSet
+      if (!tableAttrNames.contains(rowIdAttr)) {
+        throw new SparkException(s"`$rowIdAttr` column does not exist in table '$tableName'.")
+      }
+
+      // Loads denial constraints from a given file path
+      val constraints = DenialConstraints.parse(constraintFilePath)
+
+      // Checks if all the attributes contained in `constraintFilePath` exist in `table`
+      val attrsInConstraints = constraints.attrNames
+      val absentAttrs = attrsInConstraints.filterNot(tableAttrNames.contains)
+      if (absentAttrs.nonEmpty) {
+        throw new SparkException(s"Non-existent constraint attributes found in $tableName: " +
+          absentAttrs.mkString(", "))
+      }
+
+      // Detects error erroneous cells in a given table
+      val dfs = constraints.entries.flatMap { preds =>
+        val queryToValidateConstraint =
+          s"""
+             |SELECT t1.$rowIdAttr
+             |FROM $tableName AS t1
+             |WHERE EXISTS (
+             |  SELECT t2.$rowIdAttr
+             |  FROM $tableName AS t2
+             |  WHERE ${DenialConstraints.toWhereCondition(preds, "t1", "t2")}
+             |)
+           """.stripMargin
+
+        val df = sparkSession.sql(queryToValidateConstraint)
+        logDebug(
+          s"""
+             |Number of violate tuples: ${df.count}
+             |Query to validate constraints:
+             |$queryToValidateConstraint
+           """.stripMargin)
+
+        val attrs = preds.flatMap { p => p.leftAttr :: p.rightAttr :: Nil }.map { attr =>
+          df.withColumn("attrName", functions.lit(attr))
+        }
+        attrs
+      }
+      dfs.reduce(_.union(_)).distinct()
     }
   }
 }

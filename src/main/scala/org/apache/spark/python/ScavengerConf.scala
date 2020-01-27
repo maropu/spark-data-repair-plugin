@@ -57,8 +57,8 @@ object ScavengerConf {
       .internal()
       .doc("Epsilon value for approximate constraint inferences")
       .doubleConf
-      .checkValue(v => 0.0 <= v && v < 1.0, "XXX")
-      .createWithDefault(0.0)
+      .checkValue(v => 0.0 <= v && v < 1.0, "The epsilon value must be in [0.0, 1.0].")
+      .createWithDefault(0.01)
 
   val CONSTRAINT_INFERENCE_DC2FD_CONVERSION_ENABLED =
     buildConf("spark.scavenger.constraintInference.dc2fdConversion.enabled")

@@ -105,6 +105,33 @@ class ScavengerConstraints(SchemaSpyBase):
         resultPath = sc._jvm.ScavengerApi.inferConstraints(self.output, self.dbName, self.tableName)
         return SchemaSpyResult(resultPath)
 
+class ScavengerErrorDetector(SchemaSpyBase):
+
+    # TODO: Prohibit instantiation directly
+    def __init__(self, output, dbName):
+        self.constraintInputPath = ''
+        self.dbName = dbName
+        self.tableName = ''
+        self.rowIdAttr = 'rowId'
+
+    def setConstraints(self, constraintInputPath):
+        self.constraintInputPath = constraintInputPath
+        return self
+
+    def setTableName(self, tableName):
+        self.tableName = tableName
+        return self
+
+    def setRowIdAttr(self, rowIdAttr):
+        self.rowIdAttr = rowIdAttr
+        return self
+
+    def detect(self):
+        jdf = sc._jvm.ScavengerApi.detectErrorCells(self.constraintInputPath, self.dbName, self.tableName, self.rowIdAttr)
+        spark = SparkSession.builder.getOrCreate()
+        df = DataFrame(jdf, spark._wrapped)
+        return df
+
 class Scavenger(SchemaSpyBase):
 
     __instance = None
@@ -125,6 +152,9 @@ class Scavenger(SchemaSpyBase):
 
     def constraints(self):
         return ScavengerConstraints(self.output, self.dbName)
+
+    def errors(self):
+        return ScavengerErrorDetector(self.output, self.dbName)
 
     def setInferType(self, inferType):
         self.inferType = inferType
