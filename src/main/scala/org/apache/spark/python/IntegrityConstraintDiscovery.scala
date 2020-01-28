@@ -46,6 +46,7 @@ object IntegrityConstraintDiscovery extends Logging {
   private val TUPLE_IDENTIFIERS = ("t1", "t2")
 
   private val isStatsAnalyzeEnabled = true
+  private val corrThreshold = 0.30
 
   private def isDebugEnabled = log.isDebugEnabled
 
@@ -90,7 +91,7 @@ object IntegrityConstraintDiscovery extends Logging {
     s"$prefix${Utils.getFormattedClassName(this)}_${RandomStringUtils.randomNumeric(12)}"
   }
 
-  private def dataStats(sparkSession: SparkSession, table: String): Seq[(String, String)] = {
+  private def singleDataStats(sparkSession: SparkSession, table: String): Seq[(String, String)] = {
     withSQLConf(SQLConf.CBO_ENABLED.key -> "true", SQLConf.HISTOGRAM_ENABLED.key -> "true") {
       val df = sparkSession.table(table)
       val targetStats = Set("distinctCnt", "min", "max", "nullCnt", "mean", "stddev")
@@ -128,6 +129,21 @@ object IntegrityConstraintDiscovery extends Logging {
       }.toSeq
       statMap.map { case (k, v) =>
         k -> v.map { case (statName, v) => s"$statName=$v" }.mkString("STATS(", ",", ")")
+      }
+    }
+  }
+
+  private def pairwiseDataStats(sparkSession: SparkSession, table: String): Seq[(String, String)] = {
+    val df = sparkSession.table(table)
+    val numericFields = df.schema.filter(f => NumericType.acceptsType(f.dataType)).map(_.name)
+    val corrExprs = numericFields.combinations(2).map { case Seq(f1, f2) => (f1, f2) -> s"CORR($f1, $f2)" }.toSeq
+    val corrRow = sparkSession.sql(s"SELECT ${corrExprs.map(_._2).mkString(", ")} FROM $table").collect.head
+    corrExprs.map(_._1).zipWithIndex.flatMap { case ((f1, f2), i) =>
+      val corr = corrRow.getDouble(i)
+      if (corr > corrThreshold) {
+        (f1 -> s"CORR($f1->$f2:$corr)") :: (f2 -> s"CORR($f2->$f1:$corr)") :: Nil
+      } else {
+        Nil
       }
     }
   }
@@ -327,7 +343,8 @@ object IntegrityConstraintDiscovery extends Logging {
     if (sparkSession.table(table).schema.map(_.name).contains(tableConstraintsKey)) {
       throw new SparkException(s"$tableConstraintsKey cannot be used as a column name.")
     }
-    val constraints = denialConstraints(sparkSession, table) ++ dataStats(sparkSession, table)
+    val constraints = denialConstraints(sparkSession, table) ++ singleDataStats(sparkSession, table) ++
+      pairwiseDataStats(sparkSession, table)
     constraints.groupBy(_._1).map { case (k, v) =>
       (k, v.map(_._2))
     }
