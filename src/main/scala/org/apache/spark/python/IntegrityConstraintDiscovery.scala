@@ -45,6 +45,8 @@ object IntegrityConstraintDiscovery extends Logging {
   private val METADATA_PREDICATES = Seq(METADATA_EQUAL, METADATA_GREATER_THAN, METADATA_LESS_THAN)
   private val TUPLE_IDENTIFIERS = ("t1", "t2")
 
+  private val isStatsAnalyzeEnabled = true
+
   private def isDebugEnabled = log.isDebugEnabled
 
   private def negateSymbol(s: String) = s match {
@@ -88,68 +90,45 @@ object IntegrityConstraintDiscovery extends Logging {
     s"$prefix${Utils.getFormattedClassName(this)}_${RandomStringUtils.randomNumeric(12)}"
   }
 
-  private def catalogStats(sparkSession: SparkSession, table: String): Seq[(String, String)] = {
-    val df = sparkSession.table(table)
-    val tableNode = df.queryExecution.analyzed.collectLeaves().head.asInstanceOf[LeafNode]
-    tableNode.computeStats().attributeStats.map { case (a, stats) =>
-      val statStrings = Seq(
-        stats.distinctCount.map(v => s"distinctCnt=$v"),
-        stats.min.map(v => s"min=$v"),
-        stats.max.map(v => s"max=$v"),
-        stats.nullCount.map(v => s"nullCnt=$v"),
-        stats.avgLen.map(v => s"avgLen=$v"),
-        stats.maxLen.map(v => s"maxLen=$v")
-      ).flatten
-      a.name -> s"STATS(${statStrings.mkString(",")})"
-    }.toSeq
-  }
-
-  private def checkConstraints(sparkSession: SparkSession, table: String): Seq[(String, String)] = {
-    val fields = sparkSession.table(table).schema.filter { f =>
-      f.dataType match {
-        case IntegerType => true
-        case FloatType | DoubleType => true
-        case _ => false
-      }
-    }
-    if (fields.nonEmpty) {
-      val tableStats = {
-        val df = sparkSession.table(table)
-        val tableNode = df.queryExecution.analyzed.collectLeaves().head.asInstanceOf[LeafNode]
-        tableNode.computeStats()
-      }
-      val minMaxStatMap = tableStats.attributeStats.map {
-        kv => (kv._1.name, (kv._2.min, kv._2.max))
-      }
-      val minMaxAggExprs = fields.map(_.name).flatMap { columnName =>
-        def aggFunc(f: String, c: String) = s"CAST($f($c) AS STRING)"
-        val minFuncExpr = aggFunc("MIN", columnName)
-        val maxFuncExpr = aggFunc("MAX", columnName)
-        minMaxStatMap.get(columnName).map { case (minOpt, maxOpt) =>
-          val minExpr = minOpt.map(v => s"STRING($v)").getOrElse(minFuncExpr)
-          val maxExpr = maxOpt.map(v => s"STRING($v)").getOrElse(maxFuncExpr)
-          minExpr :: maxExpr :: Nil
-        }.getOrElse {
-          minFuncExpr :: maxFuncExpr :: Nil
+  private def dataStats(sparkSession: SparkSession, table: String): Seq[(String, String)] = {
+    withSQLConf(SQLConf.CBO_ENABLED.key -> "true", SQLConf.HISTOGRAM_ENABLED.key -> "true") {
+      val df = sparkSession.table(table)
+      val targetStats = Set("distinctCnt", "min", "max", "nullCnt", "mean", "stddev")
+      val dataStatMap = {
+        val numericFields = df.schema.filter(f => NumericType.acceptsType(f.dataType)).map(_.name)
+        val statRows = df.describe(numericFields: _*).collect()
+        val statNames = statRows.map(_.getString(0))
+        numericFields.zipWithIndex.map { case (f, i) =>
+          f -> statNames.zipWithIndex.map { case (statName, j) =>
+            statName -> statRows(j).getString(i + 1)
+          }.toMap
         }
+      }.toMap
+
+      if (isStatsAnalyzeEnabled) {
+        sparkSession.sql(
+          s"""
+             |ANALYZE TABLE $table COMPUTE STATISTICS
+             |FOR COLUMNS ${df.schema.map(_.name).mkString(", ")}
+           """.stripMargin)
       }
+      val tableNode = df.queryExecution.analyzed.collectLeaves().head.asInstanceOf[LeafNode]
+      val statMap = tableNode.computeStats().attributeStats.map { case (a, stats) =>
+        val catalogStats = Seq(
+          stats.distinctCount.map(v => "distinctCnt" -> s"$v"),
+          stats.min.map(v => "min" -> s"$v"),
+          stats.max.map(v => "max" -> s"$v"),
+          stats.nullCount.map(v => "nullCnt" -> s"$v"),
+          stats.avgLen.map(v => "avgLen" -> s"$v"),
+          stats.maxLen.map(v => "maxLen" -> s"$v")
+        ).flatten.toMap
 
-      val queryToComputeStats =
-        s"""
-           |SELECT ${minMaxAggExprs.mkString(", ")}
-           |FROM $table
-         """.stripMargin
-
-      logDebug(queryToComputeStats)
-
-      val minMaxStats = sparkSession.sql(queryToComputeStats).take(1).head
-      fields.zipWithIndex.map { case (f, i) =>
-        val minValue = minMaxStats.getString(2 * i)
-        val maxValue = minMaxStats.getString(2 * i + 1)
-        (f.name, s"CHK($minValue,$maxValue)")
+        a.name -> (catalogStats ++ dataStatMap.getOrElse(a.name, Map.empty))
+          .filter { case (k, _) => targetStats.contains(k) }
+      }.toSeq
+      statMap.map { case (k, v) =>
+        k -> v.map { case (statName, v) => s"$statName=$v" }.mkString("STATS(", ",", ")")
       }
-    } else {
-      Seq.empty
     }
   }
 
@@ -348,8 +327,7 @@ object IntegrityConstraintDiscovery extends Logging {
     if (sparkSession.table(table).schema.map(_.name).contains(tableConstraintsKey)) {
       throw new SparkException(s"$tableConstraintsKey cannot be used as a column name.")
     }
-    val constraints = denialConstraints(sparkSession, table) ++ checkConstraints(sparkSession, table) ++
-      catalogStats(sparkSession, table)
+    val constraints = denialConstraints(sparkSession, table) ++ dataStats(sparkSession, table)
     constraints.groupBy(_._1).map { case (k, v) =>
       (k, v.map(_._2))
     }
