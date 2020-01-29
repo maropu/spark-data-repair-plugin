@@ -31,7 +31,6 @@ ROOT_DIR="$(cd "`dirname $0`"/..; pwd)"
 # Defines required enveironment variables
 SCHEMASPY_PACKAGE="${ROOT_DIR}/libs/schemaspy-${SCHEMASPY_VERSION}.jar"
 JDBC_DRIVERS="${ROOT_DIR}/libs"
-PACKAGE_APIS="${ROOT_DIR}/bin/apis.py"
 
 # Splits input arguments into two parts: pyspark confs and args
 parse_args_for_pyspark() {
@@ -75,7 +74,7 @@ find_package
 . ${ROOT_DIR}/bin/conda.sh && activate_conda_virtual_env "${ROOT_DIR}"
 
 # Then, launches a pyspark with given arguments
-PYTHONSTARTUP=${PACKAGE_APIS} \
+PYTHONSTARTUP="${ROOT_DIR}/bin/.startup.py" \
   SCHEMASPY_PACKAGE_PATH=${SCHEMASPY_PACKAGE} \
   JDBC_DRIVERS_HOME=${JDBC_DRIVERS} \
   JDBC_SQLITE_VERSION=${SQLITE_JDBC_VERSION} \

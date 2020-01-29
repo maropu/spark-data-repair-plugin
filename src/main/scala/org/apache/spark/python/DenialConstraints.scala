@@ -24,7 +24,11 @@ import scala.io.Source
 import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
 
-case class Predicate(cmp: String, leftAttr: String, rightAttr: String)
+case class Predicate(cmp: String, leftAttr: String, rightAttr: String) {
+  // TODO: Currently, comparisons on the same attributes are supported only
+  assert(leftAttr == rightAttr)
+}
+
 case class DenialConstraints(entries: Seq[Seq[Predicate]], attrNames: Seq[String])
 
 object DenialConstraints extends Logging {
@@ -46,7 +50,7 @@ object DenialConstraints extends Logging {
     try {
       file = Source.fromFile(new URI(path).getPath)
       val predicates = mutable.ArrayBuffer[Seq[Predicate]]()
-      file.getLines().foreach { _.split("&").toSeq match {
+      file.getLines().foreach { dcStr => dcStr.split("&").toSeq match {
           case t1 +: t2 +: constraints =>
             val predicate = s"""(${opSigns.mkString("|")})\\($t1\\.(.*),$t2\\.(.*)\\)""".r
             val es = constraints.flatMap {
@@ -57,6 +61,7 @@ object DenialConstraints extends Logging {
                 None
             }
             if (es.nonEmpty) {
+              logWarning(s"$dcStr => ${toWhereCondition(es, t1, t2)}")
               predicates.append(es)
             }
           case s =>

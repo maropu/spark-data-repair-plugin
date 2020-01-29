@@ -94,17 +94,21 @@ object IntegrityConstraintDiscovery extends Logging {
   private def singleDataStats(sparkSession: SparkSession, table: String): Seq[(String, String)] = {
     withSQLConf(SQLConf.CBO_ENABLED.key -> "true", SQLConf.HISTOGRAM_ENABLED.key -> "true") {
       val df = sparkSession.table(table)
-      val targetStats = Set("distinctCnt", "min", "max", "nullCnt", "mean", "stddev")
+      val tgtStats = Set("distinctCnt", "min", "max", "nullCnt", "mean", "stddev")
       val dataStatMap = {
         val numericFields = df.schema.filter(f => NumericType.acceptsType(f.dataType)).map(_.name)
-        val statRows = df.describe(numericFields: _*).collect()
-        val statNames = statRows.map(_.getString(0))
-        numericFields.zipWithIndex.map { case (f, i) =>
-          f -> statNames.zipWithIndex.map { case (statName, j) =>
-            statName -> statRows(j).getString(i + 1)
+        if (numericFields.nonEmpty) {
+          val statRows = df.describe(numericFields: _*).collect()
+          val statNames = statRows.map(_.getString(0))
+          numericFields.zipWithIndex.map { case (f, i) =>
+            f -> statNames.zipWithIndex.map { case (statName, j) =>
+              statName -> statRows(j).getString(i + 1)
+            }.toMap
           }.toMap
+        } else {
+          Map.empty[String, Map[String, String]]
         }
-      }.toMap
+      }
 
       if (isStatsAnalyzeEnabled) {
         sparkSession.sql(
@@ -125,7 +129,7 @@ object IntegrityConstraintDiscovery extends Logging {
         ).flatten.toMap
 
         a.name -> (catalogStats ++ dataStatMap.getOrElse(a.name, Map.empty))
-          .filter { case (k, _) => targetStats.contains(k) }
+          .filter { case (k, _) => tgtStats.contains(k) }
       }.toSeq
       statMap.map { case (k, v) =>
         k -> v.map { case (statName, v) => s"$statName=$v" }.mkString("STATS(", ",", ")")
@@ -136,15 +140,19 @@ object IntegrityConstraintDiscovery extends Logging {
   private def pairwiseDataStats(sparkSession: SparkSession, table: String): Seq[(String, String)] = {
     val df = sparkSession.table(table)
     val numericFields = df.schema.filter(f => NumericType.acceptsType(f.dataType)).map(_.name)
-    val corrExprs = numericFields.combinations(2).map { case Seq(f1, f2) => (f1, f2) -> s"CORR($f1, $f2)" }.toSeq
-    val corrRow = sparkSession.sql(s"SELECT ${corrExprs.map(_._2).mkString(", ")} FROM $table").collect.head
-    corrExprs.map(_._1).zipWithIndex.flatMap { case ((f1, f2), i) =>
-      val corr = corrRow.getDouble(i)
-      if (corr > corrThreshold) {
-        (f1 -> s"CORR($f1->$f2:$corr)") :: (f2 -> s"CORR($f2->$f1:$corr)") :: Nil
-      } else {
-        Nil
+    if (numericFields.nonEmpty) {
+      val corrExprs = numericFields.combinations(2).map { case Seq(f1, f2) => (f1, f2) -> s"CORR($f1, $f2)" }.toSeq
+      val corrRow = sparkSession.sql(s"SELECT ${corrExprs.map(_._2).mkString(", ")} FROM $table").collect.head
+      corrExprs.map(_._1).zipWithIndex.flatMap { case ((f1, f2), i) =>
+        val corr = corrRow.getDouble(i)
+        if (corr > corrThreshold) {
+          (f1 -> s"CORR($f1->$f2:$corr)") :: (f2 -> s"CORR($f2->$f1:$corr)") :: Nil
+        } else {
+          Nil
+        }
       }
+    } else {
+      Nil
     }
   }
 
