@@ -27,6 +27,9 @@ import org.apache.spark.internal.Logging
 case class Predicate(cmp: String, leftAttr: String, rightAttr: String) {
   // TODO: Currently, comparisons on the same attributes are supported only
   assert(leftAttr == rightAttr)
+
+  def toString(left: String, right: String): String =
+    s"$left.$leftAttr $cmp $right.$rightAttr"
 }
 
 case class DenialConstraints(entries: Seq[Seq[Predicate]], attrNames: Seq[String])
@@ -39,9 +42,7 @@ object DenialConstraints extends Logging {
     Map("EQ" -> "=", "IQ" -> "!=", "LT" -> "<", "GT" -> ">")
 
   def toWhereCondition(predicates: Seq[Predicate], left: String, right: String): String = {
-    predicates.map { p =>
-      s"$left.${p.leftAttr} ${p.cmp} $right.${p.rightAttr}"
-    }.mkString(" AND ")
+    predicates.map(_.toString(left, right)).mkString(" AND ")
   }
 
   // The format like this: "t1&t2&EQ(t1.fk1,t2.fk1)&IQ(t1.v4,t2.v4)"

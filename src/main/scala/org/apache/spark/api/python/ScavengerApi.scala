@@ -495,7 +495,7 @@ object ScavengerApi extends Logging {
 
   case class RepairMetadata(spark: SparkSession) {
 
-    private val featureViews = mutable.ArrayBuffer[(String, String)]()
+    private val featureViews = mutable.ArrayBuffer[(String, Any)]()
 
     private def timer[R](name: String)(block: => R): R = {
       val t0 = System.nanoTime()
@@ -505,7 +505,7 @@ object ScavengerApi extends Logging {
       result
     }
 
-    def add(key: String, value: String): Unit = {
+    def add(key: String, value: Any): Unit = {
       featureViews += key -> value
     }
 
@@ -521,11 +521,21 @@ object ScavengerApi extends Logging {
     }
 
     override def toString: String = {
-      featureViews.map { case (k, v) => s"$k=>$v" }.mkString(", ")
+      featureViews.map {
+        case (k, v: String) =>
+          s"""$k=>"$v""""
+        case (k, ar: Seq[String]) =>
+          s"$k=>${ar.map(v => s""""$v"""").mkString(",")}"
+      }.mkString(", ")
     }
 
     def toJson: String = {
-      featureViews.map { case (k, v) => s""""$k":"$v"""" }.mkString("{", ",", "}")
+      featureViews.map {
+        case (k, v: String) =>
+          s""""$k":"$v""""
+        case (k, ar: Seq[String]) =>
+          s""""$k":${ar.map(v => s""""$v"""").mkString("[", ",", "]")}"""
+      }.mkString("{", ",", "}")
     }
   }
 
@@ -833,10 +843,10 @@ object ScavengerApi extends Logging {
           val (totalVars, classes) = sparkSession.sql(s"SELECT COUNT(vid), MAX(domainSize) FROM $cellDomainView")
             .collect.headOption.map { case Row(l: Long, i: Int) => (l, i) }.get
 
-          logWarning(s"totalVars=$totalVars classes=$classes attrNum=$tableAttrNum")
+          logWarning(s"totalVars=$totalVars classes=$classes attrNum=${discreteAttrs.size}")
           repairFeatures.add("totalVars", s"$totalVars")
           repairFeatures.add("classes", s"$classes")
-          repairFeatures.add("tableAttrNum", s"$tableAttrNum")
+          repairFeatures.add("tableAttrNum", s"${discreteAttrs.size}")
 
           // PyTorch feature:
           // tensor = -1 * torch.ones(1, classes, attrNum)
@@ -921,11 +931,13 @@ object ScavengerApi extends Logging {
           }
 
           withTempView(sparkSession, sampleTableDf, cache = true) { sampleTable =>
+            val predicates = mutable.ArrayBuffer[(String, String)]()
             val offsets = constraints.entries.scanLeft(0) { case (idx, preds) => idx + preds.size }.init
             val queries = constraints.entries.zip(offsets).flatMap { case (preds, offset) =>
               preds.indices.map { i =>
                 val (Seq((violationPred, _)), fixedPreds) = preds.zipWithIndex.partition { case (_, j) => i == j }
                 val fixedWhereCaluses = DenialConstraints.toWhereCondition(fixedPreds.map(_._1), "t1", "t2")
+                predicates += ((fixedWhereCaluses, violationPred.toString("t1", "t2")))
                 val rvAttr = violationPred.rightAttr
                 // PyTorch feature: torch.zeros(totalVars,classes,1) = #violations
                 val queryToCountViolations =
@@ -953,9 +965,11 @@ object ScavengerApi extends Logging {
             }.reduce(_.union(_))
 
             repairFeatures.add("__constraint_feature", constraintFtDf)
+            repairFeatures.add("__fixed_preds", predicates.map(_._1))
+            repairFeatures.add("__violation_preds", predicates.map(_._2))
           }
 
-          logWarning(s"Exposing feature views: $repairFeatures")
+          logWarning(s"Exposing metadata views: $repairFeatures")
           repairFeatures.toJson
         }
       }
