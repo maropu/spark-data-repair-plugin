@@ -18,47 +18,30 @@
 #
 
 """
-A Scavenger API Set for Data Profiling
+A Scavenger API Set for Data Profiling & Cleaning
 """
+
+import json
+import math
+
+import numpy as np
+import pandas as pd
+
+from abc import ABCMeta, abstractmethod
+from collections import namedtuple
+from functools import partial
+from tqdm import tqdm
 
 from pyspark.sql import DataFrame, SparkSession
 
-import logging
-import math
+# Imports for inferences
 import torch
+import torch.nn.functional as F
 from torch import optim
 from torch.autograd import Variable
 from torch.nn import Parameter, ParameterList
 from torch.nn.functional import softmax
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from tqdm import tqdm
-import numpy as np
-
-from abc import ABCMeta, abstractmethod
-from multiprocessing import Pool
-
-from functools import partial
-
-import torch
-
-import pandas as pd
-import torch
-from tqdm import tqdm
-
-from string import Template
-from functools import partial
-
-import torch
-import torch.nn.functional as F
-
-from collections import namedtuple
-import logging
-
-from tqdm import tqdm
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn.functional as F
 
 FeatInfo = namedtuple('FeatInfo', ['name', 'size', 'learnable', 'init_weight', 'feature_names'])
 
@@ -273,7 +256,7 @@ class RepairModel:
 
 
     def infer_values(self, X_pred, mask_pred):
-        logging.info('inferring on %d examples (cells)', X_pred.shape[0])
+        # logging.info('inferring on %d examples (cells)', X_pred.shape[0])
         output = self.__predict__(X_pred, mask_pred)
         return output
 
@@ -448,16 +431,17 @@ class ScavengerErrorDetector(SchemaSpyBase):
         return df
 
     def infer(self):
-        jdf = sc._jvm.ScavengerApi.detectErrorCells(self.constraintInputPath, self.dbName, self.tableName, self.rowIdAttr)
-        spark = SparkSession.builder.getOrCreate()
-        emptyDf = DataFrame(jdf, spark._wrapped)
+        ftViewsAsJson = sc._jvm.ScavengerApi.detectErrorCells(self.constraintInputPath, self.dbName, self.tableName, self.rowIdAttr)
+        ftViews = json.loads(ftViewsAsJson)
+
+        # Set metadata for building a repair model
+        total_vars = int(ftViews['totalVars'])
+        total_attrs = int(ftViews['tableAttrNum'])
+        classes = int(ftViews['classes'])
 
         # InitAttrFeaturizer
-        totalVars = 1860
-        total_attrs = 20
-        classes = 6
-
-        df = spark.table("InitAttrFeatureView").cache().toPandas()
+        spark = SparkSession.builder.getOrCreate()
+        df = spark.table(ftViews['__init_attr_feature']).toPandas()
         tensors = []
         for index, row in df.iterrows():
             init_idx = int(row['init_idx'])
@@ -467,10 +451,9 @@ class ScavengerErrorDetector(SchemaSpyBase):
             tensors.append(tensor)
 
         init_attr_features = torch.cat(tensors)
-        init_attr_features.size()
 
         # FreqFeatureView
-        df = spark.table("FreqFeatureView").cache().toPandas()
+        df = spark.table(ftViews['__freq_feature']).toPandas()
         tensors = []
         for name, group in df.groupby(['vid']):
             tensor = torch.zeros(1, classes, total_attrs)
@@ -482,10 +465,9 @@ class ScavengerErrorDetector(SchemaSpyBase):
             tensors.append(tensor)
 
         freq_features = torch.cat(tensors)
-        freq_features.size()
 
         # OccurAttrView
-        df = spark.table("OccurAttrFeatureView").cache().toPandas()
+        df = spark.table(ftViews['__occur_attr_feature']).toPandas()
         tensors = []
         sorted_domain = df.reset_index().sort_values(by=['vid'])[['vid', 'rv_domain_idx', 'index', 'prob']]
         for name, group in sorted_domain.groupby(['vid']):
@@ -498,13 +480,12 @@ class ScavengerErrorDetector(SchemaSpyBase):
             tensors.append(tensor)
 
         occ_attr_features = torch.cat(tensors)
-        occ_attr_features.size()
 
         # Constraint
-        df = spark.table("ConstraintFeatureView").cache().toPandas()
+        df = spark.table(ftViews['__constraint_feature']).toPandas()
         tensors = []
         for name, group in df.groupby(['constraintId']):
-            tensor = torch.zeros(totalVars, classes, 1)
+            tensor = torch.zeros(total_vars, classes, 1)
             for index, row in group.iterrows():
                 vid = int(row['vid'])
                 val_id = int(row['valId'])
@@ -514,20 +495,14 @@ class ScavengerErrorDetector(SchemaSpyBase):
 
         constraint_features = torch.cat(tensors,2)
         constraint_features = F.normalize(constraint_features, p=2, dim=1)
-        constraint_features.size()
 
-        # init_attr_features.size()
-        # freq_features.size()
-        # occ_attr_features.size()
-        # constraint_features.size()
         tensor = torch.cat([init_attr_features, freq_features, occ_attr_features, constraint_features], 2)
-
         tensor = F.normalize(tensor, p=2, dim=1)
 
         # WeakLabelView
-        df = spark.table("WeakLabelView").cache().toPandas()
-        weak_labels = -1 * torch.ones(totalVars, 1).type(torch.LongTensor)
-        is_clean = torch.zeros(totalVars, 1).type(torch.LongTensor)
+        df = spark.table(ftViews['__weak_label']).toPandas()
+        weak_labels = -1 * torch.ones(total_vars, 1).type(torch.LongTensor)
+        is_clean = torch.zeros(total_vars, 1).type(torch.LongTensor)
         for index, row in df.iterrows():
             vid = int(row['vid'])
             label = int(row['weakLabelIndex'])
@@ -536,12 +511,10 @@ class ScavengerErrorDetector(SchemaSpyBase):
             weak_labels[vid] = label
             is_clean[vid] = clean
 
-        attrs = ["ProviderNumber","HospitalName","Address1","Address2","Address3","City","State","ZipCode","CountyName","PhoneNumber","HospitalType","HospitalOwner","EmergencyService","Condition","MeasureCode","MeasureName","Score","Sample","Stateavg","id"]
-
         # VarMaskView
         var_to_domsize = {}
-        df = spark.table("VarMaskView").cache().toPandas()
-        var_class_mask = torch.zeros(totalVars, classes)
+        df = spark.table(ftViews['__var_mask']).toPandas()
+        var_class_mask = torch.zeros(total_vars, classes)
         for index, row in df.iterrows():
             vid = int(row['vid'])
             max_class = int(row['domainSize'])
@@ -560,6 +533,7 @@ class ScavengerErrorDetector(SchemaSpyBase):
         mask_infer = var_class_mask.index_select(0, infer_idx)
 
         # [init_attr_features, freq_features, occ_attr_features, constraint_features]
+        attrs = spark.table('`%s`.`%s`' % (self.dbName, self.tableName)).columns
         initAttrFt = InitAttrFeaturizer(attrs, init_attr_features)
         freqFt = FreqFeaturizer(attrs, freq_features)
         occFt = OccurAttrFeaturizer(attrs, occ_attr_features)
@@ -584,12 +558,18 @@ class ScavengerErrorDetector(SchemaSpyBase):
             rv_val_idx = int(Y_assign[idx])
             rv_prob = Y_pred[idx].data.numpy().max()
             d_size = domain_size[vid]
-            distr.append({'vid': vid, 'distribution':[str(p) for p in rv_distr[:d_size]]})
+            distr.append({'vid': vid, 'dist':[str(p) for p in rv_distr[:d_size]]})
 
+        # TODO: Use `array_sort` in v3.0
         distr_df = pd.DataFrame(data=distr)
-        resultDf = spark.createDataFrame(distr_df).join(spark.table("CellDomainView"), "vid").selectExpr("id", "attr_idx", "domain", "distribution")
-        resultDf.createOrReplaceTempView("ResultView")
-        return sql("SELECT id, attr_idx, arrays_zip(domain, distribution) inferred FROM ResultView").cache()
+        resultDf = spark.createDataFrame(distr_df) \
+            .join(spark.table(ftViews['__cell_domain']), "vid") \
+            .selectExpr("id", "attr_idx", "arrays_zip(domain, dist) inferred")
+
+        for ft in ftViews:
+            spark.sql("DROP VIEW IF EXISTS %s" % ft)
+
+        return resultDf
 
 class Scavenger(SchemaSpyBase):
 
