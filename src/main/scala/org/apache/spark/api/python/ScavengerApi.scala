@@ -47,6 +47,10 @@ object ScavengerApi extends Logging {
 
   private val maxAttrNumToRepair = 32
   private val discreteValueThres = 80
+  private val minMaxAttrNumToComputeDomain = (2, 4)
+  private val minCorrValueToComputeDomain = 10.0
+  private val sampleRatioToComputeStats = 0.30
+  private val sampleRatioToCountViolations = 0.30
   private val emptyProp = new java.util.Properties()
 
   private def withSparkSession[T](f: SparkSession => T): T = {
@@ -595,7 +599,7 @@ object ScavengerApi extends Logging {
            """.stripMargin
         }
 
-        logWarning(s"Query to compute $tableName stats:" + queryToComputeStats)
+        logDebug(s"Query to compute $tableName stats:" + queryToComputeStats)
 
         val statsRow = sparkSession.sql(queryToComputeStats).take(1).head
         val attrsWithStats = tableAttrs.zipWithIndex.map { case (f, i) => (f, statsRow.getLong(i + 1)) }
@@ -658,7 +662,7 @@ object ScavengerApi extends Logging {
              """.stripMargin
 
           val df = sparkSession.sql(queryToValidateConstraint)
-          logWarning(
+          logDebug(
             s"""
                |Number of violate tuples: ${df.count}
                |Query to validate constraints:
@@ -679,7 +683,8 @@ object ScavengerApi extends Logging {
           sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
             .collect.head.getSeq[String](0)
         }
-        logWarning({
+
+        outputConsole({
           val errCellNum = sparkSession.table(errCellView).count()
           val totalCellNum = tableRowCnt * attrsToRepair.size
           val errRatio = (errCellNum + 0.0) / totalCellNum
@@ -694,17 +699,19 @@ object ScavengerApi extends Logging {
         }
 
         val statsDf = {
-          val queryToComputeStats =
-            s"""
-               |SELECT ${discreteAttrs.mkString(", ")}, COUNT(1) cnt
-               |FROM $inputTable
-               |GROUP BY GROUPING SETS (
-               |  ${discreteAttrs.map(a => s"($a)").mkString(", ")},
-               |  ${attrPairsToRepair.map { case (a1, a2) => s"($a1,$a2)" }.mkString(", ")}
-               |)
-             """.stripMargin
-          logDebug(queryToComputeStats)
-          sparkSession.sql(queryToComputeStats)
+          val groupSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
+          val sampleInputDf = sparkSession.table(inputTable).sample(sampleRatioToComputeStats)
+          withTempView(sparkSession, sampleInputDf) { sampleInputView =>
+            sparkSession.sql(
+              s"""
+                 |SELECT ${discreteAttrs.mkString(", ")}, COUNT(1) cnt
+                 |FROM $sampleInputView
+                 |GROUP BY GROUPING SETS (
+                 |  ${discreteAttrs.map(a => s"($a)").mkString(", ")},
+                 |  ${groupSets.map(_.toSeq).map { case Seq(a1, a2) => s"($a1,$a2)" }.mkString(", ")}
+                 |)
+               """.stripMargin)
+          }
         }
 
         withTempView(sparkSession, statsDf, cache = true) { statsView =>
@@ -726,6 +733,7 @@ object ScavengerApi extends Logging {
                  |  FROM $statsView
                  |  WHERE ${whereCaluseToFilterStat(attrToRepair)}
                  |) v2, (
+                 |  /* TODO: Needs to reconsider how-to-handle NULL */
                  |  /* Use `MAX` to drop ($a, null) tuples in `$tableName` */
                  |  SELECT $a Y, MAX(cnt) cntY
                  |  FROM $statsView
@@ -743,13 +751,22 @@ object ScavengerApi extends Logging {
               }.head
           }
 
-          val corrAttrs = pairWiseStats.groupBy { case ((attrToRepair, _), _) =>
+          val pairWiseStatMap = pairWiseStats.groupBy { case ((attrToRepair, _), _) =>
             attrToRepair
           }.map { case (k, v) =>
             k -> v.map { case ((_, attr), v) =>
               (attr, v)
-            }.sortBy(_._2).reverse.take(2)
+            }.sortBy(_._2).reverse
           }
+          logWarning({
+            val pairStats = pairWiseStatMap.map { case (k, v) =>
+              s"$k(${v.head._2},${v.last._2})=>${v.map(a => s"${a._1}:${a._2}").mkString(",")}"
+            }
+            s"""
+               |Pair-wise statistics:
+               |${pairStats.mkString("\n")}
+             """.stripMargin
+          })
 
           sparkSession.udf.register("extractField", (row: Row, offset: Int) => row.getString(offset))
           val cellExprs = discreteAttrs.map { a => s"CAST(l.$a AS STRING) $a" }
@@ -775,60 +792,81 @@ object ScavengerApi extends Logging {
             sparkSession.createDataFrame(rvRdd, rvSchemaWithId)
           }
 
+          // TODO: Currently, pick up two co-related attributes only
+          val corrAttrs = pairWiseStatMap.map { case (k, v) =>
+            val (minAttrNum, maxAttrNum) = minMaxAttrNumToComputeDomain
+            val attrs = v.filter(_._2 > minCorrValueToComputeDomain)
+            (k, if (attrs.size > maxAttrNum) {
+              attrs.take(maxAttrNum)
+            } else if (attrs.size < minAttrNum) {
+              // TODO: If correlated attributes not found, we need to pick up data
+              // from its domain randomly.
+              logWarning(s"Correlated attributes not found for $k")
+              v.take(minAttrNum)
+            } else {
+              attrs
+            })
+          }
           val cellDomainDf = withTempView(sparkSession, rvWithIdDf) { rvView =>
-            corrAttrs.map { case (attrName, Seq((a1, _), (a2, _))) =>
-              sparkSession.sql(
-                s"""
-                   |SELECT
-                   |  _eid vid,
-                   |  $rowId,
-                   |  cellId,
-                   |  attr_idx,
-                   |  attrName,
-                   |  domain,
-                   |  size(domain) domainSize,
-                   |  0 fixed,
-                   |  initValue,
-                   |  (array_position(domain, initValue) - int(1)) AS initIndex,
-                   |  initValue weakLabel,
-                   |  (array_position(domain, initValue) - int(1)) AS weakLabelIndex
-                   |FROM (
-                   |  SELECT
-                   |    rv._eid,
-                   |    rv.$rowId,
-                   |    rv.cellId,
-                   |    rv.attr_idx,
-                   |    rv.attrName,
-                   |    array_sort(array_union(array(rv.initValue), d.domain)) domain,
-                   |    IF(ISNULL(rv.initValue), shuffle(d.domain)[0], rv.initValue) initValue
-                   |  FROM
-                   |    $rvView rv, (
-                   |    SELECT $a1, $a2, concat(dom1, dom2) domain
-                   |    FROM (
-                   |      SELECT $a1, collect_set($attrName) dom1
-                   |      FROM $inputTable
-                   |      GROUP BY $a1
-                   |    ), (
-                   |      SELECT $a2, collect_set($attrName) dom2
-                   |      FROM $inputTable
-                   |      GROUP BY $a2
-                   |    )
-                   |  ) d
-                   |  WHERE
-                   |    rv.attrName = "$attrName" AND
-                   |    rv.$a1 = d.$a1 AND
-                   |    rv.$a2 = d.$a2
-                   |)
-                 """.stripMargin)
+            corrAttrs.map { case (attrName, corrAttrsWithScores) =>
+              assert(corrAttrsWithScores.size >= 2)
+              // Computes domains for error cells
+              val corrAttrs = corrAttrsWithScores.map(_._1)
+              logWarning(s"Computing '$attrName' domain from correlated attributes (${corrAttrs.mkString(",")})...")
+              val dfs = corrAttrs.zipWithIndex.map { case (attr, i) =>
+                sparkSession.sql(
+                  s"""
+                     |SELECT $attr, collect_set($attrName) dom$i
+                     |FROM $inputTable
+                     |GROUP BY $attr
+                   """.stripMargin)
+              }
+              val domainSpaceDf = dfs.tail.foldLeft(dfs.head) { case (a, b) => a.join(b) }
+              withTempView(sparkSession, domainSpaceDf) { domainSpaceView =>
+                sparkSession.sql(
+                  s"""
+                     |SELECT
+                     |  _eid vid,
+                     |  $rowId,
+                     |  cellId,
+                     |  attr_idx,
+                     |  attrName,
+                     |  domain,
+                     |  size(domain) domainSize,
+                     |  0 fixed,
+                     |  initValue,
+                     |  (array_position(domain, initValue) - int(1)) AS initIndex,
+                     |  initValue weakLabel,
+                     |  (array_position(domain, initValue) - int(1)) AS weakLabelIndex
+                     |FROM (
+                     |  SELECT
+                     |    rv._eid,
+                     |    rv.$rowId,
+                     |    rv.cellId,
+                     |    rv.attr_idx,
+                     |    rv.attrName,
+                     |    array_sort(array_union(array(rv.initValue), d.domain)) domain,
+                     |    IF(ISNULL(rv.initValue), shuffle(d.domain)[0], rv.initValue) initValue
+                     |  FROM
+                     |    $rvView rv, (
+                     |      SELECT ${corrAttrs.mkString(", ")}, concat(${corrAttrs.indices.map(i => s"dom$i").mkString(", ")}) domain
+                     |      FROM $domainSpaceView
+                     |    ) d
+                     |  WHERE
+                     |    rv.attrName = "$attrName" AND
+                     |    ${corrAttrs.map(v => s"rv.$v = d.$v").mkString(" AND ")}
+                     |)
+                   """.stripMargin)
+              }
             }
           }.reduce(_.union(_))
 
           val cellDomainView = repairFeatures.add("__cell_domain", cellDomainDf)
           val weakLabelDf = sparkSession.sql(
             s"""
-               |SELECT vid, weakLabel, weakLabelIndex, fixed, /* (t2.cellId IS NULL) */ IF(rand() > 0.7, true, false) AS clean
+               |SELECT vid, weakLabel, weakLabelIndex, fixed, /* (t2.cellId IS NULL) */ IF(domainSize > 1, false, true) AS clean
                |FROM $cellDomainView AS t1
-               |LEFT JOIN $errCellView AS t2
+               |LEFT OUTER JOIN $errCellView AS t2
                |ON t1.cellId = t2.cellId
                |WHERE weakLabel IS NOT NULL AND (
                |  t2.cellId IS NULL OR t1.fixed != 1
@@ -878,11 +916,17 @@ object ScavengerApi extends Logging {
             val (Seq((rvAttr, _)), attrs) = attrsToRepair.zipWithIndex.partition { case (_, j) => i == j }
             attrs.map { case (attr, _) =>
               val index = tableAttrToId(rvAttr) * tableAttrNum + tableAttrToId(attr)
+              val smoothingParam = 0.001
               // PyTorch feature: torch.zeros(1, classes, attrName * attrName) = prob
               sparkSession.sql(
                 s"""
                    |SELECT
-                   |  vid, valId rv_domain_idx, $index index, (cntYX / $tableRowCnt) pYX, (cntX / $tableRowCnt) pX, prob
+                   |  vid,
+                   |  valId rv_domain_idx,
+                   |  $index index,
+                   |  (cntYX / $tableRowCnt) pYX,
+                   |  (cntX / $tableRowCnt) pX,
+                   |  COALESCE(prob, DOUBLE($smoothingParam)) prob
                    |FROM (
                    |  SELECT vid, valId, rVal, $attr
                    |  FROM
@@ -893,7 +937,7 @@ object ScavengerApi extends Logging {
                    |    ) d
                    |  WHERE
                    |    t.$rowId = d.$rowId
-                   |) t1, (
+                   |) t1 LEFT OUTER JOIN (
                    |  SELECT YX.$rvAttr, X.$attr, cntYX, cntX, (cntYX / cntX) prob
                    |  FROM (
                    |    SELECT $rvAttr, $attr X, cnt cntYX
@@ -901,13 +945,15 @@ object ScavengerApi extends Logging {
                    |    WHERE $rvAttr IS NOT NULL AND
                    |      $attr IS NOT NULL
                    |  ) YX, (
-                   |    SELECT $attr, cnt cntX
+                   |    /* Use `MAX` to drop ($attr, null) tuples in `$tableName` */
+                   |    SELECT $attr, MAX(cnt) cntX
                    |    FROM $statsView
                    |    WHERE ${whereCaluseToFilterStat(attr)}
+                   |    GROUP BY $attr
                    |  ) X
                    |  WHERE YX.X = X.$attr
                    |) t2
-                   |WHERE
+                   |ON
                    |  t1.rVal = t2.$rvAttr AND
                    |  t1.$attr = t2.$attr
                  """.stripMargin)
@@ -924,13 +970,8 @@ object ScavengerApi extends Logging {
 
           val posValuesView = repairFeatures.add("__pos_value", posValDf)
 
-          val sampleTableDf = {
-            val samplingSize = sparkSession.sessionState.conf.samplingSize
-            val sampleRatio = Math.min(samplingSize.toDouble / tableRowCnt, 1.0)
-            sparkSession.table(inputTable).sample(sampleRatio)
-          }
-
-          withTempView(sparkSession, sampleTableDf, cache = true) { sampleTable =>
+          val sampleInputDf = sparkSession.table(inputTable).sample(sampleRatioToCountViolations)
+          withTempView(sparkSession, sampleInputDf, cache = true) { sampleInputView =>
             val predicates = mutable.ArrayBuffer[(String, String)]()
             val offsets = constraints.entries.scanLeft(0) { case (idx, preds) => idx + preds.size }.init
             val queries = constraints.entries.zip(offsets).flatMap { case (preds, offset) =>
@@ -945,7 +986,7 @@ object ScavengerApi extends Logging {
                      |SELECT
                      |  ${offset + i} constraintId, vid, valId, COUNT(1) violations
                      |FROM
-                     |  $sampleTable as t1, $sampleTable as t2, $posValuesView as t3
+                     |  $sampleInputView as t1, $sampleInputView as t2, $posValuesView as t3
                      |WHERE
                      |  t1.$rowId != t2.$rowId AND
                      |  t1.$rowId = t3.$rowId AND

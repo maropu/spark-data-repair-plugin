@@ -21,7 +21,7 @@ import org.apache.spark.SparkException
 
 object Utils {
 
-  def outputConsole(s: String): Unit = System.out.println(s)
+  def outputConsole(s: => String): Unit = System.out.println(s)
 
   def getEnvOrFail(key: String): String = {
     val value = System.getenv(key)

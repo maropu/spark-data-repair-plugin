@@ -60,6 +60,7 @@ class Featurizer:
         self.tensor = None
         self.learnable = learnable
         self.init_weight = init_weight
+        self.bulkCollectThreshold = 0
 
     def setup_featurizer(self, batch_size=32):
         self._batch_size = batch_size
@@ -88,14 +89,23 @@ class InitAttrFeaturizer(Featurizer):
         Featurizer.__init__(self, 'InitAttrFeaturizer', metadata, learnable=False, init_weight=init_weight)
 
     def specific_setup(self):
-        df = self.spark.table(self.metadata['__init_attr_feature']).toPandas()
+        df = self.spark.table(self.metadata['__init_attr_feature'])
         tensors = []
-        for index, row in df.iterrows():
-            init_idx = int(row['init_idx'])
-            attr_idx = int(row['attr_idx'])
-            tensor = -1 * torch.ones(1, self.classes, self.total_attrs)
-            tensor[0][init_idx][attr_idx] = 1.0
-            tensors.append(tensor)
+        if self.bulkCollectThreshold > self.metadata['totalVars']:
+            pdf = df.toPandas()
+            for index, row in pdf.iterrows():
+                init_idx = int(row['init_idx'])
+                attr_idx = int(row['attr_idx'])
+                tensor = -1 * torch.ones(1, self.classes, self.total_attrs)
+                tensor[0][init_idx][attr_idx] = 1.0
+                tensors.append(tensor)
+        else:
+            for row in df.toLocalIterator():
+                init_idx = int(row.init_idx)
+                attr_idx = int(row.attr_idx)
+                tensor = -1 * torch.ones(1, self.classes, self.total_attrs)
+                tensor[0][init_idx][attr_idx] = 1.0
+                tensors.append(tensor)
 
         self.tensor = torch.cat(tensors)
 
@@ -108,15 +118,33 @@ class FreqFeaturizer(Featurizer):
         Featurizer.__init__(self, 'FreqFeaturizer', metadata)
 
     def specific_setup(self):
-        df = self.spark.table(self.metadata['__freq_feature']).toPandas()
+        df = self.spark.table(self.metadata['__freq_feature'])
         tensors = []
-        for name, group in df.groupby(['vid']):
-            tensor = torch.zeros(1, self.classes, self.total_attrs)
-            for index, row in group.iterrows():
-                idx = int(row['idx'])
-                attr_idx = int(row['attr_idx'])
-                prob = float(row['prob'])
+        if self.bulkCollectThreshold > self.metadata['totalVars']:
+            pdf = df.toPandas()
+            for name, group in pdf.groupby(['vid']):
+                tensor = torch.zeros(1, self.classes, self.total_attrs)
+                for index, row in group.iterrows():
+                    idx = int(row['idx'])
+                    attr_idx = int(row['attr_idx'])
+                    prob = float(row['prob'])
+                    tensor[0][idx][attr_idx] = prob
+                tensors.append(tensor)
+        else:
+            group_vid = None
+            tensor = None
+            for row in df.orderBy('vid').toLocalIterator():
+                if group_vid != row.vid:
+                    if tensor is not None:
+                        tensors.append(tensor)
+                    group_vid = row.vid
+                    tensor = torch.zeros(1, self.classes, self.total_attrs)
+
+                idx = int(row.idx)
+                attr_idx = int(row.attr_idx)
+                prob = float(row.prob)
                 tensor[0][idx][attr_idx] = prob
+
             tensors.append(tensor)
 
         self.tensor = torch.cat(tensors)
