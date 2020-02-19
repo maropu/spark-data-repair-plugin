@@ -497,85 +497,69 @@ object ScavengerApi extends Logging {
     }
   }
 
-  case class RepairMetadata(spark: SparkSession) {
-
-    private val featureViews = mutable.ArrayBuffer[(String, Any)]()
-
-    private def timer[R](name: String)(block: => R): R = {
-      val t0 = System.nanoTime()
-      val result = block
-      val t1 = System.nanoTime()
-      logWarning(s"Elapsed time to compute $name: " + ((t1 - t0 + 0.0) / 1000000000.0)+ "s")
-      result
-    }
+  private case class Metadata(spark: SparkSession) {
+    private val kvs = mutable.ArrayBuffer[(String, Any)]()
 
     def add(key: String, value: Any): Unit = {
-      featureViews += key -> value
-    }
-
-    def add(viewId: String, df: DataFrame): String = timer(viewId) {
-      val tempView = getRandomString(s"${viewId}_")
-      df.coalesce(spark.sessionState.conf.numShufflePartitions).cache.createOrReplaceTempView(tempView)
-      // TODO: This dummy code to invoke a job can be replaced in v3.0 with
-      // `df.write.format("noop").mode("overwrite").save()`
-      spark.table(tempView).groupBy().count().foreach(_ => {})
-      // spark.table(tempView).queryExecution.executedPlan.execute().foreach(_)
-      add(viewId, tempView)
-      tempView
+      kvs += key -> value
     }
 
     override def toString: String = {
-      featureViews.map {
-        case (k, v: String) =>
-          s"""$k=>"$v""""
-        case (k, ar: Seq[String]) =>
-          s"$k=>${ar.map(v => s""""$v"""").mkString(",")}"
+      kvs.map {
+        case (k, v: String) => s"""$k=>"$v""""
+        case (k, ar: Seq[String]) => s"$k=>${ar.map(v => s""""$v"""").mkString(",")}"
       }.mkString(", ")
     }
 
     def toJson: String = {
-      featureViews.map {
-        case (k, v: String) =>
-          s""""$k":"$v""""
-        case (k, ar: Seq[String]) =>
-          s""""$k":${ar.map(v => s""""$v"""").mkString("[", ",", "]")}"""
+      kvs.map {
+        case (k, v: String) => s""""$k":"$v""""
+        case (k, ar: Seq[String]) => s""""$k":${ar.map(v => s""""$v"""").mkString("[", ",", "]")}"""
       }.mkString("{", ",", "}")
     }
   }
 
-  // To call this function, just say a line below;
-  // >>> scavenger.repair().setDbName('default').setTableName('t').infer()
-  def detectErrorCells(constraintFilePath: String, dbName: String, tableName: String, rowId: String): String = {
-    withSparkSession { sparkSession =>
-      if (!sparkSession.sessionState.conf.crossJoinEnabled) {
-        throw new SparkException(s"To repair cells, you need to set '${SQLConf.CROSS_JOINS_ENABLED.key}' to true.")
-      }
+  private def timer[R](name: String)(block: => R): R = {
+    val t0 = System.nanoTime()
+    val result = block
+    val t1 = System.nanoTime()
+    logWarning(s"Elapsed time to compute '$name': " + ((t1 - t0 + 0.0) / 1000000000.0)+ "s")
+    result
+  }
 
-      val repairFeatures = RepairMetadata(sparkSession)
-      val table = sparkSession.sessionState.catalog.listTables(dbName)
-        .find(_.table == tableName).getOrElse {
-          throw new SparkException(s"Table '$tableName' does not exist in database '$dbName'.")
-        }
+  private def createTempView(df: DataFrame): String = {
+    val tempViewId = getRandomString()
+    val numShufflePartitions = df.sparkSession.sessionState.conf.numShufflePartitions
+    df.coalesce(numShufflePartitions).cache.createOrReplaceTempView(tempViewId)
+    timer(tempViewId) {
+      // TODO: This dummy code to invoke a job can be replaced in v3.0 with
+      // `df.write.format("noop").mode("overwrite").save()`
+      df.sparkSession.table(tempViewId).groupBy().count().foreach(_ => {})
+    }
+    tempViewId
+  }
 
-      // Checks if `table` has a column named `rowIdAttr`
-      val tableAttrs = sparkSession.table(table.identifier).schema.map(_.name)
-      val tableAttrNum = sparkSession.table(table.identifier).schema.length
+  def prepareInputTable(dbName: String, tableName: String, rowId: String): String = {
+     withSparkSession { sparkSession =>
+      // Checks if the given table has a column named `rowId`
+      val inputDf = sparkSession.table(if (dbName.nonEmpty) s"$dbName.$tableName" else tableName)
+      val tableAttrs = inputDf.schema.map(_.name)
       if (!tableAttrs.contains(rowId)) {
-        // TODO: Adds unique row IDs if they don't exist in a given table
-        throw new SparkException(s"Column '$rowId' does not exist in table '$tableName'.")
+        // TODO: Implicitly adds unique row IDs if they don't exist in a given table
+        throw new SparkException(s"Column '$rowId' does not exist in table '$dbName.$tableName'.")
       }
 
-      val (tableRowCnt, discreteAttrs) = {
+      val discreteAttrs = {
         val queryToComputeStats = {
           val tableStats = {
-            val inputDf = sparkSession.table(table.identifier)
             val tableNode = inputDf.queryExecution.analyzed.collectLeaves().head.asInstanceOf[LeafNode]
             tableNode.computeStats()
           }
           val attrStatMap = tableStats.attributeStats.map {
             kv => (kv._1.name, kv._2.distinctCount)
           }
-          // If we have stats in catalog, we just use them
+
+          // If we already have stats in a catalog, we just use them
           val rowCount = tableStats.rowCount.map { cnt => s"bigint(${cnt.toLong}) /* rowCount */" }
             .getOrElse("COUNT(1)")
           val approxCntEnabled = sparkSession.sessionState.conf.fkInferenceApproxCountEnabled
@@ -590,23 +574,29 @@ object ScavengerApi extends Logging {
                 .getOrElse(aggFunc)
             }.getOrElse(aggFunc)
           }
+
           s"""
              |SELECT
              |  $rowCount,
              |  ${distinctCounts.mkString(",\n  ")}
              |FROM
-             |  $tableName
+             |  $dbName.$tableName
            """.stripMargin
         }
 
-        logDebug(s"Query to compute $tableName stats:" + queryToComputeStats)
+        logDebug(s"Query to compute $dbName.$tableName stats:" + queryToComputeStats)
 
         val statsRow = sparkSession.sql(queryToComputeStats).take(1).head
         val attrsWithStats = tableAttrs.zipWithIndex.map { case (f, i) => (f, statsRow.getLong(i + 1)) }
         val rowCnt = statsRow.getLong(0)
-        logWarning(s"rowCnt:$rowCnt ${attrsWithStats.map { case (a, c) => s"distinctCnt($a):$c" }.mkString(" ")}")
+
+        logDebug({
+          val distinctCnts = attrsWithStats.map { case (a, c) => s"distinctCnt($a):$c" }
+          s"rowCnt:$rowCnt ${distinctCnts.mkString(" ")}"
+        })
+
         if (attrsWithStats.collectFirst { case (a, cnt) if a == rowId => cnt }.get != rowCnt) {
-          throw new SparkException(s"Uniqueness does not hold in column '$rowId' of table '$tableName'.")
+          throw new SparkException(s"Uniqueness does not hold in column '$rowId' of table '$dbName.$tableName'.")
         }
         def isDiscrete(v: Long) = 1 < v && v < discreteValueThres
         val (discreteCols, nonDiscreteCols) = attrsWithStats.partition(a => isDiscrete(a._2))
@@ -616,47 +606,63 @@ object ScavengerApi extends Logging {
         }
         if (discreteCols.size >= maxAttrNumToRepair) {
           throw new SparkException(s"Maximum number of attributes is $maxAttrNumToRepair, but " +
-            s"the ${discreteCols.size} discrete attributes found in table '$tableName'")
+            s"the ${discreteCols.size} discrete attributes found in table '$dbName.$tableName'")
         }
-        (rowCnt, discreteCols.map(_._1))
+        discreteCols.map(_._1)
       }
 
-      val inputDf = sparkSession.table(table.identifier).selectExpr(discreteAttrs :+ rowId: _*)
-      repairFeatures.add("__input_attrs", inputDf.selectExpr(discreteAttrs: _*))
+      val df = inputDf.selectExpr(discreteAttrs :+ rowId: _*)
+      createTempView(df)
+    }
+  }
 
-      withTempView(sparkSession, inputDf, cache = true) { inputTable =>
-        val constraints = {
-          // Loads all the denial constraints from a given file path
-          val allConstraints = DenialConstraints.parse(constraintFilePath)
-          // Checks if all the attributes contained in `constraintFilePath` exist in `table`
-          val attrsInConstraints = allConstraints.attrNames
-          val discreteAttrSet = discreteAttrs.toSet
-          val absentAttrs = attrsInConstraints.filterNot(discreteAttrSet.contains)
-          if (absentAttrs.nonEmpty) {
-            logWarning(s"Non-existent constraint attributes found in $tableName: " +
-              absentAttrs.mkString(", "))
-            val newPredEntries = allConstraints.entries.filter { _.forall { p =>
-              discreteAttrSet.contains(p.leftAttr) && discreteAttrSet.contains(p.rightAttr)
-            }}
-            if (newPredEntries.isEmpty) {
-              throw new SparkException(s"No valid constraint found in $tableName")
-            }
-            allConstraints.copy(entries = newPredEntries)
-          } else {
-            allConstraints
-          }
-        }
+  private def loadConstraintsFromFile(constraintFilePath: String, tableName: String, tableAttrs: Seq[String]): DenialConstraints = {
+    // Loads all the denial constraints from a given file path
+    val allConstraints = DenialConstraints.parse(constraintFilePath)
+    // Checks if all the attributes contained in `constraintFilePath` exist in `table`
+    val attrsInConstraints = allConstraints.attrNames
+    val tableAttrSet = tableAttrs.toSet
+    val absentAttrs = attrsInConstraints.filterNot(tableAttrSet.contains)
+    if (absentAttrs.nonEmpty) {
+      logWarning(s"Non-existent constraint attributes found in $tableName: " +
+        absentAttrs.mkString(", "))
+      val newPredEntries = allConstraints.entries.filter { _.forall { p =>
+        tableAttrSet.contains(p.leftAttr) && tableAttrSet.contains(p.rightAttr)
+      }}
+      if (newPredEntries.isEmpty) {
+        throw new SparkException(s"No valid constraint found in $tableName")
+      }
+      allConstraints.copy(entries = newPredEntries)
+    } else {
+      allConstraints
+    }
+  }
+
+  def detectErrorCells(constraintFilePath: String, dbName: String, tableName: String, rowId: String): String = {
+    withSparkSession { sparkSession =>
+      // Checks if the given table has a column named `rowId`
+      val df = sparkSession.table(if (dbName.nonEmpty) s"$dbName.$tableName" else tableName)
+      val tableAttrs = df.schema.map(_.name)
+      if (!tableAttrs.contains(rowId)) {
+        // TODO: Implicitly adds unique row IDs if they don't exist in a given table
+        throw new SparkException(s"Column '$rowId' does not exist in table '$dbName.$tableName'.")
+      }
+
+      withTempView(sparkSession, df, cache = true) { inputTableView =>
+        val tableAttrs = sparkSession.table(inputTableView).schema.map(_.name)
+        val tableAttrNum = sparkSession.table(inputTableView).schema.length
+        val constraints = loadConstraintsFromFile(constraintFilePath, tableName, tableAttrs)
 
         // Detects error erroneous cells in a given table
-        val tableAttrToId = discreteAttrs.zipWithIndex.toMap
+        val tableAttrToId = tableAttrs.zipWithIndex.toMap
         val errCellDf = constraints.entries.flatMap { preds =>
           val queryToValidateConstraint =
             s"""
                |SELECT t1.$rowId `_tid_`
-               |FROM $inputTable AS t1
+               |FROM $inputTableView AS t1
                |WHERE EXISTS (
                |  SELECT t2.$rowId
-               |  FROM $inputTable AS t2
+               |  FROM $inputTableView AS t2
                |  WHERE ${DenialConstraints.toWhereCondition(preds, "t1", "t2")}
                |)
              """.stripMargin
@@ -678,341 +684,403 @@ object ScavengerApi extends Logging {
           }
         }.reduce(_.union(_)).distinct()
 
-        val errCellView = repairFeatures.add("__dk_cell", errCellDf)
-        val attrsToRepair = {
-          sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
-            .collect.head.getSeq[String](0)
-        }
-
+        val errCellView = createTempView(errCellDf)
         outputConsole({
+          val tableRowCnt = sparkSession.table(inputTableView).count()
           val errCellNum = sparkSession.table(errCellView).count()
-          val totalCellNum = tableRowCnt * attrsToRepair.size
+          val totalCellNum = tableRowCnt * tableAttrNum
           val errRatio = (errCellNum + 0.0) / totalCellNum
-          s"Start repairing $errCellNum/$totalCellNum error cells (${errRatio * 100.0}%) in attributes " +
-            s"(${attrsToRepair.mkString(", ")}) of " +
-            s"$tableName(${discreteAttrs.mkString(", ")})"
+          s"Found $errCellNum/$totalCellNum error cells (${errRatio * 100.0}%) in attributes " +
+            s"(${constraints.attrNames.mkString(", ")}) of $tableName(${tableAttrs.mkString(", ")})"
         })
+        errCellView
+      }
+    }
+  }
 
-        // Computes numbers for single and pair-wise statistics in the input table
-        val attrPairsToRepair = attrsToRepair.flatMap { attrToRepair =>
-          discreteAttrs.filter(attrToRepair != _).map(a => (attrToRepair, a))
+  def computeAttrStats(inputTableView: String, errCellView: String, rowId: String): String = {
+    withSparkSession { sparkSession =>
+      // Computes numbers for single and pair-wise statistics in the input table
+      val tableAttrs = sparkSession.table(inputTableView).schema.map(_.name)
+      val attrsToRepair = {
+        sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
+          .collect.head.getSeq[String](0)
+      }
+      val attrPairsToRepair = attrsToRepair.flatMap { attrToRepair =>
+        tableAttrs.filter(attrToRepair != _).map(a => (attrToRepair, a))
+      }
+
+      val statsDf = {
+        val groupSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
+        val sampleInputDf = sparkSession.table(inputTableView).sample(sampleRatioToComputeStats)
+        withTempView(sparkSession, sampleInputDf) { sampleInputView =>
+          sparkSession.sql(
+            s"""
+               |SELECT ${tableAttrs.mkString(", ")}, COUNT(1) cnt
+               |FROM $sampleInputView
+               |GROUP BY GROUPING SETS (
+               |  ${tableAttrs.map(a => s"($a)").mkString(", ")},
+               |  ${groupSets.map(_.toSeq).map { case Seq(a1, a2) => s"($a1,$a2)" }.mkString(", ")}
+               |)
+             """.stripMargin)
         }
+      }
 
-        val statsDf = {
-          val groupSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
-          val sampleInputDf = sparkSession.table(inputTable).sample(sampleRatioToComputeStats)
-          withTempView(sparkSession, sampleInputDf) { sampleInputView =>
+      createTempView(statsDf)
+    }
+  }
+
+  def computeMetadata(inputTableView: String, statsView: String, errCellView: String, rowId: String): String = {
+    withSparkSession { sparkSession =>
+      val metadata = Metadata(sparkSession)
+      val discreteAttrs = sparkSession.table(inputTableView).schema.map(_.name).filter(_ != rowId)
+      val tableRowCnt = sparkSession.table(inputTableView).count()
+
+      val attrsToRepair = {
+        sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
+          .collect.head.getSeq[String](0)
+      }
+      val attrPairsToRepair = attrsToRepair.flatMap { attrToRepair =>
+        discreteAttrs.filter(attrToRepair != _).map(a => (attrToRepair, a))
+      }
+
+      def whereCaluseToFilterStat(a: String): String =
+        s"$a IS NOT NULL AND ${discreteAttrs.filter(_ != a).map(a => s"$a IS NULL").mkString(" AND ")}"
+
+      val pairWiseStats = attrPairsToRepair.map { case attrPair @ (attrToRepair, a) =>
+        val pairWiseStatDf = sparkSession.sql(
+          s"""
+             |SELECT
+             |  v1.X, v1.Y, (cntX / $tableRowCnt) pX, (cntY / $tableRowCnt) pY, (cntXY / $tableRowCnt) pXY
+             |FROM (
+             |  SELECT $attrToRepair X, $a Y, cnt cntXY
+             |  FROM $statsView
+             |  WHERE $attrToRepair IS NOT NULL AND
+             |    $a IS NOT NULL
+             |) v1, (
+             |  SELECT $attrToRepair X, cnt cntX
+             |  FROM $statsView
+             |  WHERE ${whereCaluseToFilterStat(attrToRepair)}
+             |) v2, (
+             |  /* TODO: Needs to reconsider how-to-handle NULL */
+             |  /* Use `MAX` to drop ($a, null) tuples in `$inputTableView` */
+             |  SELECT $a Y, MAX(cnt) cntY
+             |  FROM $statsView
+             |  WHERE ${whereCaluseToFilterStat(a)}
+             |  GROUP BY $a
+             |) v3
+             |WHERE
+             |  v1.X = v2.X AND
+             |  v1.Y = v3.Y
+           """.stripMargin)
+
+        attrPair -> pairWiseStatDf.selectExpr("SUM(pXY * log2(pXY / (pX * pY)))")
+          .collect.map { row =>
+            if (!row.isNullAt(0)) row.getDouble(0) else 0.0
+          }.head
+      }
+
+      val pairWiseStatMap = pairWiseStats.groupBy { case ((attrToRepair, _), _) =>
+        attrToRepair
+      }.map { case (k, v) =>
+        k -> v.map { case ((_, attr), v) =>
+          (attr, v)
+        }.sortBy(_._2).reverse
+      }
+      logWarning({
+        val pairStats = pairWiseStatMap.map { case (k, v) =>
+          s"$k(${v.head._2},${v.last._2})=>${v.map(a => s"${a._1}:${a._2}").mkString(",")}"
+        }
+        s"""
+           |Pair-wise statistics:
+           |${pairStats.mkString("\n")}
+         """.stripMargin
+      })
+
+      sparkSession.udf.register("extractField", (row: Row, offset: Int) => row.getString(offset))
+      val cellExprs = discreteAttrs.map { a => s"CAST(l.$a AS STRING) $a" }
+      val rvDf = sparkSession.sql(
+        s"""
+           |SELECT
+           |  l.$rowId,
+           |  ${cellExprs.mkString(", ")},
+           |  cellId,
+           |  attr_idx,
+           |  attrName,
+           |  extractField(struct(${cellExprs.mkString(", ")}), attr_idx) initValue
+           |FROM
+           |  $inputTableView l, $errCellView r
+           |WHERE
+           |  l.$rowId = r._tid_
+         """.stripMargin)
+
+      // TODO: More efficient way to assign unique IDs
+      val rvWithIdDf = {
+        val rvRdd = rvDf.rdd.zipWithIndex().map { case (r, i) => Row.fromSeq(i +: r.toSeq) }
+        val rvSchemaWithId = StructType(StructField("_eid", LongType) +: rvDf.schema)
+        sparkSession.createDataFrame(rvRdd, rvSchemaWithId)
+      }
+
+      // TODO: Currently, pick up two co-related attributes only
+      val corrAttrs = pairWiseStatMap.map { case (k, v) =>
+        val (minAttrNum, maxAttrNum) = minMaxAttrNumToComputeDomain
+        val attrs = v.filter(_._2 > minCorrValueToComputeDomain)
+        (k, if (attrs.size > maxAttrNum) {
+          attrs.take(maxAttrNum)
+        } else if (attrs.size < minAttrNum) {
+          // TODO: If correlated attributes not found, we need to pick up data
+          // from its domain randomly.
+          logWarning(s"Correlated attributes not found for $k")
+          v.take(minAttrNum)
+        } else {
+          attrs
+        })
+      }
+      val cellDomainDf = withTempView(sparkSession, rvWithIdDf) { rvView =>
+        corrAttrs.map { case (attrName, corrAttrsWithScores) =>
+          assert(corrAttrsWithScores.size >= 2)
+          // Computes domains for error cells
+          val corrAttrs = corrAttrsWithScores.map(_._1)
+          logWarning(s"Computing '$attrName' domain from correlated attributes (${corrAttrs.mkString(",")})...")
+          val dfs = corrAttrs.zipWithIndex.map { case (attr, i) =>
             sparkSession.sql(
               s"""
-                 |SELECT ${discreteAttrs.mkString(", ")}, COUNT(1) cnt
-                 |FROM $sampleInputView
-                 |GROUP BY GROUPING SETS (
-                 |  ${discreteAttrs.map(a => s"($a)").mkString(", ")},
-                 |  ${groupSets.map(_.toSeq).map { case Seq(a1, a2) => s"($a1,$a2)" }.mkString(", ")}
+                 |SELECT $attr, collect_set($attrName) dom$i
+                 |FROM $inputTableView
+                 |GROUP BY $attr
+               """.stripMargin)
+          }
+          val domainSpaceDf = dfs.tail.foldLeft(dfs.head) { case (a, b) => a.join(b) }
+          withTempView(sparkSession, domainSpaceDf) { domainSpaceView =>
+            sparkSession.sql(
+              s"""
+                 |SELECT
+                 |  _eid vid,
+                 |  $rowId,
+                 |  cellId,
+                 |  attr_idx,
+                 |  attrName,
+                 |  domain,
+                 |  size(domain) domainSize,
+                 |  0 fixed,
+                 |  initValue,
+                 |  (array_position(domain, initValue) - int(1)) AS initIndex,
+                 |  initValue weakLabel,
+                 |  (array_position(domain, initValue) - int(1)) AS weakLabelIndex
+                 |FROM (
+                 |  SELECT
+                 |    rv._eid,
+                 |    rv.$rowId,
+                 |    rv.cellId,
+                 |    rv.attr_idx,
+                 |    rv.attrName,
+                 |    array_sort(array_union(array(rv.initValue), d.domain)) domain,
+                 |    IF(ISNULL(rv.initValue), shuffle(d.domain)[0], rv.initValue) initValue
+                 |  FROM
+                 |    $rvView rv, (
+                 |      SELECT ${corrAttrs.mkString(", ")}, concat(${corrAttrs.indices.map(i => s"dom$i").mkString(", ")}) domain
+                 |      FROM $domainSpaceView
+                 |    ) d
+                 |  WHERE
+                 |    rv.attrName = "$attrName" AND
+                 |    ${corrAttrs.map(v => s"rv.$v = d.$v").mkString(" AND ")}
                  |)
                """.stripMargin)
           }
         }
+      }.reduce(_.union(_))
 
-        withTempView(sparkSession, statsDf, cache = true) { statsView =>
-          def whereCaluseToFilterStat(a: String): String =
-            s"$a IS NOT NULL AND ${discreteAttrs.filter(_ != a).map(a => s"$a IS NULL").mkString(" AND ")}"
+      val cellDomainView = createTempView(cellDomainDf)
+      metadata.add("__cell_domain", cellDomainView)
 
-          val pairWiseStats = attrPairsToRepair.map { case attrPair @ (attrToRepair, a) =>
-            val pairWiseStatDf = sparkSession.sql(
-              s"""
-                 |SELECT
-                 |  v1.X, v1.Y, (cntX / $tableRowCnt) pX, (cntY / $tableRowCnt) pY, (cntXY / $tableRowCnt) pXY
-                 |FROM (
-                 |  SELECT $attrToRepair X, $a Y, cnt cntXY
-                 |  FROM $statsView
-                 |  WHERE $attrToRepair IS NOT NULL AND
-                 |    $a IS NOT NULL
-                 |) v1, (
-                 |  SELECT $attrToRepair X, cnt cntX
-                 |  FROM $statsView
-                 |  WHERE ${whereCaluseToFilterStat(attrToRepair)}
-                 |) v2, (
-                 |  /* TODO: Needs to reconsider how-to-handle NULL */
-                 |  /* Use `MAX` to drop ($a, null) tuples in `$tableName` */
-                 |  SELECT $a Y, MAX(cnt) cntY
-                 |  FROM $statsView
-                 |  WHERE ${whereCaluseToFilterStat(a)}
-                 |  GROUP BY $a
-                 |) v3
-                 |WHERE
-                 |  v1.X = v2.X AND
-                 |  v1.Y = v3.Y
-               """.stripMargin)
+      val weakLabelDf = sparkSession.sql(
+        s"""
+           |SELECT vid, weakLabel, weakLabelIndex, fixed, /* (t2.cellId IS NULL) */ IF(domainSize > 1, false, true) AS clean
+           |FROM $cellDomainView AS t1
+           |LEFT OUTER JOIN $errCellView AS t2
+           |ON t1.cellId = t2.cellId
+           |WHERE weakLabel IS NOT NULL AND (
+           |  t2.cellId IS NULL OR t1.fixed != 1
+           |)
+         """.stripMargin)
 
-            attrPair -> pairWiseStatDf.selectExpr("SUM(pXY * log2(pXY / (pX * pY)))")
-              .collect.map { row =>
-                if (!row.isNullAt(0)) row.getDouble(0) else 0.0
-              }.head
-          }
+      metadata.add("__weak_label", createTempView(weakLabelDf))
 
-          val pairWiseStatMap = pairWiseStats.groupBy { case ((attrToRepair, _), _) =>
-            attrToRepair
-          }.map { case (k, v) =>
-            k -> v.map { case ((_, attr), v) =>
-              (attr, v)
-            }.sortBy(_._2).reverse
-          }
-          logWarning({
-            val pairStats = pairWiseStatMap.map { case (k, v) =>
-              s"$k(${v.head._2},${v.last._2})=>${v.map(a => s"${a._1}:${a._2}").mkString(",")}"
-            }
-            s"""
-               |Pair-wise statistics:
-               |${pairStats.mkString("\n")}
-             """.stripMargin
-          })
+      val varMaskDf = sparkSession.sql(s"SELECT vid, domainSize FROM $cellDomainView")
+      metadata.add("__var_mask", createTempView(varMaskDf))
 
-          sparkSession.udf.register("extractField", (row: Row, offset: Int) => row.getString(offset))
-          val cellExprs = discreteAttrs.map { a => s"CAST(l.$a AS STRING) $a" }
-          val rvDf = sparkSession.sql(
+      val (totalVars, classes) = sparkSession.sql(s"SELECT COUNT(vid), MAX(domainSize) FROM $cellDomainView")
+        .collect.headOption.map { case Row(l: Long, i: Int) => (l, i) }.get
+
+      logWarning(s"totalVars=$totalVars classes=$classes " +
+        s"featureAttrs(${discreteAttrs.size})=${discreteAttrs.mkString(",")}")
+      metadata.add("totalVars", s"$totalVars")
+      metadata.add("classes", s"$classes")
+      metadata.add("featureAttrNum", s"${discreteAttrs.size}")
+      metadata.add("featureAttrs", discreteAttrs)
+
+      val posValDf = sparkSession.sql(
+        s"""
+           |SELECT vid, $rowId, cellId, attrName, posexplode(domain) (valId, rVal)
+           |FROM $cellDomainView
+         """.stripMargin)
+
+      metadata.add("__pos_value", createTempView(posValDf))
+      metadata.toJson
+    }
+  }
+
+  def createInitAttrFeatureView(cellDomainView: String): String = {
+    withSparkSession { sparkSession =>
+      // PyTorch feature:
+      // tensor = -1 * torch.ones(1, classes, attrNum)
+      // tensor[0][init_idx][attr_idx] = 1.0
+      val initAttrFtDf = sparkSession.sql(s"SELECT initIndex init_idx, attr_idx FROM $cellDomainView")
+      createTempView(initAttrFtDf)
+    }
+  }
+
+  def createFreqFeatureView(inputTableView: String, cellDomainView: String, errCellView: String): String = {
+    withSparkSession { sparkSession =>
+      val tableRowCnt = sparkSession.table(inputTableView).count()
+      val attrsToRepair = {
+        sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
+          .collect.head.getSeq[String](0)
+      }
+      // PyTorch feature: torch.zeros(1, classes, attrName) = prob
+      val freqFtDf = attrsToRepair.map { attr =>
+        sparkSession.sql(
+          s"""
+             |SELECT vid, valId idx, attr_idx, (freq / $tableRowCnt) prob
+             |FROM (
+             |  SELECT vid, attr_idx, posexplode(domain) (valId, rVal)
+             |  FROM $cellDomainView
+             |) d, (
+             |  SELECT $attr, COUNT(1) freq
+             |  FROM $inputTableView
+             |  GROUP BY $attr
+             |) f
+             |WHERE
+             |  d.rVal = f.$attr
+           """.stripMargin)
+      }.reduce(_.union(_))
+
+      createTempView(freqFtDf)
+    }
+  }
+
+  private def whereCaluseToFilterStat(a: String, attrs: Seq[String]): String = {
+    s"$a IS NOT NULL AND ${attrs.filter(_ != a).map(a => s"$a IS NULL").mkString(" AND ")}"
+  }
+
+  def createOccurAttrFeatureView(inputTableView: String, errCellView: String, cellDomainView: String, statsView: String, rowId: String): String = {
+    withSparkSession { sparkSession =>
+      val tableAttrs = sparkSession.table(inputTableView).schema.map(_.name)
+      val tableAttrNum = sparkSession.table(inputTableView).schema.length
+      val tableRowCnt = sparkSession.table(inputTableView).count()
+      val attrsToRepair = {
+        sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
+          .collect.head.getSeq[String](0)
+      }
+      val tableAttrToId = tableAttrs.zipWithIndex.toMap
+      val occFtDf = attrsToRepair.indices.flatMap { i =>
+        val (Seq((rvAttr, _)), attrs) = attrsToRepair.zipWithIndex.partition { case (_, j) => i == j }
+        attrs.map { case (attr, _) =>
+          val index = tableAttrToId(rvAttr) * tableAttrNum + tableAttrToId(attr)
+          val smoothingParam = 0.001
+          // PyTorch feature: torch.zeros(1, classes, attrName * attrName) = prob
+          sparkSession.sql(
             s"""
                |SELECT
-               |  l.$rowId,
-               |  ${cellExprs.mkString(", ")},
-               |  cellId,
-               |  attr_idx,
-               |  attrName,
-               |  extractField(struct(${cellExprs.mkString(", ")}), attr_idx) initValue
-               |FROM
-               |  $inputTable l, $errCellView r
-               |WHERE
-               |  l.$rowId = r._tid_
+               |  vid,
+               |  valId rv_domain_idx,
+               |  $index idx,
+               |  (cntYX / $tableRowCnt) pYX,
+               |  (cntX / $tableRowCnt) pX,
+               |  COALESCE(prob, DOUBLE($smoothingParam)) prob
+               |FROM (
+               |  SELECT vid, valId, rVal, $attr
+               |  FROM
+               |    $inputTableView t, (
+               |      SELECT vid, $rowId, posexplode(domain) (valId, rVal)
+               |      FROM $cellDomainView
+               |      WHERE attrName = '$rvAttr'
+               |    ) d
+               |  WHERE
+               |    t.$rowId = d.$rowId
+               |) t1 LEFT OUTER JOIN (
+               |  SELECT YX.$rvAttr, X.$attr, cntYX, cntX, (cntYX / cntX) prob
+               |  FROM (
+               |    SELECT $rvAttr, $attr X, cnt cntYX
+               |    FROM $statsView
+               |    WHERE $rvAttr IS NOT NULL AND
+               |      $attr IS NOT NULL
+               |  ) YX, (
+               |    /* Use `MAX` to drop ($attr, null) tuples in `$inputTableView` */
+               |    SELECT $attr, MAX(cnt) cntX
+               |    FROM $statsView
+               |    WHERE ${whereCaluseToFilterStat(attr, tableAttrs)}
+               |    GROUP BY $attr
+               |  ) X
+               |  WHERE YX.X = X.$attr
+               |) t2
+               |ON
+               |  t1.rVal = t2.$rvAttr AND
+               |  t1.$attr = t2.$attr
              """.stripMargin)
-
-          // TODO: More efficient way to assign unique IDs
-          val rvWithIdDf = {
-            val rvRdd = rvDf.rdd.zipWithIndex().map { case (r, i) => Row.fromSeq(i +: r.toSeq) }
-            val rvSchemaWithId = StructType(StructField("_eid", LongType) +: rvDf.schema)
-            sparkSession.createDataFrame(rvRdd, rvSchemaWithId)
-          }
-
-          // TODO: Currently, pick up two co-related attributes only
-          val corrAttrs = pairWiseStatMap.map { case (k, v) =>
-            val (minAttrNum, maxAttrNum) = minMaxAttrNumToComputeDomain
-            val attrs = v.filter(_._2 > minCorrValueToComputeDomain)
-            (k, if (attrs.size > maxAttrNum) {
-              attrs.take(maxAttrNum)
-            } else if (attrs.size < minAttrNum) {
-              // TODO: If correlated attributes not found, we need to pick up data
-              // from its domain randomly.
-              logWarning(s"Correlated attributes not found for $k")
-              v.take(minAttrNum)
-            } else {
-              attrs
-            })
-          }
-          val cellDomainDf = withTempView(sparkSession, rvWithIdDf) { rvView =>
-            corrAttrs.map { case (attrName, corrAttrsWithScores) =>
-              assert(corrAttrsWithScores.size >= 2)
-              // Computes domains for error cells
-              val corrAttrs = corrAttrsWithScores.map(_._1)
-              logWarning(s"Computing '$attrName' domain from correlated attributes (${corrAttrs.mkString(",")})...")
-              val dfs = corrAttrs.zipWithIndex.map { case (attr, i) =>
-                sparkSession.sql(
-                  s"""
-                     |SELECT $attr, collect_set($attrName) dom$i
-                     |FROM $inputTable
-                     |GROUP BY $attr
-                   """.stripMargin)
-              }
-              val domainSpaceDf = dfs.tail.foldLeft(dfs.head) { case (a, b) => a.join(b) }
-              withTempView(sparkSession, domainSpaceDf) { domainSpaceView =>
-                sparkSession.sql(
-                  s"""
-                     |SELECT
-                     |  _eid vid,
-                     |  $rowId,
-                     |  cellId,
-                     |  attr_idx,
-                     |  attrName,
-                     |  domain,
-                     |  size(domain) domainSize,
-                     |  0 fixed,
-                     |  initValue,
-                     |  (array_position(domain, initValue) - int(1)) AS initIndex,
-                     |  initValue weakLabel,
-                     |  (array_position(domain, initValue) - int(1)) AS weakLabelIndex
-                     |FROM (
-                     |  SELECT
-                     |    rv._eid,
-                     |    rv.$rowId,
-                     |    rv.cellId,
-                     |    rv.attr_idx,
-                     |    rv.attrName,
-                     |    array_sort(array_union(array(rv.initValue), d.domain)) domain,
-                     |    IF(ISNULL(rv.initValue), shuffle(d.domain)[0], rv.initValue) initValue
-                     |  FROM
-                     |    $rvView rv, (
-                     |      SELECT ${corrAttrs.mkString(", ")}, concat(${corrAttrs.indices.map(i => s"dom$i").mkString(", ")}) domain
-                     |      FROM $domainSpaceView
-                     |    ) d
-                     |  WHERE
-                     |    rv.attrName = "$attrName" AND
-                     |    ${corrAttrs.map(v => s"rv.$v = d.$v").mkString(" AND ")}
-                     |)
-                   """.stripMargin)
-              }
-            }
-          }.reduce(_.union(_))
-
-          val cellDomainView = repairFeatures.add("__cell_domain", cellDomainDf)
-          val weakLabelDf = sparkSession.sql(
-            s"""
-               |SELECT vid, weakLabel, weakLabelIndex, fixed, /* (t2.cellId IS NULL) */ IF(domainSize > 1, false, true) AS clean
-               |FROM $cellDomainView AS t1
-               |LEFT OUTER JOIN $errCellView AS t2
-               |ON t1.cellId = t2.cellId
-               |WHERE weakLabel IS NOT NULL AND (
-               |  t2.cellId IS NULL OR t1.fixed != 1
-               |)
-             """.stripMargin)
-
-          repairFeatures.add("__weak_label", weakLabelDf)
-
-          val varMaskDf = sparkSession.sql(s"SELECT vid, domainSize FROM $cellDomainView")
-          repairFeatures.add("__var_mask", varMaskDf)
-
-          val (totalVars, classes) = sparkSession.sql(s"SELECT COUNT(vid), MAX(domainSize) FROM $cellDomainView")
-            .collect.headOption.map { case Row(l: Long, i: Int) => (l, i) }.get
-
-          logWarning(s"totalVars=$totalVars classes=$classes attrNum=${discreteAttrs.size}")
-          repairFeatures.add("totalVars", s"$totalVars")
-          repairFeatures.add("classes", s"$classes")
-          repairFeatures.add("tableAttrNum", s"${discreteAttrs.size}")
-
-          // PyTorch feature:
-          // tensor = -1 * torch.ones(1, classes, attrNum)
-          // tensor[0][init_idx][attr_idx] = 1.0
-          val initAttrFtDf = sparkSession.sql(s"SELECT initIndex init_idx, attr_idx FROM $cellDomainView")
-          repairFeatures.add("__init_attr_feature", initAttrFtDf)
-
-          // PyTorch feature: torch.zeros(1, classes, attrName) = prob
-          val freqFtDf = attrsToRepair.map { attr =>
-            sparkSession.sql(
-              s"""
-                 |SELECT vid, valId idx, attr_idx, (freq / $tableRowCnt) prob
-                 |FROM (
-                 |  SELECT vid, attr_idx, posexplode(domain) (valId, rVal)
-                 |  FROM $cellDomainView
-                 |) d, (
-                 |  SELECT $attr, COUNT(1) freq
-                 |  FROM $inputTable
-                 |  GROUP BY $attr
-                 |) f
-                 |WHERE
-                 |  d.rVal = f.$attr
-               """.stripMargin)
-          }.reduce(_.union(_))
-
-          repairFeatures.add("__freq_feature", freqFtDf)
-
-          val occFtDf = attrsToRepair.indices.flatMap { i =>
-            val (Seq((rvAttr, _)), attrs) = attrsToRepair.zipWithIndex.partition { case (_, j) => i == j }
-            attrs.map { case (attr, _) =>
-              val index = tableAttrToId(rvAttr) * tableAttrNum + tableAttrToId(attr)
-              val smoothingParam = 0.001
-              // PyTorch feature: torch.zeros(1, classes, attrName * attrName) = prob
-              sparkSession.sql(
-                s"""
-                   |SELECT
-                   |  vid,
-                   |  valId rv_domain_idx,
-                   |  $index index,
-                   |  (cntYX / $tableRowCnt) pYX,
-                   |  (cntX / $tableRowCnt) pX,
-                   |  COALESCE(prob, DOUBLE($smoothingParam)) prob
-                   |FROM (
-                   |  SELECT vid, valId, rVal, $attr
-                   |  FROM
-                   |    $inputTable t, (
-                   |      SELECT vid, $rowId, posexplode(domain) (valId, rVal)
-                   |      FROM $cellDomainView
-                   |      WHERE attrName = '$rvAttr'
-                   |    ) d
-                   |  WHERE
-                   |    t.$rowId = d.$rowId
-                   |) t1 LEFT OUTER JOIN (
-                   |  SELECT YX.$rvAttr, X.$attr, cntYX, cntX, (cntYX / cntX) prob
-                   |  FROM (
-                   |    SELECT $rvAttr, $attr X, cnt cntYX
-                   |    FROM $statsView
-                   |    WHERE $rvAttr IS NOT NULL AND
-                   |      $attr IS NOT NULL
-                   |  ) YX, (
-                   |    /* Use `MAX` to drop ($attr, null) tuples in `$tableName` */
-                   |    SELECT $attr, MAX(cnt) cntX
-                   |    FROM $statsView
-                   |    WHERE ${whereCaluseToFilterStat(attr)}
-                   |    GROUP BY $attr
-                   |  ) X
-                   |  WHERE YX.X = X.$attr
-                   |) t2
-                   |ON
-                   |  t1.rVal = t2.$rvAttr AND
-                   |  t1.$attr = t2.$attr
-                 """.stripMargin)
-            }
-          }.reduce(_.union(_)).orderBy("vid")
-
-          repairFeatures.add("__occur_attr_feature", occFtDf)
-
-          val posValDf = sparkSession.sql(
-            s"""
-               |SELECT vid, $rowId, cellId, attrName, posexplode(domain) (valId, rVal)
-               |FROM $cellDomainView
-             """.stripMargin)
-
-          val posValuesView = repairFeatures.add("__pos_value", posValDf)
-
-          val sampleInputDf = sparkSession.table(inputTable).sample(sampleRatioToCountViolations)
-          withTempView(sparkSession, sampleInputDf, cache = true) { sampleInputView =>
-            val predicates = mutable.ArrayBuffer[(String, String)]()
-            val offsets = constraints.entries.scanLeft(0) { case (idx, preds) => idx + preds.size }.init
-            val queries = constraints.entries.zip(offsets).flatMap { case (preds, offset) =>
-              preds.indices.map { i =>
-                val (Seq((violationPred, _)), fixedPreds) = preds.zipWithIndex.partition { case (_, j) => i == j }
-                val fixedWhereCaluses = DenialConstraints.toWhereCondition(fixedPreds.map(_._1), "t1", "t2")
-                predicates += ((fixedWhereCaluses, violationPred.toString("t1", "t2")))
-                val rvAttr = violationPred.rightAttr
-                // PyTorch feature: torch.zeros(totalVars,classes,1) = #violations
-                val queryToCountViolations =
-                  s"""
-                     |SELECT
-                     |  ${offset + i} constraintId, vid, valId, COUNT(1) violations
-                     |FROM
-                     |  $sampleInputView as t1, $sampleInputView as t2, $posValuesView as t3
-                     |WHERE
-                     |  t1.$rowId != t2.$rowId AND
-                     |  t1.$rowId = t3.$rowId AND
-                     |  t3.attrName = '$rvAttr' AND
-                     |  $fixedWhereCaluses AND
-                     |  t3.rVal = t2.$rvAttr
-                     |GROUP BY vid, valId
-                   """.stripMargin
-
-                logDebug(queryToCountViolations)
-                queryToCountViolations
-              }
-            }
-            val constraintFtDf = queries.zipWithIndex.map { case (q, i) =>
-              outputConsole(s"Starts processing the $i/${queries.size} query to compute #violations...")
-              sparkSession.sql(q)
-            }.reduce(_.union(_))
-
-            repairFeatures.add("__constraint_feature", constraintFtDf)
-            repairFeatures.add("__fixed_preds", predicates.map(_._1))
-            repairFeatures.add("__violation_preds", predicates.map(_._2))
-          }
-
-          logWarning(s"Exposing metadata views: $repairFeatures")
-          repairFeatures.toJson
         }
+      }.reduce(_.union(_)).orderBy("vid")
+
+      createTempView(occFtDf)
+    }
+  }
+
+  def createConstraintFeatureView(constraintFilePath: String, inputTableView: String, posValuesView: String, rowId: String): String = {
+    withSparkSession { sparkSession =>
+      val sampleInputDf = sparkSession.table(inputTableView).sample(sampleRatioToCountViolations)
+
+      withTempView(sparkSession, sampleInputDf, cache = true) { sampleInputView =>
+        val metadata = Metadata(sparkSession)
+        val predicates = mutable.ArrayBuffer[(String, String)]()
+        val tableAttrs = sparkSession.table(inputTableView).schema.map(_.name)
+        val constraints = loadConstraintsFromFile(constraintFilePath, inputTableView, tableAttrs)
+        val offsets = constraints.entries.scanLeft(0) { case (idx, preds) => idx + preds.size }.init
+        val queries = constraints.entries.zip(offsets).flatMap { case (preds, offset) =>
+          preds.indices.map { i =>
+            val (Seq((violationPred, _)), fixedPreds) = preds.zipWithIndex.partition { case (_, j) => i == j }
+            val fixedWhereCaluses = DenialConstraints.toWhereCondition(fixedPreds.map(_._1), "t1", "t2")
+            predicates += ((fixedWhereCaluses, violationPred.toString("t1", "t2")))
+            val rvAttr = violationPred.rightAttr
+            // PyTorch feature: torch.zeros(totalVars,classes,1) = #violations
+            val queryToCountViolations =
+              s"""
+                 |SELECT
+                 |  ${offset + i} constraintId, vid, valId, COUNT(1) violations
+                 |FROM
+                 |  $sampleInputView as t1, $sampleInputView as t2, $posValuesView as t3
+                 |WHERE
+                 |  t1.$rowId != t2.$rowId AND
+                 |  t1.$rowId = t3.$rowId AND
+                 |  t3.attrName = '$rvAttr' AND
+                 |  $fixedWhereCaluses AND
+                 |  t3.rVal = t2.$rvAttr
+                 |GROUP BY vid, valId
+               """.stripMargin
+
+            logDebug(queryToCountViolations)
+            queryToCountViolations
+          }
+        }
+        val constraintFtDf = queries.zipWithIndex.map { case (q, i) =>
+          outputConsole(s"Starts processing the $i/${queries.size} query to compute #violations...")
+          sparkSession.sql(q)
+        }.reduce(_.union(_))
+
+        metadata.add("__constraint_feature", createTempView(constraintFtDf))
+        metadata.add("__fixed_preds", predicates.map(_._1))
+        metadata.add("__violation_preds", predicates.map(_._2))
+
+        metadata.toJson
       }
     }
   }

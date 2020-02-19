@@ -74,6 +74,7 @@ find_package
 . ${ROOT_DIR}/bin/conda.sh && activate_conda_virtual_env "${ROOT_DIR}"
 
 # Then, launches a pyspark with given arguments
+PYTHONPATH="${ROOT_DIR}/bin" \
 PYTHONSTARTUP="${ROOT_DIR}/bin/.startup.py" \
   SCHEMASPY_PACKAGE_PATH=${SCHEMASPY_PACKAGE} \
   JDBC_DRIVERS_HOME=${JDBC_DRIVERS} \

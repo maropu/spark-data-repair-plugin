@@ -23,400 +23,12 @@ A Scavenger API Set for Data Profiling & Cleaning
 
 import json
 import logging
-import math
-
-import numpy as np
 import pandas as pd
-
-from abc import ABCMeta, abstractmethod
-from collections import namedtuple
-from functools import partial
-from tqdm import tqdm
-
 from pyspark.sql import DataFrame, SparkSession
 
-# Imports for inferences
-import torch
-import torch.nn.functional as F
-from torch import optim
-from torch.autograd import Variable
-from torch.nn import Parameter, ParameterList
-from torch.nn.functional import softmax
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-
-class Featurizer:
-
-    __metaclass__ = ABCMeta
-
-    def __init__(self, name, metadata, learnable=True, init_weight=1.0):
-        self.name = name
-        self.setup_done = False
-        self.spark = SparkSession.builder.getOrCreate()
-        self.metadata = metadata
-        self.all_attrs = spark.table(metadata['__input_attrs']).columns
-        self.total_vars = int(metadata['totalVars'])
-        self.total_attrs = int(metadata['tableAttrNum'])
-        self.classes = int(metadata['classes'])
-        self.tensor = None
-        self.learnable = learnable
-        self.init_weight = init_weight
-        self.bulkCollectThreshold = 0
-
-    def setup_featurizer(self, batch_size=32):
-        self._batch_size = batch_size
-        self.setup_done = True
-        self.specific_setup()
-
-    @abstractmethod
-    def specific_setup(self):
-        raise NotImplementedError
-
-    def create_tensor(self):
-        return self.tensor
-
-    def size(self):
-        return self.tensor.size()[2]
-
-    @abstractmethod
-    def feature_names(self):
-        raise NotImplementedError
-
-class InitAttrFeaturizer(Featurizer):
-
-    def __init__(self, metadata, init_weight=1.0):
-        if isinstance(init_weight, list):
-            init_weight = torch.FloatTensor(init_weight)
-        Featurizer.__init__(self, 'InitAttrFeaturizer', metadata, learnable=False, init_weight=init_weight)
-
-    def specific_setup(self):
-        df = self.spark.table(self.metadata['__init_attr_feature'])
-        tensors = []
-        if self.bulkCollectThreshold > self.metadata['totalVars']:
-            pdf = df.toPandas()
-            for index, row in pdf.iterrows():
-                init_idx = int(row['init_idx'])
-                attr_idx = int(row['attr_idx'])
-                tensor = -1 * torch.ones(1, self.classes, self.total_attrs)
-                tensor[0][init_idx][attr_idx] = 1.0
-                tensors.append(tensor)
-        else:
-            for row in df.toLocalIterator():
-                init_idx = int(row.init_idx)
-                attr_idx = int(row.attr_idx)
-                tensor = -1 * torch.ones(1, self.classes, self.total_attrs)
-                tensor[0][init_idx][attr_idx] = 1.0
-                tensors.append(tensor)
-
-        self.tensor = torch.cat(tensors)
-
-    def feature_names(self):
-        return self.all_attrs
-
-class FreqFeaturizer(Featurizer):
-
-    def __init__(self, metadata):
-        Featurizer.__init__(self, 'FreqFeaturizer', metadata)
-
-    def specific_setup(self):
-        df = self.spark.table(self.metadata['__freq_feature'])
-        tensors = []
-        if self.bulkCollectThreshold > self.metadata['totalVars']:
-            pdf = df.toPandas()
-            for name, group in pdf.groupby(['vid']):
-                tensor = torch.zeros(1, self.classes, self.total_attrs)
-                for index, row in group.iterrows():
-                    idx = int(row['idx'])
-                    attr_idx = int(row['attr_idx'])
-                    prob = float(row['prob'])
-                    tensor[0][idx][attr_idx] = prob
-                tensors.append(tensor)
-        else:
-            group_vid = None
-            tensor = None
-            for row in df.orderBy('vid').toLocalIterator():
-                if group_vid != row.vid:
-                    if tensor is not None:
-                        tensors.append(tensor)
-                    group_vid = row.vid
-                    tensor = torch.zeros(1, self.classes, self.total_attrs)
-
-                idx = int(row.idx)
-                attr_idx = int(row.attr_idx)
-                prob = float(row.prob)
-                tensor[0][idx][attr_idx] = prob
-
-            tensors.append(tensor)
-
-        self.tensor = torch.cat(tensors)
-
-    def feature_names(self):
-        return self.all_attrs
-
-class OccurAttrFeaturizer(Featurizer):
-
-    def __init__(self, metadata):
-        Featurizer.__init__(self, 'OccurAttrFeaturizer', metadata)
-
-    def specific_setup(self):
-        df = self.spark.table(self.metadata['__occur_attr_feature']).toPandas()
-        tensors = []
-        sorted_domain = df.reset_index().sort_values(by=['vid'])[['vid', 'rv_domain_idx', 'index', 'prob']]
-        for name, group in sorted_domain.groupby(['vid']):
-            tensor = torch.zeros(1, self.classes, self.total_attrs * self.total_attrs)
-            for index, row in group.iterrows():
-                rv_domain_idx = int(row['rv_domain_idx'])
-                index = int(row['index'])
-                prob = float(row['prob'])
-                tensor[0][rv_domain_idx][index] = prob
-            tensors.append(tensor)
-
-        self.tensor = torch.cat(tensors)
-
-    def feature_names(self):
-        return ["{} X {}".format(attr1, attr2) for attr1 in self.all_attrs for attr2 in self.all_attrs]
-
-class ConstraintFeaturizer(Featurizer):
-
-    def __init__(self, metadata):
-        Featurizer.__init__(self, 'ConstraintFeaturizer', metadata)
-
-    def specific_setup(self):
-        df = self.spark.table(self.metadata['__constraint_feature']).toPandas()
-        tensors = []
-        for name, group in df.groupby(['constraintId']):
-            tensor = torch.zeros(self.total_vars, self.classes, 1)
-            for index, row in group.iterrows():
-                vid = int(row['vid'])
-                val_id = int(row['valId'])
-                feat_val = float(row['violations'])
-                tensor[vid][val_id][0] = feat_val
-            tensors.append(tensor)
-
-        self.tensor = F.normalize(torch.cat(tensors, 2), p=2, dim=1)
-
-    def feature_names(self):
-        return [ "fixed pred: %s, violation pred: %s" % (fixed, violation) \
-            for fixed, violation in zip(self.metadata['__fixed_preds'], self.metadata['__violation_preds']) ]
-
-class TiedLinear(torch.nn.Module):
-    """
-    TiedLinear is a linear layer with shared parameters for features between
-    (output) classes that takes as input a tensor X with dimensions
-        (batch size) X (output_dim) X (in_features)
-        where:
-            output_dim is the desired output dimension/# of classes
-            in_features are the features with shared weights across the classes
-    """
-
-    def __init__(self, options, featurizers, output_dim, bias=False):
-        super(TiedLinear, self).__init__()
-        self.options = options
-        # Init parameters
-        self.in_features = 0.0
-        self.weight_list = ParameterList()
-        if bias:
-             self.bias_list = ParameterList()
-        else:
-             self.register_parameter('bias', None)
-        self.output_dim = output_dim
-        self.bias_flag = bias
-        # Iterate over featurizer info list
-        for f in featurizers:
-            learnable = f.learnable
-            feat_size = f.size()
-            init_weight = f.init_weight
-            self.in_features += feat_size
-            feat_weight = Parameter(init_weight*torch.ones(1, feat_size), requires_grad=learnable)
-            if learnable:
-                self.reset_parameters(feat_weight)
-            self.weight_list.append(feat_weight)
-            if bias:
-                feat_bias = Parameter(torch.zeros(1, feat_size), requires_grad=learnable)
-                if learnable:
-                    self.reset_parameters(feat_bias)
-                self.bias_list.append(feat_bias)
-
-    def reset_parameters(self, tensor):
-        stdv = 1. / math.sqrt(tensor.size(0))
-        tensor.data.uniform_(-stdv, stdv)
-
-    def concat_weights(self):
-        self.W = torch.cat([t for t in self.weight_list],-1)
-        # Normalize weights.
-        if self.options['weight_norm']:
-            self.W = self.W.div(self.W.norm(p=2))
-        # expand so we can do matrix multiplication with each cell and their max # of domain values
-        self.W = self.W.expand(self.output_dim, -1)
-        if self.bias_flag:
-            self.B = torch.cat([t.expand(self.output_dim, -1) for t in self.bias_list],-1)
-
-    def forward(self, X, index, mask):
-        # Concatenates different featurizer weights - need to call during every pass.
-        self.concat_weights()
-        output = X.mul(self.W)
-        if self.bias_flag:
-            output += self.B
-        output = output.sum(2)
-        # Add our mask so that invalid domain classes for a given variable/VID
-        # has a large negative value, resulting in a softmax probability
-        # of de facto 0.
-        output.index_add_(0, index, mask)
-        return output
-
-class RepairDataset:
-
-    def __init__(self, metadata, tensor):
-        self.spark = SparkSession.builder.getOrCreate()
-        self.total_vars = int(metadata['totalVars'])
-        self.classes = int(metadata['classes'])
-        self.metadata = metadata
-        self.tensor = tensor
-
-    def setup(self):
-        # weak labels
-        df = self.spark.table(self.metadata['__weak_label']).toPandas()
-        self.weak_labels = -1 * torch.ones(self.total_vars, 1).type(torch.LongTensor)
-        self.is_clean = torch.zeros(self.total_vars, 1).type(torch.LongTensor)
-        for index, row in df.iterrows():
-            vid = int(row['vid'])
-            label = int(row['weakLabelIndex'])
-            fixed = int(row['fixed'])
-            clean = int(row['clean'])
-            self.weak_labels[vid] = label
-            self.is_clean[vid] = clean
-
-        # variable masks
-        self.var_to_domsize = {}
-        df = self.spark.table(self.metadata['__var_mask']).toPandas()
-        self.var_class_mask = torch.zeros(self.total_vars, self.classes)
-        for index, row in df.iterrows():
-            vid = int(row['vid'])
-            max_class = int(row['domainSize'])
-            self.var_class_mask[vid, max_class:] = -10e6
-            self.var_to_domsize[vid] = max_class
-
-    def train_dataset(self):
-        train_idx = (self.weak_labels != -1).nonzero()[:,0]
-        X_train = self.tensor.index_select(0, train_idx)
-        Y_train = self.weak_labels.index_select(0, train_idx)
-        mask_train = self.var_class_mask.index_select(0, train_idx)
-        return (X_train, Y_train, mask_train)
-
-    def infer_dataset(self):
-        infer_idx = (self.is_clean == 0).nonzero()[:, 0]
-        X_infer = self.tensor.index_select(0, infer_idx)
-        mask_infer = self.var_class_mask.index_select(0, infer_idx)
-        return (X_infer, infer_idx, mask_infer)
-
-class RepairModel:
-
-    def __init__(self, options, featurizers, output_dim, bias=False):
-        self.options = options
-        # A list of tuples (name, is_featurizer_learnable, featurizer_output_size, init_weight, feature_names (list))
-        self.output_dim = output_dim
-        self.model = TiedLinear(self.options, featurizers, output_dim, bias)
-        self.featurizer_weights = {}
-
-    def fit(self, X_train, Y_train, mask_train):
-        n_examples, n_classes, n_features = X_train.shape
-
-        loss = torch.nn.CrossEntropyLoss()
-        params = filter(lambda p: p.requires_grad, self.model.parameters())
-        lr = float(self.options['learning_rate'])
-        wd = float(self.options['weight_decay'])
-        if self.options['optimizer'] == 'sgd':
-            optimizer = optim.SGD(params, lr=lr, momentum=float(self.options['momentum']), weight_decay=wd)
-        else:
-            optimizer = optim.Adam(params, lr=lr, weight_decay=wd)
-
-        lr_sched = ReduceLROnPlateau(optimizer, 'min', verbose=True, eps=1e-5, patience=5)
-
-        batch_size = int(self.options['batch_size'])
-        epochs = int(self.options['epochs'])
-        for i in tqdm(range(epochs)):
-            cost = 0.
-            num_batches = n_examples // batch_size
-            for k in range(num_batches):
-                start, end = k * batch_size, (k + 1) * batch_size
-                cost += self.__train__(loss, optimizer, X_train[start:end], Y_train[start:end], mask_train[start:end])
-
-            Y_pred = self.__predict__(X_train, mask_train)
-            train_loss = loss.forward(Y_pred, Variable(Y_train, requires_grad=False).squeeze(1))
-            logging.debug('overall training loss: %f', train_loss)
-            lr_sched.step(train_loss)
-
-            if self.options['verbose']:
-                # Compute and print accuracy at the end of epoch
-                grdt = Y_train.numpy().flatten()
-                Y_pred = self.__predict__(X_train, mask_train)
-                Y_assign = Y_pred.data.numpy().argmax(axis=1)
-                logging.debug("Epoch %d, cost = %f, acc = %.2f%%",
-                    i + 1, cost / num_batches, 100. * np.mean(Y_assign == grdt))
-
-    def infer(self, X_pred, mask_pred):
-        logging.info('inferring on %d examples (cells)', X_pred.shape[0])
-        output = self.__predict__(X_pred, mask_pred)
-        return output
-
-    def __train__(self, loss, optimizer, X_train, Y_train, mask_train):
-        X_var = Variable(X_train, requires_grad=False)
-        Y_var = Variable(Y_train, requires_grad=False)
-        mask_var = Variable(mask_train, requires_grad=False)
-
-        index = torch.LongTensor(range(X_var.size()[0]))
-        index_var = Variable(index, requires_grad=False)
-
-        optimizer.zero_grad()
-        # Fully-connected layer with shared parameters between output classes
-        # for linear combination of input features.
-        # Mask makes invalid output classes have a large negative value so
-        # to zero out softmax probability.
-        fx = self.model.forward(X_var, index_var, mask_var)
-        # loss is CrossEntropyLoss: combines log softmax + Negative log likelihood loss.
-        # Y_Var is just a single 1D tensor with value (0 - 'class' - 1) i.e.
-        # index of the correct class ('class' = max domain)
-        # fx is a tensor of length 'class' the linear activation going in the softmax.
-        output = loss.forward(fx, Y_var.squeeze(1))
-        output.backward()
-        optimizer.step()
-        cost = output.item()
-        return cost
-
-    def __predict__(self, X_pred, mask_pred):
-        X_var = Variable(X_pred, requires_grad=False)
-        index = torch.LongTensor(range(X_var.size()[0]))
-        index_var = Variable(index, requires_grad=False)
-        mask_var = Variable(mask_pred, requires_grad=False)
-        fx = self.model.forward(X_var, index_var, mask_var)
-        output = softmax(fx, 1)
-        return output
-
-    def get_featurizer_weights(self, featurizers):
-        report = ""
-        for i, f in enumerate(featurizers):
-            this_weight = self.model.weight_list[i].data.numpy()[0]
-            weight_str = "\n".join("{name} {weight}".format(name=name, weight=weight) \
-                for name, weight in zip(f.feature_names(), map(str, np.around(this_weight, 3))))
-            feat_name = f.name
-            feat_size = f.size()
-            max_w = max(this_weight)
-            min_w = min(this_weight)
-            mean_w = float(np.mean(this_weight))
-            abs_mean_w = float(np.mean(np.absolute(this_weight)))
-            # Create report
-            report += "featurizer %s,size %d,max %.4f,min %.4f,avg %.4f,abs_avg %.4f,weights:\n%s\n" % (
-                feat_name, feat_size, max_w, min_w, mean_w, abs_mean_w, weight_str
-            )
-            # Wrap in a dictionary.
-            self.featurizer_weights[feat_name] = {
-                'max': max_w,
-                'min': min_w,
-                'avg': mean_w,
-                'abs_avg': abs_mean_w,
-                'weights': this_weight,
-                'size': feat_size
-            }
-        return report
+from repair.dataset import RepairDataset
+from repair.featurizers import *
+from repair.model import RepairModel
 
 class SchemaSpyResult():
     """A result container class for SchemaSpy"""
@@ -537,9 +149,17 @@ class ScavengerErrorDetector(SchemaSpyBase):
         return self
 
     def infer(self):
-        metadataAsJson = sc._jvm.ScavengerApi.detectErrorCells(
-          self.constraintInputPath, self.dbName, self.tableName, self.rowId)
-        metadata = json.loads(metadataAsJson)
+        svgApi = sc._jvm.ScavengerApi
+        input_table_view = svgApi.prepareInputTable(self.dbName, self.tableName, self.rowId)
+        err_cell_view = svgApi.detectErrorCells(self.constraintInputPath, '', input_table_view, self.rowId)
+        stats_view = svgApi.computeAttrStats(input_table_view, err_cell_view, self.rowId)
+        metadata_as_json = svgApi.computeMetadata(input_table_view, stats_view, err_cell_view, self.rowId)
+        metadata = json.loads(metadata_as_json)
+        metadata['rowId'] = self.rowId
+        metadata['constraintInputPath'] = self.constraintInputPath
+        metadata['__input_table_view'] = input_table_view
+        metadata['__dk_cells'] = err_cell_view
+        metadata['__stats_view'] = stats_view
 
         # Gets #variables and #classes from metadata
         total_vars = int(metadata['totalVars'])
@@ -553,12 +173,8 @@ class ScavengerErrorDetector(SchemaSpyBase):
             ConstraintFeaturizer(metadata)
         ]
 
-        # Initializes all the featurizers
-        for f in featurizers:
-            f.setup_featurizer()
-
         # Prepares train & infer data sets from metadata
-        tensor = F.normalize(torch.cat([ f.create_tensor() for f in featurizers ], 2), p=2, dim=1)
+        tensor = create_tensor_from_featurizers(featurizers)
         dataset = RepairDataset(metadata, tensor)
         dataset.setup()
 
@@ -595,14 +211,12 @@ class ScavengerErrorDetector(SchemaSpyBase):
 
         # Releases temporary tables for metadata
         metaTables = [
-            '__input_attrs',
+            '__input_table_view',
+            '__dk_cells',
             '__cell_domain',
-            '__init_attr_feature',
-            '__freq_feature',
-            '__occur_attr_feature',
-            '__constraint_feature',
             '__var_mask',
-            '__weak_label'
+            '__weak_label',
+            '__stats_view'
         ]
         for t in metaTables:
             spark.sql("DROP VIEW IF EXISTS %s" % metadata[t])
