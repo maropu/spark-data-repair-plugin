@@ -21,6 +21,7 @@
 import json
 import torch
 import torch.nn.functional as F
+
 from abc import ABCMeta, abstractmethod
 from pyspark.sql import DataFrame, SparkSession
 
@@ -37,10 +38,10 @@ class Featurizer:
         self.bulk_collect_thres = bulk_collect_thres
 
         self.spark = SparkSession.builder.getOrCreate()
-        self.svgApi = self.spark.sparkContext._active_spark_context._jvm.ScavengerApi
-        self.all_attrs = metadata['featureAttrs']
-        self.total_vars = int(metadata['totalVars'])
-        self.total_attrs = int(metadata['featureAttrNum'])
+        self.svgApi = self.spark.sparkContext._active_spark_context._jvm.ScavengerRepairApi
+        self.all_attrs = metadata['feature_attrs']
+        self.total_vars = int(metadata['total_vars'])
+        self.total_attrs = int(metadata['total_attrs'])
         self.classes = int(metadata['classes'])
         self.tensor = None
 
@@ -85,7 +86,7 @@ class InitAttrFeaturizer(Featurizer):
         Featurizer.__init__(self, 'InitAttrFeaturizer', metadata, learnable=False, init_weight=init_weight)
 
     def create_dataframe(self):
-        tempView = self.svgApi.createInitAttrFeatureView(self.metadata['__cell_domain'])
+        tempView = self.svgApi.createInitAttrFeatureView(self.metadata['cell_domain'])
         return self.spark.table(tempView)
 
     def create_tensor_from_pandas(self, pdf):
@@ -120,7 +121,7 @@ class FreqFeaturizer(Featurizer):
 
     def create_dataframe(self):
         tempView = self.svgApi.createFreqFeatureView(
-            self.metadata['__input_table_view'], self.metadata['__cell_domain'], self.metadata['__dk_cells'])
+            self.metadata['discrete_attrs'], self.metadata['cell_domain'], self.metadata['err_cells'])
         return self.spark.table(tempView)
 
     def create_tensor_from_pandas(self, pdf):
@@ -167,16 +168,17 @@ class FreqFeaturizer(Featurizer):
 
 class OccurAttrFeaturizer(Featurizer):
 
-    def __init__(self, metadata):
+    def __init__(self, metadata, row_id):
         Featurizer.__init__(self, 'OccurAttrFeaturizer', metadata)
+        self.row_id = row_id
 
     def create_dataframe(self):
         tempView = self.svgApi.createOccurAttrFeatureView(
-            self.metadata['__input_table_view'],
-            self.metadata['__dk_cells'],
-            self.metadata['__cell_domain'],
-            self.metadata['__stats_view'],
-            self.metadata['rowId']
+            self.metadata['discrete_attrs'],
+            self.metadata['err_cells'],
+            self.metadata['cell_domain'],
+            self.metadata['attr_stats'],
+            self.row_id
         )
         return self.spark.table(tempView)
 
@@ -225,8 +227,11 @@ class OccurAttrFeaturizer(Featurizer):
 
 class ConstraintFeaturizer(Featurizer):
 
-    def __init__(self, metadata):
+    def __init__(self, metadata, constraint_input_path, row_id, sample_ratio):
         Featurizer.__init__(self, 'ConstraintFeaturizer', metadata)
+        self.constraint_input_path = constraint_input_path
+        self.row_id = row_id
+        self.sample_ratio = sample_ratio
         self.constraint_feat = None
 
     def concat_tensors(self, tensors):
@@ -234,13 +239,15 @@ class ConstraintFeaturizer(Featurizer):
 
     def create_dataframe(self):
         constraint_feat_as_json = self.svgApi.createConstraintFeatureView(
-            self.metadata['constraintInputPath'],
-            self.metadata['__input_table_view'],
-            self.metadata['__pos_value'],
-            self.metadata['rowId']
+            self.constraint_input_path,
+            self.metadata['discrete_attrs'],
+            self.metadata['err_cells'],
+            self.metadata['pos_values'],
+            self.row_id,
+            self.sample_ratio
         )
         self.constraint_feat = json.loads(constraint_feat_as_json)
-        return self.spark.table(self.constraint_feat['__constraint_feature'])
+        return self.spark.table(self.constraint_feat['constraint_feature'])
 
     def create_tensor_from_pandas(self, pdf):
         tensors = []
@@ -283,7 +290,7 @@ class ConstraintFeaturizer(Featurizer):
 
     def feature_names(self):
         return [ "fixed pred: %s, violation pred: %s" % (fixed, violation) \
-            for fixed, violation in zip(self.constraint_feat['__fixed_preds'], self.constraint_feat['__violation_preds']) ]
+            for fixed, violation in zip(self.constraint_feat['fixed_preds'], self.constraint_feat['violation_preds']) ]
 
 
 # A helper method to create a tensor from given featurizers

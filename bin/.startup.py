@@ -24,6 +24,7 @@ A Scavenger API Set for Data Profiling & Cleaning
 import json
 import logging
 import pandas as pd
+
 from pyspark.sql import DataFrame, SparkSession
 
 from repair.dataset import RepairDataset
@@ -45,14 +46,14 @@ class SchemaSpyBase():
 
     def __init__(self):
         self.output = ''
-        self.dbName = 'default'
+        self.db_name = 'default'
 
     def setOutput(self, output):
         self.output = output
         return self
 
-    def setDbName(self, dbName):
-        self.dbName = dbName
+    def setDbName(self, db_name):
+        self.db_name = db_name
         return self
 
 class SchemaSpy(SchemaSpyBase):
@@ -67,15 +68,16 @@ class SchemaSpy(SchemaSpyBase):
     # TODO: Prohibit instantiation directly
     def __init__(self):
         super().__init__()
-        self.driverName = 'sqlite'
+        self.driver_name = 'sqlite'
         self.props = ''
+        self.spy_api = sc._jvm.SchemaSpyApi
 
     @staticmethod
     def getOrCreate():
         return SchemaSpy()
 
-    def setDriverName(self, driverName):
-        self.driverName = driverName
+    def setDriverName(self, driver_name):
+        self.driver_name = driver_name
         return self
 
     def setProps(self, props):
@@ -83,14 +85,14 @@ class SchemaSpy(SchemaSpyBase):
         return self
 
     def catalogToDataFrame(self):
-        jdf = sc._jvm.ScavengerApi.catalogToDataFrame(self.dbName, self.driverName, self.props)
+        jdf = self.spy_api.catalogToDataFrame(self.db_name, self.driver_name, self.props)
         spark = SparkSession.builder.getOrCreate()
         df = DataFrame(jdf, spark._wrapped)
         return df
 
     def run(self):
-        resultPath = sc._jvm.ScavengerApi.run(self.output, self.dbName, self.driverName, self.props)
-        return SchemaSpyResult(resultPath)
+        result_path = self.spy_api.run(self.output, self.db_name, self.driver_name, self.props)
+        return SchemaSpyResult(result_path)
 
 # Defines singleton variables for SchemaSpy
 schemaspy = SchemaSpy.getOrCreate()
@@ -98,28 +100,39 @@ schemaspy = SchemaSpy.getOrCreate()
 class ScavengerConstraints(SchemaSpyBase):
 
     # TODO: Prohibit instantiation directly
-    def __init__(self, output, dbName):
+    def __init__(self, output, db_name):
         super().__init__()
         self.output = output
-        self.dbName = dbName
-        self.tableName = ''
+        self.db_name = db_name
+        self.table_name = ''
+        self.svg_api = sc._jvm.ScavengerApi
 
-    def setTableName(self, tableName):
-        self.tableName = tableName
+    def setTableName(self, table_name):
+        self.table_name = table_name
         return self
 
     def infer(self):
-        resultPath = sc._jvm.ScavengerApi.inferConstraints(self.output, self.dbName, self.tableName)
-        return SchemaSpyResult(resultPath)
+        result_path = self.svg_api.inferConstraints(self.output, self.db_name, self.table_name)
+        return SchemaSpyResult(result_path)
 
-class ScavengerErrorDetector(SchemaSpyBase):
+class ScavengerRepairModel(SchemaSpyBase):
 
     # TODO: Prohibit instantiation directly
-    def __init__(self, output, dbName):
-        self.constraintInputPath = ''
-        self.dbName = dbName
-        self.tableName = ''
-        self.rowId = 'rowId'
+    def __init__(self, output, db_name):
+        self.constraint_input_path = None
+        self.db_name = db_name
+        self.table_name = None
+        self.row_id = None
+        self.discrete_thres = 80
+        self.approx_cnt_Enabled = False
+        self.min_corr_thres = 10.0
+        self.min_attrs_to_compute_domains = 1
+        self.max_attrs_to_compute_domains = 4
+        self.default_max_domain_size = 4
+        # self.sample_ratio = 0.80
+        self.sample_ratio = 1.0
+        # self.stat_thres_ratio = 0.02
+        self.stat_thres_ratio = 0.0
 
         # Pre-defined options
         self.options = {}
@@ -132,16 +145,18 @@ class ScavengerErrorDetector(SchemaSpyBase):
         self.options['weight_norm'] = '1'
         self.options['verbose'] = '1'
 
-    def setConstraints(self, constraintInputPath):
-        self.constraintInputPath = constraintInputPath
+        self.svg_api = sc._jvm.ScavengerRepairApi
+
+    def setConstraints(self, constraint_input_path):
+        self.constraint_input_path = constraint_input_path
         return self
 
-    def setTableName(self, tableName):
-        self.tableName = tableName
+    def setTableName(self, table_name):
+        self.table_name = table_name
         return self
 
-    def setRowId(self, rowId):
-        self.rowId = rowId
+    def setRowId(self, row_id):
+        self.row_id = row_id
         return self
 
     def setOption(self, key, value):
@@ -149,28 +164,34 @@ class ScavengerErrorDetector(SchemaSpyBase):
         return self
 
     def infer(self):
-        svgApi = sc._jvm.ScavengerApi
-        input_table_view = svgApi.prepareInputTable(self.dbName, self.tableName, self.rowId)
-        err_cell_view = svgApi.detectErrorCells(self.constraintInputPath, '', input_table_view, self.rowId)
-        stats_view = svgApi.computeAttrStats(input_table_view, err_cell_view, self.rowId)
-        metadata_as_json = svgApi.computeMetadata(input_table_view, stats_view, err_cell_view, self.rowId)
+        # Error checks first
+        if (self.constraint_input_path is None or self.table_name is None or self.row_id is None):
+            raise ValueError('`setConstraints`, `setTableName`, and `setRowId` should be called before doing inferences')
+
+        # Computes various metrics for PyTorch features
+        discrete_attrs = self.svg_api.filterDiscreteAttrs(self.db_name, self.table_name, self.row_id, self.discrete_thres, self.approx_cnt_Enabled)
+        err_cell_view = self.svg_api.detectErrorCells(self.constraint_input_path, '', discrete_attrs, self.row_id)
+        attr_stats = self.svg_api.computeAttrStats(discrete_attrs, err_cell_view, self.row_id, self.sample_ratio, self.stat_thres_ratio)
+        metadata_as_json = self.svg_api.computePrerequisiteMetadata(
+          discrete_attrs, attr_stats, err_cell_view, self.row_id, self.min_corr_thres,
+          self.min_attrs_to_compute_domains, self.max_attrs_to_compute_domains,
+          self.default_max_domain_size)
+
         metadata = json.loads(metadata_as_json)
-        metadata['rowId'] = self.rowId
-        metadata['constraintInputPath'] = self.constraintInputPath
-        metadata['__input_table_view'] = input_table_view
-        metadata['__dk_cells'] = err_cell_view
-        metadata['__stats_view'] = stats_view
+        metadata['discrete_attrs'] = discrete_attrs
+        metadata['err_cells'] = err_cell_view
+        metadata['attr_stats'] = attr_stats
 
         # Gets #variables and #classes from metadata
-        total_vars = int(metadata['totalVars'])
+        total_vars = int(metadata['total_vars'])
         classes = int(metadata['classes'])
 
         # Generates features from metadata
         featurizers = [
             InitAttrFeaturizer(metadata),
             FreqFeaturizer(metadata),
-            OccurAttrFeaturizer(metadata),
-            ConstraintFeaturizer(metadata)
+            OccurAttrFeaturizer(metadata, self.row_id),
+            ConstraintFeaturizer(metadata, self.constraint_input_path, self.row_id, self.sample_ratio)
         ]
 
         # Prepares train & infer data sets from metadata
@@ -179,14 +200,14 @@ class ScavengerErrorDetector(SchemaSpyBase):
         dataset.setup()
 
         # Builds a repair model and repairs erronous cells
-        repairModel = RepairModel(self.options, featurizers, classes)
+        repair_model = RepairModel(self.options, featurizers, classes)
         (X_train, Y_train, mask_train) = dataset.train_dataset()
-        repairModel.fit(X_train, Y_train, mask_train)
+        repair_model.fit(X_train, Y_train, mask_train)
         (X_infer, infer_idx, mask_infer) = dataset.infer_dataset()
-        Y_pred = repairModel.infer(X_infer, mask_infer)
+        Y_pred = repair_model.infer(X_infer, mask_infer)
 
         # Prints learned weights on the repair model
-        report = repairModel.get_featurizer_weights(featurizers)
+        report = repair_model.get_featurizer_weights(featurizers)
         logging.warning(report)
 
         # Computes a postriori distribution for each domain
@@ -205,31 +226,34 @@ class ScavengerErrorDetector(SchemaSpyBase):
         # TODO: Use `array_sort` in v3.0
         distr_df = pd.DataFrame(data=distr)
         repair_df = spark.createDataFrame(distr_df) \
-            .join(spark.table(metadata['__cell_domain']), "vid") \
-            .selectExpr(self.rowId, "attr_idx", "attrName", "arrays_zip(domain, dist) dist", \
+            .join(spark.table(metadata['cell_domain']), "vid") \
+            .selectExpr(self.row_id, "attr_idx", "attrName", "arrays_zip(domain, dist) dist", \
               "domain[array_position(dist, array_max(dist)) - 1] inferred")
 
         # Releases temporary tables for metadata
-        metaTables = [
-            '__input_table_view',
-            '__dk_cells',
-            '__cell_domain',
-            '__var_mask',
-            '__weak_label',
-            '__stats_view'
+        meta_tables = [
+            'discrete_attrs',
+            'err_cells',
+            'cell_domain',
+            'var_masks',
+            'weak_labels',
+            'attr_stats'
         ]
-        for t in metaTables:
+        for t in meta_tables:
             spark.sql("DROP VIEW IF EXISTS %s" % metadata[t])
 
         return repair_df
 
 def scavenger_evaluate_repair_result(df, expected):
-    df.join(expected, (df.tid == expected.tid) & (df.attrName == expected.attribute), "inner") \
-      .selectExpr("inferred = correct_val is_correct") \
-      .groupBy("is_correct").count() \
-      .where("is_correct = true") \
-      .selectExpr("(count / 691) accuracy") \
-      .show()
+    evDf = df.join(expected, (df.tid == expected.tid) & (df.attrName == expected.attribute), 'inner') \
+        .selectExpr('inferred = correct_val is_correct') \
+        .groupBy('is_correct') \
+        .count()
+
+    evDf.join(evDf.selectExpr('sum(count) totalCount')) \
+        .where("is_correct = true") \
+        .selectExpr("(count / totalCount) accuracy") \
+        .show()
 
 class Scavenger(SchemaSpyBase):
 
@@ -250,25 +274,25 @@ class Scavenger(SchemaSpyBase):
         return Scavenger()
 
     def constraints(self):
-        return ScavengerConstraints(self.output, self.dbName)
+        return ScavengerConstraints(self.output, self.db_name)
 
     def repair(self):
-        return ScavengerErrorDetector(self.output, self.dbName)
+        return ScavengerRepairModel(self.output, self.db_name)
 
     def setInferType(self, inferType):
         self.inferType = inferType
         return self
 
     def infer(self):
-        resultPath = sc._jvm.ScavengerApi.infer(self.output, self.dbName, self.inferType)
-        return SchemaSpyResult(resultPath)
+        result_path = sc._jvm.ScavengerApi.infer(self.output, self.db_name, self.inferType)
+        return SchemaSpyResult(result_path)
 
 # Defines singleton variables for Scavenger
 scavenger = Scavenger.getOrCreate()
 
 # This is a method to use SchemaSpy functionality directly
 def spySchema(args=''):
-    sc._jvm.ScavengerApi.run(args)
+    sc._jvm.SchemaSpyApi.run(args)
 
 # TODO: Any smarter way to initialize a Spark session?
 if not sc._jvm.SparkSession.getActiveSession().isDefined():

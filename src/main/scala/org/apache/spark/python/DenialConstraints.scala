@@ -62,7 +62,7 @@ object DenialConstraints extends Logging {
                 None
             }
             if (es.nonEmpty) {
-              logWarning(s"$dcStr => ${toWhereCondition(es, t1, t2)}")
+              logDebug(s"$dcStr => ${toWhereCondition(es, t1, t2)}")
               predicates.append(es)
             }
           case s =>

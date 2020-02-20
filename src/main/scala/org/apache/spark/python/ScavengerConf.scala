@@ -17,6 +17,8 @@
 
 package org.apache.spark.python
 
+import java.util.Locale
+
 import scala.language.implicitConversions
 
 import org.apache.spark.internal.config.{ConfigBuilder, ConfigEntry, ConfigReader}
@@ -73,6 +75,17 @@ object ScavengerConf {
       .doc("Whether to transform denial constraints into functional dependencies if possible.")
       .booleanConf
       .createWithDefault(true)
+
+  val LOG_LEVEL = buildConf("spark.scavenger.logLevel")
+    .internal()
+    .doc("Configures the logging level. The value can be 'trace', 'debug', 'info', 'warn', or 'error'. " +
+      "The default log level is 'trace'.")
+    .stringConf
+    .transform(_.toUpperCase(Locale.ROOT))
+    .checkValue(logLevel => Set("TRACE", "DEBUG", "INFO", "WARN", "ERROR").contains(logLevel),
+      "Invalid value for 'spark.scavenger.logLevel'. Valid values are 'trace', " +
+        "'debug', 'info', 'warn' and 'error'.")
+    .createWithDefault("trace")
 }
 
 class ScavengerConf(conf: SQLConf) {
@@ -85,6 +98,8 @@ class ScavengerConf(conf: SQLConf) {
   def constraintInferenceApproximateEpilon: Double = getConf(CONSTRAINT_INFERENCE_APPROXIMATE_EPSILON)
   def constraintInferenceTopK: Int = getConf(CONSTRAINT_INFERENCE_TOPK)
   def constraintInferenceDc2fdConversionEnabled: Boolean = getConf(CONSTRAINT_INFERENCE_DC2FD_CONVERSION_ENABLED)
+
+  def logLevel: String = getConf(LOG_LEVEL)
 
   /**
    * Return the value of configuration property for the given key. If the key is not set yet,
