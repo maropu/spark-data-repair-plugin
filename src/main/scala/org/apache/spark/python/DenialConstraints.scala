@@ -36,6 +36,8 @@ case class DenialConstraints(entries: Seq[Seq[Predicate]], attrNames: Seq[String
 
 object DenialConstraints extends Logging {
 
+  lazy val emptyConstraints = DenialConstraints(Nil, Nil)
+
   // TODO: These entries below must be synced with `IntegrityConstraintDiscovery`
   private val opSigns = Seq("EQ", "IQ", "LT", "GT")
   private val signMap: Map[String, String] =
@@ -69,11 +71,14 @@ object DenialConstraints extends Logging {
             logWarning(s"Illegal constraint format found: $s")
         }
       }
-      if (predicates.isEmpty) {
-        throw new SparkException(s"Valid predicate entries not found in `$path`")
+
+      if (predicates.nonEmpty) {
+        val attrNames = predicates.flatMap { _.flatMap { p => p.leftAttr :: p.rightAttr :: Nil }}.distinct
+        DenialConstraints(predicates, attrNames)
+      } else {
+        logWarning(s"Valid predicate entries not found in `$path`")
+        emptyConstraints
       }
-      val attrNames = predicates.flatMap { _.flatMap { p => p.leftAttr :: p.rightAttr :: Nil }}.distinct
-      DenialConstraints(predicates, attrNames)
     } finally {
       if (file != null) {
         file.close()

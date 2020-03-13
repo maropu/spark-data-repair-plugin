@@ -17,8 +17,8 @@
 # limitations under the License.
 #
 
-
 import json
+import logging
 import torch
 import torch.nn.functional as F
 
@@ -29,24 +29,28 @@ class Featurizer:
 
     __metaclass__ = ABCMeta
 
-    def __init__(self, name, metadata, learnable=True, init_weight=1.0, batch_size=32, bulk_collect_thres=10000):
+    def __init__(self, name, learnable=True, init_weight=1.0, batch_size=32, bulk_collect_thres=10000):
+        self.metadata = None
+
         self.name = name
-        self.metadata = metadata
         self.learnable = learnable
         self.init_weight = init_weight
         self.batch_size = batch_size
         self.bulk_collect_thres = bulk_collect_thres
 
         self.spark = SparkSession.builder.getOrCreate()
-        self.svgApi = self.spark.sparkContext._active_spark_context._jvm.ScavengerRepairApi
-        self.all_attrs = metadata['feature_attrs']
-        self.total_vars = int(metadata['total_vars'])
-        self.total_attrs = int(metadata['total_attrs'])
-        self.classes = int(metadata['classes'])
+        self.svgApi = self.spark.sparkContext._active_spark_context._jvm.ScavengerRepairFeatureApi
         self.tensor = None
 
     def concat_tensors(self, tensors):
         return torch.cat(tensors)
+
+    def setup(self, metadata):
+        self.metadata = metadata
+        self.all_attrs = metadata['feature_attrs']
+        self.total_vars = int(metadata['total_vars'])
+        self.total_attrs = int(metadata['total_attrs'])
+        self.classes = int(metadata['classes'])
 
     @abstractmethod
     def create_dataframe(self):
@@ -80,10 +84,10 @@ class Featurizer:
 
 class InitAttrFeaturizer(Featurizer):
 
-    def __init__(self, metadata, init_weight=1.0):
+    def __init__(self, init_weight=1.0):
         if isinstance(init_weight, list):
             init_weight = torch.FloatTensor(init_weight)
-        Featurizer.__init__(self, 'InitAttrFeaturizer', metadata, learnable=False, init_weight=init_weight)
+        Featurizer.__init__(self, 'InitAttrFeaturizer', learnable=False, init_weight=init_weight)
 
     def create_dataframe(self):
         tempView = self.svgApi.createInitAttrFeatureView(self.metadata['cell_domain'])
@@ -116,8 +120,8 @@ class InitAttrFeaturizer(Featurizer):
 
 class FreqFeaturizer(Featurizer):
 
-    def __init__(self, metadata):
-        Featurizer.__init__(self, 'FreqFeaturizer', metadata)
+    def __init__(self):
+        Featurizer.__init__(self, 'FreqFeaturizer')
 
     def create_dataframe(self):
         tempView = self.svgApi.createFreqFeatureView(
@@ -168,9 +172,8 @@ class FreqFeaturizer(Featurizer):
 
 class OccurAttrFeaturizer(Featurizer):
 
-    def __init__(self, metadata, row_id):
-        Featurizer.__init__(self, 'OccurAttrFeaturizer', metadata)
-        self.row_id = row_id
+    def __init__(self):
+        Featurizer.__init__(self, 'OccurAttrFeaturizer')
 
     def create_dataframe(self):
         tempView = self.svgApi.createOccurAttrFeatureView(
@@ -178,7 +181,7 @@ class OccurAttrFeaturizer(Featurizer):
             self.metadata['err_cells'],
             self.metadata['cell_domain'],
             self.metadata['attr_stats'],
-            self.row_id
+            self.metadata['row_id']
         )
         return self.spark.table(tempView)
 
@@ -227,11 +230,8 @@ class OccurAttrFeaturizer(Featurizer):
 
 class ConstraintFeaturizer(Featurizer):
 
-    def __init__(self, metadata, constraint_input_path, row_id, sample_ratio):
-        Featurizer.__init__(self, 'ConstraintFeaturizer', metadata)
-        self.constraint_input_path = constraint_input_path
-        self.row_id = row_id
-        self.sample_ratio = sample_ratio
+    def __init__(self):
+        Featurizer.__init__(self, 'ConstraintFeaturizer')
         self.constraint_feat = None
 
     def concat_tensors(self, tensors):
@@ -239,15 +239,18 @@ class ConstraintFeaturizer(Featurizer):
 
     def create_dataframe(self):
         constraint_feat_as_json = self.svgApi.createConstraintFeatureView(
-            self.constraint_input_path,
+            self.metadata['constraint_input_path'],
             self.metadata['discrete_attrs'],
             self.metadata['err_cells'],
             self.metadata['pos_values'],
-            self.row_id,
-            self.sample_ratio
+            self.metadata['row_id'],
+            self.metadata['sample_ratio']
         )
-        self.constraint_feat = json.loads(constraint_feat_as_json)
-        return self.spark.table(self.constraint_feat['constraint_feature'])
+        if len(constraint_feat_as_json) > 0:
+            self.constraint_feat = json.loads(constraint_feat_as_json)
+            return self.spark.table(self.constraint_feat['constraint_feature'])
+        else:
+            raise RuntimeError('valid constraint not found')
 
     def create_tensor_from_pandas(self, pdf):
         tensors = []
@@ -293,7 +296,23 @@ class ConstraintFeaturizer(Featurizer):
             for fixed, violation in zip(self.constraint_feat['fixed_preds'], self.constraint_feat['violation_preds']) ]
 
 
-# A helper method to create a tensor from given featurizers
+# A helper method to init and create a tensor from given featurizers
 def create_tensor_from_featurizers(featurizers):
-    return F.normalize(torch.cat([ f.create_tensor() for f in featurizers ], 2), p=2, dim=1)
+    _featurizers = []
+    _tensors = []
+    for f in featurizers:
+        try:
+            _tensors.append(f.create_tensor())
+            _featurizers.append(f)
+        except RuntimeError as e:
+            logging.warning("feature '%s' removed because: %s" % (f.name, e))
+
+    if len(_featurizers) == 0:
+        raise RuntimeError('valid featurizer not found in given featurizers')
+
+    # Drops the featurizers that couldn't work correctly
+    featurizers.clear()
+    featurizers.extend(_featurizers)
+
+    return F.normalize(torch.cat(_tensors, 2), p=2, dim=1)
 

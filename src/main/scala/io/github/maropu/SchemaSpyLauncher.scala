@@ -36,7 +36,7 @@ object SchemaSpyLauncher extends Logging {
       val cmd = Seq("java", "-jar", schemaSpyPath) ++ arguments
       val builder = new ProcessBuilder(cmd.asJava)
       val proc = builder.start()
-      outputConsole(s"\n${Source.fromInputStream(proc.getInputStream).mkString}")
+      outputToConsole(s"\n${Source.fromInputStream(proc.getInputStream).mkString}")
       proc.waitFor()
     } catch {
       case e => System.err.println(e.getMessage)

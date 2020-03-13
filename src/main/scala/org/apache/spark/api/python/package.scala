@@ -32,12 +32,13 @@ package object python {
     }
   }
 
-  def withTempView[T](spark: SparkSession, df: DataFrame, cache: Boolean = false)(f: String => T): T = {
+  def withTempView[T](df: DataFrame, cache: Boolean = false)(f: String => T): T = {
+    assert(SparkSession.getActiveSession.nonEmpty)
     val tempView = getRandomString("temp_view_")
     if (cache) df.cache()
     df.createOrReplaceTempView(tempView)
     val ret = f(tempView)
-    spark.sql(s"DROP VIEW $tempView")
+    SparkSession.getActiveSession.get.sql(s"DROP VIEW $tempView")
     ret
   }
 

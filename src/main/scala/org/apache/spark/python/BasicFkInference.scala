@@ -62,7 +62,7 @@ object BasicFkInference extends Logging {
       }
     }
 
-    outputConsole("Collecting basic stats in input tables...")
+    outputToConsole("Collecting basic stats in input tables...")
 
     // Generates a sequence of table pairs for FK discoveries
     val entityWithStats = {
@@ -132,7 +132,7 @@ object BasicFkInference extends Logging {
       s"\n${statsStr.mkString("\n")}"
     })
 
-    outputConsole("Analyzing FK constraints for the them...")
+    outputToConsole("Analyzing FK constraints for the them...")
 
     val fkCandidates = entityWithStats.filter(_.numRows > 0).combinations(2).toSeq
     val inferredFkConstraints = {

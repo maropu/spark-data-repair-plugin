@@ -270,7 +270,7 @@ object IntegrityConstraintDiscovery extends Logging {
           val threshold = (totalEvCount * (1.0 - approxEpsilon)).toLong
 
           (2 until numSymbols + 1).foreach { level =>
-            outputConsole(s"Starts processing level $level/$numSymbols...")
+            outputToConsole(s"Starts processing level $level/$numSymbols...")
             // TODO: We need to split a query into multiple ones if `exprToValidateConstraints`
             // has many expressions.
             val (metadataSeq, exprToComputeValidEvNum) = fields.combinations(level).flatMap { fs =>
@@ -305,7 +305,7 @@ object IntegrityConstraintDiscovery extends Logging {
             }.toSeq.unzip
 
             // Computes minimal covers of the evidence set for searching denial constraints
-            outputConsole(s"Starts processing ${exprToComputeValidEvNum.size} exprs to validate constraints...")
+            outputToConsole(s"Starts processing ${exprToComputeValidEvNum.size} exprs to validate constraints...")
             if (exprToComputeValidEvNum.nonEmpty) {
               val cDf = evVectors.selectExpr(exprToComputeValidEvNum: _*)
 
@@ -326,7 +326,7 @@ object IntegrityConstraintDiscovery extends Logging {
           }
           if (isDebugEnabled) {
             minimalSeq.zipWithIndex.foreach { case ((_, (constraint, n)), i) =>
-              outputConsole(s"[$i]$constraint: $n(${(totalEvCount - n + 0.0) / totalEvCount})")
+              outputToConsole(s"[$i]$constraint: $n(${(totalEvCount - n + 0.0) / totalEvCount})")
             }
           }
           minimalSeq.map { case (_, (c, _)) =>
