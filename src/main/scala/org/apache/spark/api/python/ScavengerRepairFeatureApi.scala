@@ -20,6 +20,7 @@ package org.apache.spark.api.python
 import scala.collection.mutable
 
 import org.apache.spark.python._
+import org.apache.spark.util.{Utils => SparkUtils}
 
 import io.github.maropu.Utils._
 
@@ -28,12 +29,12 @@ object ScavengerRepairFeatureApi extends BaseScavengerRepairApi {
 
   // Creates a PyTorch feature:
   //   tensor = -1 * torch.ones(1, classes, total_attrs)
-  //   tensor[0][init_idx][attr_idx] = 1.0
+  //   tensor[0][init_idx][feature_idx] = 1.0
   def createInitAttrFeatureView(cellDomainView: String): String = {
     logBasedOnLevel(s"createInitAttrFeatureView called with: cellDomainView=$cellDomainView")
 
     withSparkSession { sparkSession =>
-      val initAttrFtDf = sparkSession.sql(s"SELECT initIndex init_idx, attr_idx FROM $cellDomainView")
+      val initAttrFtDf = sparkSession.sql(s"SELECT initIndex init_idx, feature_idx FROM $cellDomainView")
       createAndCacheTempView(initAttrFtDf, "init_attr_feature")
     }
   }
@@ -53,9 +54,9 @@ object ScavengerRepairFeatureApi extends BaseScavengerRepairApi {
       val freqFtDf = attrsToRepair.map { attr =>
         sparkSession.sql(
           s"""
-             |SELECT vid, valId idx, attr_idx, (freq / $tableRowCnt) prob
+             |SELECT vid, valId idx, feature_idx, (freq / $tableRowCnt) prob
              |FROM (
-             |  SELECT vid, attr_idx, posexplode(domain) (valId, rVal)
+             |  SELECT vid, feature_idx, posexplode(domain) (valId, rVal)
              |  FROM $cellDomainView
              |) d, (
              |  SELECT $attr, COUNT(1) freq
@@ -79,26 +80,28 @@ object ScavengerRepairFeatureApi extends BaseScavengerRepairApi {
   //   torch.zeros(1, classes, total_attrs * total_attrs) = prob
   def createOccurAttrFeatureView(
       discreteAttrView: String,
+      featureAttrs: String,
       errCellView: String,
       cellDomainView: String,
       statView: String,
       rowId: String): String = {
 
     logBasedOnLevel(s"createOccurAttrFeatureView called with: discreteAttrView=$discreteAttrView " +
-      s"cellDomainVIew=$cellDomainView errCellView=$errCellView statView=$statView rowId=$rowId")
+      s"featureAttrs=$featureAttrs errCellView=$errCellView statView=$statView " +
+      s"cellDomainVIew=$cellDomainView rowId=$rowId")
 
     withSparkSession { sparkSession =>
-      val tableAttrs = sparkSession.table(discreteAttrView).schema.map(_.name)
-      val tableAttrNum = sparkSession.table(discreteAttrView).schema.length
+      val ftAttrs = SparkUtils.stringToSeq(featureAttrs)
+      val ftAttrNum = ftAttrs.length
       val tableRowCnt = sparkSession.table(discreteAttrView).count()
       val attrsToRepair = {
         sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
           .collect.head.getSeq[String](0)
       }
-      val tableAttrToId = tableAttrs.zipWithIndex.toMap
+      val ftAttrToId = ftAttrs.zipWithIndex.toMap
       val occFtDf = attrsToRepair.flatMap { rvAttr =>
-        tableAttrs.filter(a => a != rvAttr && a != rowId).map { attr =>
-          val index = tableAttrToId(rvAttr) * tableAttrNum + tableAttrToId(attr)
+        ftAttrs.filter(a => a != rvAttr && a != rowId).map { attr =>
+          val index = ftAttrToId(rvAttr) * ftAttrNum + ftAttrToId(attr)
           val smoothingParam = 0.000001
           sparkSession.sql(
             s"""
@@ -130,7 +133,7 @@ object ScavengerRepairFeatureApi extends BaseScavengerRepairApi {
                |    /* Use `MAX` to drop ($attr, null) tuples in `$discreteAttrView` */
                |    SELECT $attr, MAX(cnt) cntX
                |    FROM $statView
-               |    WHERE ${whereCaluseToFilterStat(attr, tableAttrs)}
+               |    WHERE ${whereCaluseToFilterStat(attr, ftAttrs)}
                |    GROUP BY $attr
                |  ) X
                |  WHERE YX.X = X.$attr

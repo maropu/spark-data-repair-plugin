@@ -173,7 +173,6 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         s"""
            |SELECT
            |  $rowId,
-           |  attr_idx,
            |  attrName AS attribute,
            |  arrays_zip(domain, dist) dist,
            |  /* TODO: Use array_sort in v3.0 */
@@ -405,7 +404,6 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
            |SELECT
            |  l.$rowId,
            |  cellId,
-           |  attr_idx,
            |  attrName,
            |  extractField(struct(${cellExprs.mkString(", ")}), attr_idx) initValue
            |  $corrCols
@@ -422,6 +420,16 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         sparkSession.createDataFrame(rvRdd, rvSchemaWithId)
       }
 
+      // TODO: Needs to revisit this feature selection
+      val featureAttrs = if (true) {
+        discreteAttrs.filter { attr =>
+          attrsToRepair.contains(attr) || corrAttrSet.contains(attr)
+        }
+      } else {
+        discreteAttrs
+      }
+
+      val ftAttrToId = featureAttrs.zipWithIndex.toMap
       val cellDomainDf = withTempView(rvWithIdDf) { rvView =>
         corrAttrs.map { case (attrName, corrAttrsWithScores) =>
           // Computes domains for error cells
@@ -432,7 +440,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                  |  _eid vid,
                  |  $rowId,
                  |  cellId,
-                 |  attr_idx,
+                 |  ${ftAttrToId(attrName)} feature_idx,
                  |  attrName,
                  |  domain,
                  |  size(domain) domainSize,
@@ -446,7 +454,6 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                  |    rv._eid,
                  |    rv.$rowId,
                  |    rv.cellId,
-                 |    rv.attr_idx,
                  |    rv.attrName,
                  |    array_sort(array_union(array(rv.initValue), d.domain)) domain,
                  |    IF(ISNULL(rv.initValue), shuffle(d.domain)[0], rv.initValue) initValue
@@ -460,7 +467,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
           if (corrAttrsWithScores.nonEmpty) {
             val corrAttrs = corrAttrsWithScores.map(_._1)
-            logBasedOnLevel(s"Computing '$attrName' domain from correlated attributes (${corrAttrs.mkString(",")})...")
+            logBasedOnLevel(s"Computing '$attrName' domain from ${corrAttrs.size} correlated " +
+              s"attributes (${corrAttrs.mkString(",")})...")
             val dfs = corrAttrs.zipWithIndex.map { case (attr, i) =>
               sparkSession.sql(
                 s"""
@@ -542,9 +550,9 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         .collect.headOption.map { case Row(l: Long, i: Int) => (l, i) }.get
 
       logBasedOnLevel(s"totalVars=$totalVars classes=$classes " +
-        s"featureAttrs(${discreteAttrs.size})=${discreteAttrs.mkString(",")}")
+        s"featureAttrs(${featureAttrs.size})=${featureAttrs.mkString(",")}")
       metadata.add("total_vars", s"$totalVars")
-      metadata.add("feature_attrs", discreteAttrs)
+      metadata.add("feature_attrs", featureAttrs)
       metadata.add("classes", s"$classes")
 
       val posValDf = sparkSession.sql(

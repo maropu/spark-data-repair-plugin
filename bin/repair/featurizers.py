@@ -29,7 +29,7 @@ class Featurizer:
 
     __metaclass__ = ABCMeta
 
-    def __init__(self, name, learnable=True, init_weight=1.0, batch_size=32, bulk_collect_thres=10000):
+    def __init__(self, name, learnable=True, init_weight=1.0, batch_size=32, bulk_collect_thres=1000):
         self.metadata = None
 
         self.name = name
@@ -97,9 +97,9 @@ class InitAttrFeaturizer(Featurizer):
         tensors = []
         for index, row in pdf.iterrows():
             init_idx = int(row['init_idx'])
-            attr_idx = int(row['attr_idx'])
+            feature_idx = int(row['feature_idx'])
             tensor = -1 * torch.ones(1, self.classes, self.total_attrs)
-            tensor[0][init_idx][attr_idx] = 1.0
+            tensor[0][init_idx][feature_idx] = 1.0
             tensors.append(tensor)
 
         return tensors
@@ -108,9 +108,9 @@ class InitAttrFeaturizer(Featurizer):
         tensors = []
         for row in df.toLocalIterator():
             init_idx = int(row.init_idx)
-            attr_idx = int(row.attr_idx)
+            feature_idx = int(row.feature_idx)
             tensor = -1 * torch.ones(1, self.classes, self.total_attrs)
-            tensor[0][init_idx][attr_idx] = 1.0
+            tensor[0][init_idx][feature_idx] = 1.0
             tensors.append(tensor)
 
         return tensors
@@ -125,7 +125,10 @@ class FreqFeaturizer(Featurizer):
 
     def create_dataframe(self):
         tempView = self.svgApi.createFreqFeatureView(
-            self.metadata['discrete_attrs'], self.metadata['cell_domain'], self.metadata['err_cells'])
+            self.metadata['discrete_attrs'],
+            self.metadata['cell_domain'],
+            self.metadata['err_cells']
+        )
         return self.spark.table(tempView)
 
     def create_tensor_from_pandas(self, pdf):
@@ -134,9 +137,9 @@ class FreqFeaturizer(Featurizer):
             tensor = torch.zeros(1, self.classes, self.total_attrs)
             for index, row in group.iterrows():
                 idx = int(row['idx'])
-                attr_idx = int(row['attr_idx'])
+                feature_idx = int(row['feature_idx'])
                 prob = float(row['prob'])
-                tensor[0][idx][attr_idx] = prob
+                tensor[0][idx][feature_idx] = prob
 
             tensors.append(tensor)
 
@@ -161,9 +164,9 @@ class FreqFeaturizer(Featurizer):
                 tensor = torch.zeros(1, self.classes, self.total_attrs)
 
             idx = int(row.idx)
-            attr_idx = int(row.attr_idx)
+            feature_idx = int(row.feature_idx)
             prob = float(row.prob)
-            tensor[0][idx][attr_idx] = prob
+            tensor[0][idx][feature_idx] = prob
 
         return tensors
 
@@ -178,6 +181,7 @@ class OccurAttrFeaturizer(Featurizer):
     def create_dataframe(self):
         tempView = self.svgApi.createOccurAttrFeatureView(
             self.metadata['discrete_attrs'],
+            ','.join(self.metadata['feature_attrs']),
             self.metadata['err_cells'],
             self.metadata['cell_domain'],
             self.metadata['attr_stats'],

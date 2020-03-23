@@ -186,7 +186,7 @@ class ScavengerRepairModel(SchemaSpyBase):
 
         # Defines detectors to discover error cells
         self.detectors = [
-            NullErrorDetector(),
+            # NullErrorDetector(),
             ConstraintErrorDetector()
         ]
 
@@ -242,6 +242,11 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.black_attr_list = black_attr_list
         return self
 
+    def setAttrNumToComputeDomains(self, min, max):
+        self.min_attrs_to_compute_domains = min
+        self.max_attrs_to_compute_domains = max
+        return self
+
     def setOption(self, key, value):
         self.options[key] = value
         return self
@@ -271,6 +276,10 @@ class ScavengerRepairModel(SchemaSpyBase):
                 "isnotnull(inferred) AS replaced", "val AS orig_val", "dist") \
             .createOrReplaceTempView(repaired_debug_view)
 
+    def cleanupMetadataViews(self):
+        for t in self.meta_table_names:
+            self.spark.sql("DROP VIEW IF EXISTS %s" % t)
+
     def run(self):
         if (self.constraint_input_path is None or self.table_name is None or self.row_id is None):
             raise ValueError('`setConstraints`, `setTableName`, and `setRowId` should be called before doing inferences')
@@ -287,8 +296,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         # Detects error cells
         metadata['err_cells'] = self.detectErrorCells(metadata)
         if self.spark.table(metadata['err_cells']).count() == 0:
-            for t in self.meta_table_names:
-                self.spark.sql("DROP VIEW IF EXISTS %s" % t)
+            self.cleanupMetadataViews()
 
             input_name = '`%s`.`%s`' % (self.db_name, self.table_name) \
                 if not self.db_name else '`%s`' % self.table_name
@@ -353,8 +361,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         clean_df = self.svg_api.repairTableFrom(
             metadata['repair_candidates'], self.db_name, self.table_name, self.row_id)
 
-        for t in self.meta_table_names:
-            self.spark.sql("DROP VIEW IF EXISTS %s" % metadata[t])
+        self.cleanupMetadataViews()
 
         return clean_df
 

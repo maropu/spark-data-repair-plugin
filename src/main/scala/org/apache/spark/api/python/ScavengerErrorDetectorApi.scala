@@ -137,7 +137,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
               df.selectExpr(
                 "_tid_",
                 s"'$attr' AS attrName",
-                s"long(_tid_) * long($tableAttrNum) + long($attrId) AS cellId",
+                s"bigint(_tid_) * bigint($tableAttrNum) + bigint($attrId) AS cellId",
                 s"int($attrId) AS attr_idx"
               )
             }
