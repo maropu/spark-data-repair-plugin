@@ -544,7 +544,6 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       logBasedOnLevel(s"totalVars=$totalVars classes=$classes " +
         s"featureAttrs(${discreteAttrs.size})=${discreteAttrs.mkString(",")}")
       metadata.add("total_vars", s"$totalVars")
-      metadata.add("total_attrs", s"${discreteAttrs.size}")
       metadata.add("feature_attrs", discreteAttrs)
       metadata.add("classes", s"$classes")
 

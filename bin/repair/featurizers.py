@@ -47,9 +47,9 @@ class Featurizer:
 
     def setup(self, metadata):
         self.metadata = metadata
-        self.all_attrs = metadata['feature_attrs']
+        self.feature_attrs = metadata['feature_attrs']
+        self.total_attrs = int(len(self.feature_attrs))
         self.total_vars = int(metadata['total_vars'])
-        self.total_attrs = int(metadata['total_attrs'])
         self.classes = int(metadata['classes'])
 
     @abstractmethod
@@ -116,7 +116,7 @@ class InitAttrFeaturizer(Featurizer):
         return tensors
 
     def feature_names(self):
-        return self.all_attrs
+        return self.feature_attrs
 
 class FreqFeaturizer(Featurizer):
 
@@ -168,7 +168,7 @@ class FreqFeaturizer(Featurizer):
         return tensors
 
     def feature_names(self):
-        return self.all_attrs
+        return self.feature_attrs
 
 class OccurAttrFeaturizer(Featurizer):
 
@@ -226,7 +226,7 @@ class OccurAttrFeaturizer(Featurizer):
         return tensors
 
     def feature_names(self):
-        return ["{} X {}".format(attr1, attr2) for attr1 in self.all_attrs for attr2 in self.all_attrs]
+        return ["{} X {}".format(attr1, attr2) for attr1 in self.feature_attrs for attr2 in self.feature_attrs]
 
 class ConstraintFeaturizer(Featurizer):
 
