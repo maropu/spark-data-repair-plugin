@@ -96,11 +96,10 @@ object ScavengerRepairFeatureApi extends BaseScavengerRepairApi {
           .collect.head.getSeq[String](0)
       }
       val tableAttrToId = tableAttrs.zipWithIndex.toMap
-      val occFtDf = attrsToRepair.indices.flatMap { i =>
-        val (Seq((rvAttr, _)), attrs) = attrsToRepair.zipWithIndex.partition { case (_, j) => i == j }
-        attrs.map { case (attr, _) =>
+      val occFtDf = attrsToRepair.flatMap { rvAttr =>
+        tableAttrs.filter(a => a != rvAttr && a != rowId).map { attr =>
           val index = tableAttrToId(rvAttr) * tableAttrNum + tableAttrToId(attr)
-          val smoothingParam = 0.001
+          val smoothingParam = 0.000001
           sparkSession.sql(
             s"""
                |SELECT
