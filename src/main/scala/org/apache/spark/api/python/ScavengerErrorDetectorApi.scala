@@ -47,24 +47,15 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
 
     withSparkSession { sparkSession =>
       val (inputDf, inputName, tableAttrs) = checkInputTable(dbName, tableName, rowId)
-      val tableAttrToId = tableAttrs.zipWithIndex.toMap
-      val tableAttrNum = inputDf.schema.length
 
       withTempView(inputDf, cache = true) { inputView =>
         // Detects error erroneous cells in a given table
         val errCellDf = tableAttrs.map { attr =>
-          val attrId = tableAttrToId(attr)
           sparkSession.sql(
             s"""
-               |SELECT
-               |  $rowId `_tid_`,
-               |  '$attr' AS attrName,
-               |  int($rowId) * int($tableAttrNum) + int($attrId) AS cellId,
-               |  int($attrId) AS attr_idx
-               |FROM
-               |  $inputView
-               |WHERE
-               |  $attr IS NULL
+               |SELECT $rowId, '$attr' AS attrName
+               |FROM $inputView
+               |WHERE $attr IS NULL
              """.stripMargin)
 
         }.reduce(_.union(_)).cache()
@@ -92,14 +83,13 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
 
     withSparkSession { sparkSession =>
       val (inputDf, inputName, tableAttrs) = checkInputTable(dbName, tableName, rowId)
-      val tableAttrToId = tableAttrs.zipWithIndex.toMap
-      val tableAttrNum = inputDf.schema.length
 
       withTempView(inputDf, cache = true) { inputView =>
         val constraints = loadConstraintsFromFile(constraintFilePath, tableName, tableAttrs)
         if (constraints.entries.isEmpty) {
           // Case of non-found constraints
-          createEmptyTable("_tid_ BIGINT, attrName STRING, cellId BIGINT, attr_idx INT")
+          val rowIdType = inputDf.schema.find(_.name == rowId).get.dataType.sql
+          createEmptyTable(s"$rowId $rowIdType, attrName STRING")
         } else {
           logBasedOnLevel({
             val constraintLists = constraints.entries.zipWithIndex.map { case (preds, i) =>
@@ -115,7 +105,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
           val errCellDf = constraints.entries.flatMap { preds =>
             val queryToValidateConstraint =
               s"""
-                 |SELECT t1.$rowId `_tid_`
+                 |SELECT t1.$rowId
                  |FROM $inputView AS t1
                  |WHERE EXISTS (
                  |  SELECT t2.$rowId
@@ -133,13 +123,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
                """.stripMargin)
 
             preds.flatMap { p => p.leftAttr :: p.rightAttr :: Nil }.map { attr =>
-              val attrId = tableAttrToId(attr)
-              df.selectExpr(
-                "_tid_",
-                s"'$attr' AS attrName",
-                s"bigint(_tid_) * bigint($tableAttrNum) + bigint($attrId) AS cellId",
-                s"int($attrId) AS attr_idx"
-              )
+              df.selectExpr(rowId, s"'$attr' AS attrName")
             }
           }.reduce(_.union(_)).distinct().cache()
 

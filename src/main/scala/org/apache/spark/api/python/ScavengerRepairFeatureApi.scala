@@ -175,7 +175,7 @@ object ScavengerRepairFeatureApi extends BaseScavengerRepairApi {
             s"""
                |SELECT t1.$rowId, ${constraints.attrNames.map(v => s"t1.$v").mkString(", ")}
                |FROM $discreteAttrView t1, (
-               |  SELECT DISTINCT `_tid_` AS $rowId
+               |  SELECT DISTINCT $rowId
                |  FROM $errCellView
                |) t2
                |WHERE t1.$rowId = t2.$rowId
@@ -184,7 +184,7 @@ object ScavengerRepairFeatureApi extends BaseScavengerRepairApi {
                |SELECT $rowId, ${constraints.attrNames.mkString(", ")}
                |FROM $discreteAttrView
                |WHERE $rowId IN (
-               |  SELECT DISTINCT `_tid_`
+               |  SELECT DISTINCT $rowId
                |  FROM $errCellView
                |)
                | */

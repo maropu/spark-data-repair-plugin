@@ -159,6 +159,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         discreteAttrs
       }).map(_._1).toSet
 
+      outputToConsole(s"Loaded $rowCnt rows with ${rowCnt * discreteAttrs.size} cells")
+
       val discreteDf = inputDf.selectExpr(inputDf.columns.filter(attrSet.contains) :+ rowId: _*)
       createAndCacheTempView(discreteDf, "discrete_attrs")
     }
@@ -200,7 +202,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
           s"""
              |SELECT t1.$rowId, ${tableAttrs.map(v => s"t1.$v").mkString(", ")}
              |FROM $inputView t1, (
-             |  SELECT DISTINCT `_tid_` AS $rowId
+             |  SELECT DISTINCT $rowId
              |  FROM $errCellView
              |) t2
              |WHERE t1.$rowId = t2.$rowId
@@ -209,7 +211,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
              |SELECT t1.$rowId, ${tableAttrs.map(v => s"t1.$v").mkString(", ")}
              |FROM $inputView
              |WHERE $rowId IN (
-             |  SELECT DISTINCT `_tid_`
+             |  SELECT DISTINCT $rowId
              |  FROM $errCellView
              |)
              | */
@@ -419,7 +421,10 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         })
       }
 
-      sparkSession.udf.register("extractField", (row: Row, offset: Int) => row.getString(offset))
+      val attrToId = discreteAttrs.zipWithIndex.toMap
+      sparkSession.udf.register("extractField", (row: Row, attrName: String) => {
+        row.getString(attrToId(attrName))
+      })
       val cellExprs = discreteAttrs.map { a => s"CAST(l.$a AS STRING) $a" }
       // Needs to keep the correlated attributes for selecting their domains
       val corrAttrSet = corrAttrs.flatMap(_._2.map(_._1)).toSet
@@ -432,14 +437,13 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         s"""
            |SELECT
            |  l.$rowId,
-           |  cellId,
            |  attrName,
-           |  extractField(struct(${cellExprs.mkString(", ")}), attr_idx) initValue
+           |  extractField(struct(${cellExprs.mkString(", ")}), attrName) initValue
            |  $corrCols
            |FROM
            |  $discreteAttrView l, $errCellView r
            |WHERE
-           |  l.$rowId = r._tid_
+           |  l.$rowId = r.$rowId
          """.stripMargin)
 
       // TODO: More efficient way to assign unique IDs
@@ -468,7 +472,6 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                  |SELECT
                  |  _eid vid,
                  |  $rowId,
-                 |  cellId,
                  |  ${ftAttrToId(attrName)} feature_idx,
                  |  attrName,
                  |  domain,
@@ -482,7 +485,6 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                  |  SELECT
                  |    rv._eid,
                  |    rv.$rowId,
-                 |    rv.cellId,
                  |    rv.attrName,
                  |    array_sort(array_union(array(rv.initValue), d.domain)) domain,
                  |    IF(ISNULL(rv.initValue), shuffle(d.domain)[0], rv.initValue) initValue
@@ -561,13 +563,18 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
       val weakLabelDf = sparkSession.sql(
         s"""
-           |SELECT vid, weakLabel, weakLabelIndex, fixed, /* (t2.cellId IS NULL) */ IF(domainSize > 1, false, true) AS clean
-           |FROM $cellDomainView AS t1
-           |LEFT OUTER JOIN $errCellView AS t2
-           |ON t1.cellId = t2.cellId
-           |WHERE weakLabel IS NOT NULL AND (
-           |  t2.cellId IS NULL OR t1.fixed != 1
-           |)
+           |SELECT
+           |  vid, weakLabel, weakLabelIndex, fixed, IF(domainSize > 1, false, true) AS clean
+           |FROM
+           |  $cellDomainView AS t1
+           |LEFT OUTER JOIN
+           |  $errCellView AS t2
+           |ON
+           |  t1.$rowId = t2.$rowId AND
+           |  t1.attrName = t2.attrName
+           |WHERE
+           |  weakLabel IS NOT NULL AND
+           |  t1.fixed != 1
          """.stripMargin)
 
       metadata.add("weak_labels", createAndCacheTempView(weakLabelDf, "weak_labels"))
@@ -586,7 +593,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
       val posValDf = sparkSession.sql(
         s"""
-           |SELECT vid, $rowId, cellId, attrName, posexplode(domain) (valId, rVal)
+           |SELECT vid, $rowId, attrName, posexplode(domain) (valId, rVal)
            |FROM $cellDomainView
          """.stripMargin)
 
