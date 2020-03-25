@@ -266,6 +266,12 @@ class ScavengerRepairModel(SchemaSpyBase):
         err_cells_df.createOrReplaceTempView(err_cells)
         return err_cells
 
+    def exportCleanView(self, err_cells):
+        clean_input_view = self.tempName('clean_input_view')
+        logging.warning("exports a clean input view as '%s'..." % clean_input_view)
+        clean_df = DataFrame(self.svg_api.filterCleanRows(self.db_name, self.table_name, self.row_id, err_cells), self.spark._wrapped)
+        clean_df.createOrReplaceTempView(clean_input_view)
+
     def exportRepairedDebugView(self, metadata):
         repaired_debug_view = self.tempName('repaired_debug_view')
         logging.warning("exports a repaired debug view as '%s'..." % repaired_debug_view)
@@ -301,6 +307,9 @@ class ScavengerRepairModel(SchemaSpyBase):
             input_name = '`%s`.`%s`' % (self.db_name, self.table_name) \
                 if not self.db_name else '`%s`' % self.table_name
             return self.spark.table(input_name)
+
+        # Exports the clean view for debugging
+        self.exportCleanView(metadata['err_cells'])
 
         # Computes various metrics for PyTorch features
         metadata['attr_stats'] = self.svg_api.computeAttrStats(

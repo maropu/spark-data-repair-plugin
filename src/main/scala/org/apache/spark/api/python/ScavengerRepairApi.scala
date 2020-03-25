@@ -189,6 +189,35 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     }
   }
 
+  def filterCleanRows(dbName: String, tableName: String, rowId: String, errCellView: String): DataFrame = {
+    logBasedOnLevel(s"filterCleanRows called with: dbName=$dbName tableName=$tableName " +
+      s"rowId=$rowId errCellView=$errCellView")
+    withSparkSession { sparkSession =>
+      val (inputDf, _, tableAttrs) = checkInputTable(dbName, tableName, rowId)
+
+      withTempView(inputDf) { inputView =>
+        sparkSession.sql(
+          s"""
+             |SELECT t1.$rowId, ${tableAttrs.map(v => s"t1.$v").mkString(", ")}
+             |FROM $inputView t1, (
+             |  SELECT DISTINCT `_tid_` AS $rowId
+             |  FROM $errCellView
+             |) t2
+             |WHERE t1.$rowId = t2.$rowId
+             |/*
+             |// This query throws an analysis exception in v2.4.x
+             |SELECT t1.$rowId, ${tableAttrs.map(v => s"t1.$v").mkString(", ")}
+             |FROM $inputView
+             |WHERE $rowId IN (
+             |  SELECT DISTINCT `_tid_`
+             |  FROM $errCellView
+             |)
+             | */
+         """.stripMargin)
+      }
+    }
+  }
+
   def repairTableFrom(repairCandidateTable: String, dbName: String, tableName: String, rowId: String): DataFrame = {
     logBasedOnLevel(s"repairTableFrom called with: repairCandidateTable=$repairCandidateTable " +
       s"dbName=$dbName tableName=$tableName rowId=$rowId")
