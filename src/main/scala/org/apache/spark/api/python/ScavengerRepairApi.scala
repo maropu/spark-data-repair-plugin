@@ -296,7 +296,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       }
 
       val statDf = {
-        val groupSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
+        val pairSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
         val inputDf = if (sampleRatio < 1.0) {
           sparkSession.table(discreteAttrView).sample(sampleRatio)
         } else {
@@ -316,7 +316,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                |FROM $inputView
                |GROUP BY GROUPING SETS (
                |  ${tableAttrs.map(a => s"($a)").mkString(", ")},
-               |  ${groupSets.map(_.toSeq).map { case Seq(a1, a2) => s"($a1,$a2)" }.mkString(", ")}
+               |  ${pairSets.map(_.toSeq).map { case Seq(a1, a2) => s"($a1,$a2)" }.mkString(", ")}
                |)
                |$filterClauseOption
              """.stripMargin)
@@ -345,7 +345,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     withSparkSession { sparkSession =>
       val metadata = Metadata(sparkSession)
       val discreteAttrs = sparkSession.table(discreteAttrView).schema.map(_.name).filter(_ != rowId)
-      val tableRowCnt = sparkSession.table(discreteAttrView).count()
+      val rowCnt = sparkSession.table(discreteAttrView).count()
 
       val attrsToRepair = {
         sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
@@ -358,37 +358,60 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       def whereCaluseToFilterStat(a: String): String =
         s"$a IS NOT NULL AND ${discreteAttrs.filter(_ != a).map(a => s"$a IS NULL").mkString(" AND ")}"
 
-      val pairWiseStats = attrPairsToRepair.map { case attrPair @ (attrToRepair, a) =>
-        val pairWiseStatDf = sparkSession.sql(
-          s"""
-             |SELECT
-             |  v1.X, v1.Y, (cntX / $tableRowCnt) pX, (cntY / $tableRowCnt) pY, (cntXY / $tableRowCnt) pXY
-             |FROM (
-             |  SELECT $attrToRepair X, $a Y, cnt cntXY
-             |  FROM $attrStatView
-             |  WHERE $attrToRepair IS NOT NULL AND
-             |    $a IS NOT NULL
-             |) v1, (
-             |  SELECT $attrToRepair X, cnt cntX
-             |  FROM $attrStatView
-             |  WHERE ${whereCaluseToFilterStat(attrToRepair)}
-             |) v2, (
-             |  /* TODO: Needs to reconsider how-to-handle NULL */
-             |  /* Use `MAX` to drop ($a, null) tuples in `$discreteAttrView` */
-             |  SELECT $a Y, MAX(cnt) cntY
-             |  FROM $attrStatView
-             |  WHERE ${whereCaluseToFilterStat(a)}
-             |  GROUP BY $a
-             |) v3
-             |WHERE
-             |  v1.X = v2.X AND
-             |  v1.Y = v3.Y
+      // Domain size of `attrToRepair`
+      val logBase = 10
+
+      // Computes the conditional entropy: H(x|y) = H(x,y) - H(y).
+      // H(x,y) denotes H(x U y). If H(x|y) = 0, then y determines x, i.e., y -> x.
+      // Uses the domain size of x as a log base for normalization.
+      val hXYs = {
+        val pairSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
+        pairSets.map { attrPairKey =>
+          attrPairKey -> {
+            val Seq(a1, a2) = attrPairKey.toSeq
+            val df = sparkSession.sql(
+              s"""
+                 |SELECT -SUM(hXY) hXY
+                 |FROM (
+                 |  SELECT $a1 X, $a2 Y, (cnt / $rowCnt) * log($logBase, cnt / $rowCnt) hXY
+                 |  FROM $attrStatView
+                 |  WHERE $a1 IS NOT NULL AND
+                 |    $a2 IS NOT NULL
+                 |)
+             """.stripMargin)
+
+            df.collect().map { row =>
+              if (!row.isNullAt(0)) row.getDouble(0) else 0.0
+            }.head
+          }
+        }
+      }.toMap
+
+      val hYs = discreteAttrs.map { attrKey =>
+        attrKey -> {
+          val df = sparkSession.sql(
+            s"""
+               |SELECT -SUM(hY) hY
+               |FROM (
+               |  /* TODO: Needs to reconsider how-to-handle NULL */
+               |  /* Use `MAX` to drop ($attrKey, null) tuples in `$discreteAttrView` */
+               |  SELECT $attrKey Y, (MAX(cnt) / $rowCnt) * log($logBase, MAX(cnt) / $rowCnt) hY
+               |  FROM $attrStatView
+               |  WHERE ${whereCaluseToFilterStat(attrKey)}
+               |  GROUP BY $attrKey
+               |)
            """.stripMargin)
 
-        attrPair -> pairWiseStatDf.selectExpr("SUM(pXY * log2(pXY / (pX * pY)))")
-          .collect.map { row =>
+          df.collect().map { row =>
             if (!row.isNullAt(0)) row.getDouble(0) else 0.0
           }.head
+        }
+      }.toMap
+
+      val pairWiseStats = attrPairsToRepair.map { case attrPair @ (attrToRepair, a) =>
+        // The conditional entropy is 0 for strongly correlated attributes and 1 for completely independent
+        // attributes. We reverse this to reflect the correlation.
+        attrPair -> (1.0 - (hXYs(Set(attrToRepair, a)) - hYs(a)))
       }
 
       val pairWiseStatMap = pairWiseStats.groupBy { case ((attrToRepair, _), _) =>
