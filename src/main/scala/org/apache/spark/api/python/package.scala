@@ -26,6 +26,8 @@ package object python {
 
   def withSparkSession[T](f: SparkSession => T): T = {
     SparkSession.getActiveSession.map { sparkSession =>
+      assert(sparkSession.sessionState.conf.crossJoinEnabled)
+      assert(sparkSession.sessionState.conf.cboEnabled)
       f(sparkSession)
     }.getOrElse {
       throw new SparkException("An active SparkSession not found.")

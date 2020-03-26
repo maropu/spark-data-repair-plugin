@@ -69,57 +69,50 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     }
   }
 
-  def filterDiscreteAttrs(
+  private def distinctStatMap(inputName: String): Map[String, Long] = {
+    assert(SparkSession.getActiveSession.nonEmpty)
+    val spark = SparkSession.getActiveSession.get
+    val df = spark.table(inputName)
+    val tableStats = {
+      val tableNode = df.queryExecution.analyzed.collectLeaves()
+        .head.asInstanceOf[LeafNode]
+      tableNode.computeStats()
+    }
+    val statMap = tableStats.attributeStats.map {
+      kv => (kv._1.name, kv._2.distinctCount.map(_.toLong).get)
+    }
+    if (!df.columns.forall(statMap.contains)) {
+      throw new SparkException(s"'$inputName' should be analyzed first")
+    }
+    statMap
+  }
+
+  def analyzeAndFilterDiscreteAttrs(
       dbName: String,
       tableName: String,
       rowId: String,
       blackAttrList: String,
-      discreteThres: Int,
-      approxCntEnabled: Boolean): String = {
+      discreteThres: Int): String = {
 
     logBasedOnLevel(s"filterDiscreteAttrs called with: dbName=$dbName tableName=$tableName rowId=$rowId " +
-      s"blackAttrList=$blackAttrList discreteThres=$discreteThres approxCntEnabled=$approxCntEnabled")
+      s"blackAttrList=$blackAttrList discreteThres=$discreteThres")
 
     withSparkSession { sparkSession =>
       val (inputDf, inputName, tableAttrs) = checkInputTable(dbName, tableName, rowId, blackAttrList)
-      val queryToComputeStats = {
-        val tableStats = {
-          val tableNode = inputDf.queryExecution.analyzed.collectLeaves().head.asInstanceOf[LeafNode]
-          tableNode.computeStats()
-        }
-        val attrStatMap = tableStats.attributeStats.map {
-          kv => (kv._1.name, kv._2.distinctCount)
-        }
 
-        // If we already have stats in a catalog, we just use them
-        val rowCount = tableStats.rowCount.map { cnt => s"bigint(${cnt.toLong}) /* rowCount */" }
-          .getOrElse("COUNT(1)")
-        val distinctCounts = tableAttrs.map { attrName =>
-          val aggFunc = if (attrName != rowId && approxCntEnabled) {
-            s"APPROX_COUNT_DISTINCT($attrName)"
-          } else {
-            s"COUNT(DISTINCT $attrName)"
-          }
-          attrStatMap.get(attrName).map {
-            distinctCntOpt => distinctCntOpt.map { v => s"bigint(${v.toLong}) /* $attrName */" }
-              .getOrElse(aggFunc)
-          }.getOrElse(aggFunc)
-        }
+      val statMap = {
+        // To compute the number of distinct values, runs `ANALYZE TABLE` first
+        sparkSession.sql(
+          s"""
+             |ANALYZE TABLE $inputName COMPUTE STATISTICS
+             |FOR COLUMNS ${tableAttrs.mkString(", ")}
+           """.stripMargin)
 
-        s"""
-           |SELECT
-           |  $rowCount,
-           |  ${distinctCounts.mkString(",\n  ")}
-           |FROM
-           |  $dbName.$tableName
-         """.stripMargin
+        distinctStatMap(inputName)
       }
 
-      logBasedOnLevel(s"Query to compute $dbName.$tableName stats:" + queryToComputeStats)
-
-      val statRow = sparkSession.sql(queryToComputeStats).take(1).head
-      val attrsWithStats = tableAttrs.zipWithIndex.map { case (f, i) => (f, statRow.getLong(i + 1)) }
-      val rowCnt = statRow.getLong(0)
+      val attrsWithStats = tableAttrs.map { a => (a, statMap(a)) }
+      val rowCnt = statMap(rowId)
 
       logBasedOnLevel({
         val distinctCnts = attrsWithStats.map { case (a, c) => s"distinctCnt($a):$c" }
@@ -358,12 +351,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       def whereCaluseToFilterStat(a: String): String =
         s"$a IS NOT NULL AND ${discreteAttrs.filter(_ != a).map(a => s"$a IS NULL").mkString(" AND ")}"
 
-      // Domain size of `attrToRepair`
-      val logBase = 10
-
       // Computes the conditional entropy: H(x|y) = H(x,y) - H(y).
       // H(x,y) denotes H(x U y). If H(x|y) = 0, then y determines x, i.e., y -> x.
-      // Uses the domain size of x as a log base for normalization.
       val hXYs = {
         val pairSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
         pairSets.map { attrPairKey =>
@@ -373,7 +362,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
               s"""
                  |SELECT -SUM(hXY) hXY
                  |FROM (
-                 |  SELECT $a1 X, $a2 Y, (cnt / $rowCnt) * log($logBase, cnt / $rowCnt) hXY
+                 |  SELECT $a1 X, $a2 Y, (cnt / $rowCnt) * log10(cnt / $rowCnt) hXY
                  |  FROM $attrStatView
                  |  WHERE $a1 IS NOT NULL AND
                  |    $a2 IS NOT NULL
@@ -395,7 +384,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                |FROM (
                |  /* TODO: Needs to reconsider how-to-handle NULL */
                |  /* Use `MAX` to drop ($attrKey, null) tuples in `$discreteAttrView` */
-               |  SELECT $attrKey Y, (MAX(cnt) / $rowCnt) * log($logBase, MAX(cnt) / $rowCnt) hY
+               |  SELECT $attrKey Y, (MAX(cnt) / $rowCnt) * log10(MAX(cnt) / $rowCnt) hY
                |  FROM $attrStatView
                |  WHERE ${whereCaluseToFilterStat(attrKey)}
                |  GROUP BY $attrKey
@@ -408,10 +397,14 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         }
       }.toMap
 
-      val pairWiseStats = attrPairsToRepair.map { case attrPair @ (attrToRepair, a) =>
+      // Uses the domain size of X as a log base for normalization
+      val domainStatMap = distinctStatMap(discreteAttrView)
+
+      val pairWiseStats = attrPairsToRepair.map { case attrPair @ (rvX, rvY) =>
         // The conditional entropy is 0 for strongly correlated attributes and 1 for completely independent
         // attributes. We reverse this to reflect the correlation.
-        attrPair -> (1.0 - (hXYs(Set(attrToRepair, a)) - hYs(a)))
+        val domainSize = domainStatMap(rvX)
+        attrPair -> (1.0 - ((hXYs(Set(rvX, rvY)) - hYs(rvY)) / scala.math.log10(domainSize)))
       }
 
       val pairWiseStatMap = pairWiseStats.groupBy { case ((attrToRepair, _), _) =>

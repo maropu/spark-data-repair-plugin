@@ -174,10 +174,9 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.row_id = None
         self.black_attr_list = ''
         self.discrete_thres = 80
-        self.approx_cnt_Enabled = False
-        self.min_corr_thres = 10.0
+        self.min_corr_thres = 0.80
         self.min_attrs_to_compute_domains = 1
-        self.max_attrs_to_compute_domains = 2
+        self.max_attrs_to_compute_domains = 4
         self.default_max_domain_size = 4
         # self.sample_ratio = 0.80
         self.sample_ratio = 1.0
@@ -295,9 +294,8 @@ class ScavengerRepairModel(SchemaSpyBase):
         metadata['row_id'] = self.row_id
         metadata['constraint_input_path'] = self.constraint_input_path
         metadata['sample_ratio'] = self.sample_ratio
-        metadata['discrete_attrs'] = self.svg_api.filterDiscreteAttrs(
-            self.db_name, self.table_name, self.row_id, self.black_attr_list, self.discrete_thres,
-            self.approx_cnt_Enabled)
+        metadata['discrete_attrs'] = self.svg_api.analyzeAndFilterDiscreteAttrs(
+            self.db_name, self.table_name, self.row_id, self.black_attr_list, self.discrete_thres)
 
         # Detects error cells
         metadata['err_cells'] = self.detectErrorCells(metadata)
@@ -436,4 +434,5 @@ if not sc._jvm.SparkSession.getActiveSession().isDefined():
 
 # Since 3.0, `spark.sql.crossJoin.enabled` is set to true by default
 spark.sql("SET spark.sql.crossJoin.enabled=true")
+spark.sql("SET spark.sql.cbo.enabled=true")
 
