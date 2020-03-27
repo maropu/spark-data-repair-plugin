@@ -22,35 +22,35 @@ from pyspark.sql import DataFrame, SparkSession
 
 class RepairDataset:
 
-    def __init__(self, metadata, tensor):
+    def __init__(self, env, tensor):
         self.spark = SparkSession.builder.getOrCreate()
-        self.total_vars = int(metadata['total_vars'])
-        self.classes = int(metadata['classes'])
-        self.metadata = metadata
+        self.total_vars = int(env['total_vars'])
+        self.classes = int(env['classes'])
+        self.env = env
         self.tensor = tensor
 
     def setup(self):
         # weak labels
-        df = self.spark.table(self.metadata['weak_labels']).toPandas()
+        df = self.spark.table(self.env['weak_labels']).toPandas()
         self.weak_labels = -1 * torch.ones(self.total_vars, 1).type(torch.LongTensor)
         self.is_clean = torch.zeros(self.total_vars, 1).type(torch.LongTensor)
         for index, row in df.iterrows():
-            vid = int(row['vid'])
+            rv_id = int(row['__random_variable_id__'])
             label = int(row['weakLabelIndex'])
             fixed = int(row['fixed'])
             clean = int(row['clean'])
-            self.weak_labels[vid] = label
-            self.is_clean[vid] = clean
+            self.weak_labels[rv_id] = label
+            self.is_clean[rv_id] = clean
 
         # variable masks
         self.var_to_domsize = {}
-        df = self.spark.table(self.metadata['var_masks']).toPandas()
+        df = self.spark.table(self.env['var_masks']).toPandas()
         self.var_class_mask = torch.zeros(self.total_vars, self.classes)
         for index, row in df.iterrows():
-            vid = int(row['vid'])
+            rv_id = int(row['__random_variable_id__'])
             max_class = int(row['domainSize'])
-            self.var_class_mask[vid, max_class:] = -10e6
-            self.var_to_domsize[vid] = max_class
+            self.var_class_mask[rv_id, max_class:] = -10e6
+            self.var_to_domsize[rv_id] = max_class
 
     def train_dataset(self):
         train_idx = (self.weak_labels != -1).nonzero()[:,0]

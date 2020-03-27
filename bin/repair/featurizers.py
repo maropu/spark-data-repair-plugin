@@ -30,7 +30,7 @@ class Featurizer:
     __metaclass__ = ABCMeta
 
     def __init__(self, name, learnable=True, init_weight=1.0, batch_size=32, bulk_collect_thres=1000):
-        self.metadata = None
+        self.env = None
 
         self.name = name
         self.learnable = learnable
@@ -45,12 +45,12 @@ class Featurizer:
     def concat_tensors(self, tensors):
         return torch.cat(tensors)
 
-    def setup(self, metadata):
-        self.metadata = metadata
-        self.feature_attrs = metadata['feature_attrs']
+    def setup(self, env):
+        self.env = env
+        self.feature_attrs = env['feature_attrs']
         self.total_attrs = int(len(self.feature_attrs))
-        self.total_vars = int(metadata['total_vars'])
-        self.classes = int(metadata['classes'])
+        self.total_vars = int(env['total_vars'])
+        self.classes = int(env['classes'])
 
     @abstractmethod
     def create_dataframe(self):
@@ -90,7 +90,7 @@ class InitAttrFeaturizer(Featurizer):
         Featurizer.__init__(self, 'InitAttrFeaturizer', learnable=False, init_weight=init_weight)
 
     def create_dataframe(self):
-        tempView = self.svgApi.createInitAttrFeatureView(self.metadata['cell_domain'])
+        tempView = self.svgApi.createInitAttrFeatureView(self.env['cell_domain'])
         return self.spark.table(tempView)
 
     def create_tensor_from_pandas(self, pdf):
@@ -125,15 +125,15 @@ class FreqFeaturizer(Featurizer):
 
     def create_dataframe(self):
         tempView = self.svgApi.createFreqFeatureView(
-            self.metadata['discrete_attrs'],
-            self.metadata['cell_domain'],
-            self.metadata['err_cells']
+            self.env['discrete_attrs'],
+            self.env['cell_domain'],
+            self.env['err_cells']
         )
         return self.spark.table(tempView)
 
     def create_tensor_from_pandas(self, pdf):
         tensors = []
-        for name, group in pdf.groupby(['vid']):
+        for name, group in pdf.groupby(['__random_variable_id__']):
             tensor = torch.zeros(1, self.classes, self.total_attrs)
             for index, row in group.iterrows():
                 idx = int(row['idx'])
@@ -146,10 +146,10 @@ class FreqFeaturizer(Featurizer):
         return tensors
 
     def create_tensor_from_spark(self, df):
-        group_vid = None
+        group_rv_id = None
         tensors = []
         tensor = None
-        iter = df.orderBy('vid').toLocalIterator()
+        iter = df.orderBy('__random_variable_id__').toLocalIterator()
         while True:
             try:
                 row = next(iter)
@@ -157,10 +157,10 @@ class FreqFeaturizer(Featurizer):
                 tensors.append(tensor)
                 break
 
-            if group_vid != row.vid:
+            if group_rv_id != row.__random_variable_id__:
                 if tensor is not None:
                     tensors.append(tensor)
-                group_vid = row.vid
+                group_rv_id = row.__random_variable_id__
                 tensor = torch.zeros(1, self.classes, self.total_attrs)
 
             idx = int(row.idx)
@@ -180,19 +180,19 @@ class OccurAttrFeaturizer(Featurizer):
 
     def create_dataframe(self):
         tempView = self.svgApi.createOccurAttrFeatureView(
-            self.metadata['discrete_attrs'],
-            ','.join(self.metadata['feature_attrs']),
-            self.metadata['err_cells'],
-            self.metadata['cell_domain'],
-            self.metadata['attr_stats'],
-            self.metadata['row_id']
+            self.env['discrete_attrs'],
+            ','.join(self.env['feature_attrs']),
+            self.env['err_cells'],
+            self.env['cell_domain'],
+            self.env['attr_stats'],
+            self.env['row_id']
         )
         return self.spark.table(tempView)
 
     def create_tensor_from_pandas(self, pdf):
         tensors = []
-        sorted_domain = pdf.reset_index().sort_values(by=['vid'])[['vid', 'rv_domain_idx', 'idx', 'prob']]
-        for name, group in sorted_domain.groupby(['vid']):
+        sorted_domain = pdf.reset_index().sort_values(by=['__random_variable_id__'])[['__random_variable_id__', 'rv_domain_idx', 'idx', 'prob']]
+        for name, group in sorted_domain.groupby(['__random_variable_id__']):
             tensor = torch.zeros(1, self.classes, self.total_attrs * self.total_attrs)
             for index, row in group.iterrows():
                 rv_domain_idx = int(row['rv_domain_idx'])
@@ -205,10 +205,10 @@ class OccurAttrFeaturizer(Featurizer):
         return tensors
 
     def create_tensor_from_spark(self, df):
-        group_vid = None
+        group_rv_id = None
         tensors = []
         tensor = None
-        iter = df.orderBy('vid').toLocalIterator()
+        iter = df.orderBy('__random_variable_id__').toLocalIterator()
         while True:
             try:
                 row = next(iter)
@@ -216,10 +216,10 @@ class OccurAttrFeaturizer(Featurizer):
                 tensors.append(tensor)
                 break
 
-            if group_vid != row.vid:
+            if group_rv_id != row.__random_variable_id__:
                 if tensor is not None:
                     tensors.append(tensor)
-                group_vid = row.vid
+                group_rv_id = row.__random_variable_id__
                 tensor = torch.zeros(1, self.classes, self.total_attrs * self.total_attrs)
 
             rv_domain_idx = int(row.rv_domain_idx)
@@ -243,12 +243,12 @@ class ConstraintFeaturizer(Featurizer):
 
     def create_dataframe(self):
         constraint_feat_as_json = self.svgApi.createConstraintFeatureView(
-            self.metadata['constraint_input_path'],
-            self.metadata['discrete_attrs'],
-            self.metadata['err_cells'],
-            self.metadata['pos_values'],
-            self.metadata['row_id'],
-            self.metadata['sample_ratio']
+            self.env['constraint_input_path'],
+            self.env['discrete_attrs'],
+            self.env['err_cells'],
+            self.env['pos_values'],
+            self.env['row_id'],
+            self.env['sample_ratio']
         )
         if len(constraint_feat_as_json) > 0:
             self.constraint_feat = json.loads(constraint_feat_as_json)
@@ -261,17 +261,17 @@ class ConstraintFeaturizer(Featurizer):
         for name, group in pdf.groupby(['constraintId']):
             tensor = torch.zeros(self.total_vars, self.classes, 1)
             for index, row in group.iterrows():
-                vid = int(row['vid'])
+                rv_id = int(row['__random_variable_id__'])
                 val_id = int(row['valId'])
                 feat_val = float(row['violations'])
-                tensor[vid][val_id][0] = feat_val
+                tensor[rv_id][val_id][0] = feat_val
 
             tensors.append(tensor)
 
         return tensors
 
     def create_tensor_from_spark(self, df):
-        group_vid = None
+        group_rv_id = None
         tensors = []
         tensor = None
         iter = df.orderBy('constraintId').toLocalIterator()
@@ -282,16 +282,16 @@ class ConstraintFeaturizer(Featurizer):
                 tensors.append(tensor)
                 break
 
-            if group_vid != row.vid:
+            if group_rv_id != row.__random_variable_id__:
                 if tensor is not None:
                     tensors.append(tensor)
-                group_vid = row.vid
+                group_rv_id = row.__random_variable_id__
                 tensor = torch.zeros(self.total_vars, self.classes, 1)
 
-            vid = int(row.vid)
+            rv_id= int(row.__random_variable_id__)
             val_id = int(row.valId)
             feat_val = float(row.violations)
-            tensor[vid][val_id][0] = feat_val
+            tensor[rv_id][val_id][0] = feat_val
 
         return tensors
 

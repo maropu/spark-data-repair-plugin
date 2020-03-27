@@ -25,12 +25,12 @@ class ErrorDetector:
     __metaclass__ = ABCMeta
 
     def __init__(self, name):
-        self.metadata = None
+        self.env = None
         self.spark = SparkSession.builder.getOrCreate()
         self.svgApi = self.spark.sparkContext._active_spark_context._jvm.ScavengerErrorDetectorApi
 
-    def setup(self, metadata):
-        self.metadata = metadata
+    def setup(self, env):
+        self.env = env
 
     @abstractmethod
     def detect(self):
@@ -42,7 +42,7 @@ class NullErrorDetector(ErrorDetector):
         ErrorDetector.__init__(self, 'NullErrorDetector')
 
     def detect(self):
-        jdf = self.svgApi.detectNullCells('', self.metadata['discrete_attrs'], self.metadata['row_id'])
+        jdf = self.svgApi.detectNullCells('', self.env['discrete_attrs'], self.env['row_id'])
         return DataFrame(jdf, self.spark._wrapped)
 
 class ConstraintErrorDetector(ErrorDetector):
@@ -52,6 +52,6 @@ class ConstraintErrorDetector(ErrorDetector):
 
     def detect(self):
         jdf = self.svgApi.detectErrorCellsFromConstraints(
-            self.metadata['constraint_input_path'], '', self.metadata['discrete_attrs'], self.metadata['row_id'])
+            self.env['constraint_input_path'], '', self.env['discrete_attrs'], self.env['row_id'])
         return DataFrame(jdf, self.spark._wrapped)
 

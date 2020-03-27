@@ -197,7 +197,7 @@ class ScavengerRepairModel(SchemaSpyBase):
             ConstraintFeaturizer()
         ]
 
-        # Temporary tables for metadata
+        # Temporary tables for env
         self.meta_table_names = [
             'discrete_attrs',
             'err_cells',
@@ -253,10 +253,10 @@ class ScavengerRepairModel(SchemaSpyBase):
     def tempName(self, prefix):
         return '%s_%s' % (prefix, datetime.datetime.now().strftime('%Y%m%d%H%M%S'))
 
-    def detectErrorCells(self, metadata):
-        # Initializes defined error detectors with the given metadata
+    def detectErrorCells(self, env):
+        # Initializes defined error detectors with the given env
         for d in self.detectors:
-            d.setup(metadata)
+            d.setup(env)
 
         error_cells_dfs = [ d.detect() for d in self.detectors ]
 
@@ -271,17 +271,17 @@ class ScavengerRepairModel(SchemaSpyBase):
         clean_df = DataFrame(self.svg_api.filterCleanRows(self.db_name, self.table_name, self.row_id, err_cells), self.spark._wrapped)
         clean_df.createOrReplaceTempView(clean_input_view)
 
-    def exportRepairedDebugView(self, metadata):
+    def exportRepairedDebugView(self, env):
         repaired_debug_view = self.tempName('repaired_debug_view')
         logging.warning("exports a repaired debug view as '%s'..." % repaired_debug_view)
 
         input_df = DataFrame(self.svg_api.flattenAsDataFrame(self.db_name, self.table_name, self.row_id), self.spark._wrapped)
-        input_df.join(self.spark.table(metadata['repair_candidates']), [self.row_id, 'attribute'], 'left_outer') \
+        input_df.join(self.spark.table(env['repair_candidates']), [self.row_id, 'attribute'], 'left_outer') \
             .selectExpr(self.row_id, "attribute", "IF(isnotnull(inferred), inferred, val) AS val", \
                 "isnotnull(inferred) AS replaced", "val AS orig_val", "dist") \
             .createOrReplaceTempView(repaired_debug_view)
 
-    def cleanupMetadataViews(self):
+    def cleanupEnvViews(self):
         for t in self.meta_table_names:
             self.spark.sql("DROP VIEW IF EXISTS %s" % t)
 
@@ -289,48 +289,48 @@ class ScavengerRepairModel(SchemaSpyBase):
         if (self.constraint_input_path is None or self.table_name is None or self.row_id is None):
             raise ValueError('`setConstraints`, `setTableName`, and `setRowId` should be called before doing inferences')
 
-        # Metadata used to repair a given table
-        metadata = {}
-        metadata['row_id'] = self.row_id
-        metadata['constraint_input_path'] = self.constraint_input_path
-        metadata['sample_ratio'] = self.sample_ratio
-        metadata['discrete_attrs'] = self.svg_api.analyzeAndFilterDiscreteAttrs(
+        # Env used to repair a given table
+        env = {}
+        env['row_id'] = self.row_id
+        env['constraint_input_path'] = self.constraint_input_path
+        env['sample_ratio'] = self.sample_ratio
+        env['discrete_attrs'] = self.svg_api.analyzeAndFilterDiscreteAttrs(
             self.db_name, self.table_name, self.row_id, self.black_attr_list, self.discrete_thres)
 
         # Detects error cells
-        metadata['err_cells'] = self.detectErrorCells(metadata)
-        if self.spark.table(metadata['err_cells']).count() == 0:
-            self.cleanupMetadataViews()
+        env['err_cells'] = self.detectErrorCells(env)
+        if self.spark.table(env['err_cells']).count() == 0:
+            self.cleanupEnvViews()
 
             input_name = '`%s`.`%s`' % (self.db_name, self.table_name) \
                 if not self.db_name else '`%s`' % self.table_name
             return self.spark.table(input_name)
 
         # Exports the clean view for debugging
-        self.exportCleanView(metadata['err_cells'])
+        self.exportCleanView(env['err_cells'])
 
         # Computes various metrics for PyTorch features
-        metadata['attr_stats'] = self.svg_api.computeAttrStats(
-            metadata['discrete_attrs'], metadata['err_cells'], self.row_id, self.sample_ratio, self.stat_thres_ratio)
-        metadata_as_json = self.svg_api.computePrerequisiteMetadata(
-            metadata['discrete_attrs'], metadata['attr_stats'], metadata['err_cells'],
+        env['attr_stats'] = self.svg_api.computeAttrStats(
+            env['discrete_attrs'], env['err_cells'], self.row_id, self.sample_ratio, self.stat_thres_ratio)
+        env_as_json = self.svg_api.computePrerequisiteMetadata(
+            env['discrete_attrs'], env['attr_stats'], env['err_cells'],
             self.row_id, self.min_corr_thres, self.min_attrs_to_compute_domains,
             self.max_attrs_to_compute_domains,
             self.default_max_domain_size)
 
-        metadata.update(json.loads(metadata_as_json))
+        env.update(json.loads(env_as_json))
 
-        # Gets #variables and #classes from metadata
-        total_vars = int(metadata['total_vars'])
-        classes = int(metadata['classes'])
+        # Gets #variables and #classes from env
+        total_vars = int(env['total_vars'])
+        classes = int(env['classes'])
 
-        # Initializes defined features with the given metadata
+        # Initializes defined features with the given env
         for f in self.featurizers:
-            f.setup(metadata)
+            f.setup(env)
 
-        # Prepares train & infer data sets from metadata
+        # Prepares train & infer data sets from env
         tensor = create_tensor_from_featurizers(self.featurizers)
-        dataset = RepairDataset(metadata, tensor)
+        dataset = RepairDataset(env, tensor)
         dataset.setup()
 
         # Builds a repair model and repairs erronous cells
@@ -349,26 +349,26 @@ class ScavengerRepairModel(SchemaSpyBase):
         Y_assign = Y_pred.data.numpy().argmax(axis=1)
         domain_size = dataset.var_to_domsize
         for idx in range(Y_pred.shape[0]):
-            vid = int(infer_idx[idx])
+            rv_id = int(infer_idx[idx])
             rv_distr = list(Y_pred[idx].data.numpy())
             rv_val_idx = int(Y_assign[idx])
             rv_prob = Y_pred[idx].data.numpy().max()
-            d_size = domain_size[vid]
-            distr.append({'vid': vid, 'dist':[str(p) for p in rv_distr[:d_size]]})
+            d_size = domain_size[rv_id]
+            distr.append({'__random_variable_id__': rv_id, 'dist':[str(p) for p in rv_distr[:d_size]]})
 
         # Creates a dataframe for repair-inferred output
-        metadata['repair_dist'] = 'repair_dist_view_20200313'
-        self.spark.createDataFrame(pd.DataFrame(data=distr)).createOrReplaceTempView(metadata['repair_dist'])
-        metadata['repair_candidates'] = self.svg_api.createRepairCandidates(
-            metadata['discrete_attrs'], metadata['cell_domain'], metadata['repair_dist'], self.row_id)
+        env['repair_dist'] = self.tempName('repair_dist_view')
+        self.spark.createDataFrame(pd.DataFrame(data=distr)).createOrReplaceTempView(env['repair_dist'])
+        env['repair_candidates'] = self.svg_api.createRepairCandidates(
+            env['discrete_attrs'], env['cell_domain'], env['repair_dist'], self.row_id)
 
         # Exports the repair view for debugging
-        self.exportRepairedDebugView(metadata)
+        self.exportRepairedDebugView(env)
 
         clean_df = self.svg_api.repairTableFrom(
-            metadata['repair_candidates'], self.db_name, self.table_name, self.row_id)
+            env['repair_candidates'], self.db_name, self.table_name, self.row_id)
 
-        self.cleanupMetadataViews()
+        self.cleanupEnvViews()
 
         return clean_df
 
@@ -435,4 +435,6 @@ if not sc._jvm.SparkSession.getActiveSession().isDefined():
 # Since 3.0, `spark.sql.crossJoin.enabled` is set to true by default
 spark.sql("SET spark.sql.crossJoin.enabled=true")
 spark.sql("SET spark.sql.cbo.enabled=true")
+
+print("Scavenger APIs (version %s) available as 'scavenger'." % ('0.1.0-spark2.4-EXPERIMENTAL'))
 

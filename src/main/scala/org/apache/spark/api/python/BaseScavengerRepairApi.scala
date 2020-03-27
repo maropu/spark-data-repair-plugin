@@ -29,6 +29,8 @@ import org.apache.spark.util.{Utils => SparkUtils}
 
 class BaseScavengerRepairApi extends Logging {
 
+  protected val rvId = "__random_variable_id__"
+
   protected case class Metadata(spark: SparkSession) {
     private val kvs = mutable.ArrayBuffer[(String, Any)]()
 

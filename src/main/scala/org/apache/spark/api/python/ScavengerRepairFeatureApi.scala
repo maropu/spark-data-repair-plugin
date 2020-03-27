@@ -54,9 +54,9 @@ object ScavengerRepairFeatureApi extends BaseScavengerRepairApi {
       val freqFtDf = attrsToRepair.map { attr =>
         sparkSession.sql(
           s"""
-             |SELECT vid, valId idx, feature_idx, (freq / $tableRowCnt) prob
+             |SELECT $rvId, valId idx, feature_idx, (freq / $tableRowCnt) prob
              |FROM (
-             |  SELECT vid, feature_idx, posexplode(domain) (valId, rVal)
+             |  SELECT $rvId, feature_idx, posexplode(domain) (valId, rVal)
              |  FROM $cellDomainView
              |) d, (
              |  SELECT $attr, COUNT(1) freq
@@ -106,17 +106,17 @@ object ScavengerRepairFeatureApi extends BaseScavengerRepairApi {
           sparkSession.sql(
             s"""
                |SELECT
-               |  vid,
+               |  $rvId,
                |  valId rv_domain_idx,
                |  $index idx,
                |  (cntYX / $tableRowCnt) pYX,
                |  (cntX / $tableRowCnt) pX,
                |  COALESCE(prob, DOUBLE($smoothingParam)) prob
                |FROM (
-               |  SELECT vid, valId, rVal, $attr
+               |  SELECT $rvId, valId, rVal, $attr
                |  FROM
                |    $discreteAttrView t, (
-               |      SELECT vid, $rowId, posexplode(domain) (valId, rVal)
+               |      SELECT $rvId, $rowId, posexplode(domain) (valId, rVal)
                |      FROM $cellDomainView
                |      WHERE attrName = '$rvAttr'
                |    ) d
@@ -143,7 +143,7 @@ object ScavengerRepairFeatureApi extends BaseScavengerRepairApi {
                |  t1.$attr = t2.$attr
              """.stripMargin)
         }
-      }.reduce(_.union(_)).orderBy("vid")
+      }.reduce(_.union(_)).orderBy(rvId)
 
       createAndCacheTempView(occFtDf, "occ_attr_feature")
     }
@@ -210,7 +210,7 @@ object ScavengerRepairFeatureApi extends BaseScavengerRepairApi {
               val queryToCountViolations =
                 s"""
                    |SELECT
-                   |  ${offset + i} constraintId, vid, valId, COUNT(1) violations
+                   |  ${offset + i} constraintId, $rvId, valId, COUNT(1) violations
                    |FROM
                    |  $errRowView AS t1, $errRowView AS t2, $posValueView AS t3
                    |  /* $discreteAttrView AS t1, $discreteAttrView AS t2, $posValueView AS t3 */
@@ -221,7 +221,7 @@ object ScavengerRepairFeatureApi extends BaseScavengerRepairApi {
                    |  $fixedWhereCaluses AND
                    |  t3.rVal = t2.$rvAttr
                    |GROUP BY
-                   |  vid, valId
+                   |  $rvId, valId
                  """.stripMargin
 
               logBasedOnLevel(queryToCountViolations)
