@@ -330,7 +330,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       maxAttrsToComputeDomains: Int,
       defaultMaxDomainSize: Int): String = {
 
-    logBasedOnLevel(s"computeMetadata called with: discreteAttrView=$discreteAttrView " +
+    logBasedOnLevel(s"computePrerequisiteMetadata called with: discreteAttrView=$discreteAttrView " +
       s"attrStatView=$attrStatView errCellView=$errCellView rowId=$rowId minCorrThres=$minCorrThres " +
       s"minAttrsToComputeDomains=$minAttrsToComputeDomains maxAttrsToComputeDomains=$maxAttrsToComputeDomains " +
       s"defaultMaxDomainSize=$defaultMaxDomainSize")

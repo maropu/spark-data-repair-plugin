@@ -253,7 +253,22 @@ class ScavengerRepairModel(SchemaSpyBase):
     def tempName(self, prefix):
         return '%s_%s' % (prefix, datetime.datetime.now().strftime('%Y%m%d%H%M%S'))
 
-    def detectErrorCells(self, env):
+    def detectErrorCells(self):
+        if (self.constraint_input_path is None or self.table_name is None or self.row_id is None):
+            raise ValueError('`setConstraints`, `setTableName`, and `setRowId` should be called before doing inferences')
+
+        # Env used to repair a given table
+        env = {}
+        env['row_id'] = self.row_id
+        env['constraint_input_path'] = self.constraint_input_path
+        env['sample_ratio'] = self.sample_ratio
+        env['discrete_attrs'] = self.svg_api.analyzeAndFilterDiscreteAttrs(
+            self.db_name, self.table_name, self.row_id, self.black_attr_list, self.discrete_thres)
+
+        err_cells = self.__detectErrorCells(env)
+        return self.spark.table(err_cells)
+
+    def __detectErrorCells(self, env):
         # Initializes defined error detectors with the given env
         for d in self.detectors:
             d.setup(env)
@@ -298,7 +313,7 @@ class ScavengerRepairModel(SchemaSpyBase):
             self.db_name, self.table_name, self.row_id, self.black_attr_list, self.discrete_thres)
 
         # Detects error cells
-        env['err_cells'] = self.detectErrorCells(env)
+        env['err_cells'] = self.__detectErrorCells(env)
         if self.spark.table(env['err_cells']).count() == 0:
             self.cleanupEnvViews()
 
