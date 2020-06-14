@@ -20,7 +20,6 @@ package org.apache.spark.api.python
 import org.apache.spark.SparkException
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.plans.logical.LeafNode
-import org.apache.spark.sql.types._
 import org.apache.spark.util.{Utils => SparkUtils}
 
 import io.github.maropu.Utils._
@@ -30,7 +29,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
   /**
    * To compare result rows easily, this method flattens an input table
-   * as a schema (tid, attribute, val).
+   * as a schema (`rowId`, attribute, val).
    */
   def flattenAsDataFrame(dbName: String, tableName: String, rowId: String): DataFrame = {
     logBasedOnLevel(s"flattenAsDataFrame called with: dbName=$dbName tableName=$tableName rowId=$rowId")
@@ -87,30 +86,46 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     statMap
   }
 
-  def analyzeAndFilterDiscreteAttrs(
+  private def computeAndGetTableStats(tableIdentifier: String): Map[String, Long] = {
+    assert(SparkSession.getActiveSession.isDefined)
+    val spark = SparkSession.getActiveSession.get
+    val tableAttrs = spark.table(tableIdentifier).columns
+    // To compute the number of distinct values, runs `ANALYZE TABLE` first
+    spark.sql(
+      s"""
+         |ANALYZE TABLE $tableIdentifier COMPUTE STATISTICS
+         |FOR COLUMNS ${tableAttrs.mkString(", ")}
+       """.stripMargin)
+
+    distinctStatMap(tableIdentifier)
+  }
+
+  def computeDomainSizes(discreteAttrView: String): String = {
+    logBasedOnLevel(s"computeDomainSizes called with: discreteAttrView=$discreteAttrView")
+
+    withSparkSession { _ =>
+      val statMap = computeAndGetTableStats(discreteAttrView)
+      Seq("distinct_stats" -> statMap.mapValues(_.toString)).asJson
+    }
+  }
+
+  def convertToDiscreteAttrs(
       dbName: String,
       tableName: String,
       rowId: String,
-      blackAttrList: String,
-      discreteThres: Int): String = {
+      discreteThres: Int,
+      // TODO: Discretizes continuous values into buckets
+      cntValueDiscretization: Boolean,
+      blackAttrList: String): String = {
 
-    logBasedOnLevel(s"filterDiscreteAttrs called with: dbName=$dbName tableName=$tableName rowId=$rowId " +
-      s"blackAttrList=$blackAttrList discreteThres=$discreteThres")
+    logBasedOnLevel(s"convertToDiscreteAttrs called with: dbName=$dbName tableName=$tableName " +
+      s"rowId=$rowId discreteThres=$discreteThres " +
+      s"blackAttrList=${if (!blackAttrList.isEmpty) blackAttrList else "<none>"}")
 
-    withSparkSession { sparkSession =>
+    withSparkSession { _ =>
       val (inputDf, inputName, tableAttrs) = checkInputTable(dbName, tableName, rowId, blackAttrList)
 
-      val statMap = {
-        // To compute the number of distinct values, runs `ANALYZE TABLE` first
-        sparkSession.sql(
-          s"""
-             |ANALYZE TABLE $inputName COMPUTE STATISTICS
-             |FOR COLUMNS ${tableAttrs.mkString(", ")}
-           """.stripMargin)
-
-        distinctStatMap(inputName)
-      }
-
+      val statMap = computeAndGetTableStats(inputName)
       val attrsWithStats = tableAttrs.map { a => (a, statMap(a)) }
       val rowCnt = statMap(rowId)
 
@@ -155,77 +170,27 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       outputToConsole(s"Loaded $rowCnt rows with ${rowCnt * discreteAttrs.size} cells")
 
       val discreteDf = inputDf.selectExpr(inputDf.columns.filter(attrSet.contains) :+ rowId: _*)
-      createAndCacheTempView(discreteDf, "discrete_attrs")
+      Seq("discrete_attrs" -> createAndCacheTempView(discreteDf, "discrete_attrs"),
+        "distinct_stats" -> statMap.mapValues(_.toString)).asJson
     }
   }
 
-  def createRepairCandidates(discreteAttrView: String, cellDomainView: String, distView: String, rowId: String): String = {
-    logBasedOnLevel(s"createRepairCandidates called with: discreteAttrView=$discreteAttrView " +
-      s"cellDomainView=$cellDomainView distView=$distView")
-
-    withSparkSession { sparkSession =>
-      val repairCandidateDf = sparkSession.sql(
-        s"""
-           |SELECT
-           |  $rowId,
-           |  attrName AS attribute,
-           |  arrays_zip(domain, dist) dist,
-           |  /* TODO: Use array_sort in v3.0 */
-           |  domain[array_position(dist, array_max(dist)) - 1] inferred
-           |FROM
-           |  $distView d
-           |INNER JOIN
-           |  $cellDomainView c
-           |ON
-           |  d.$rvId = c.$rvId
-         """.stripMargin)
-
-      createAndCacheTempView(repairCandidateDf, "repair_candidates")
-    }
-  }
-
-  def filterCleanRows(dbName: String, tableName: String, rowId: String, errCellView: String): DataFrame = {
-    logBasedOnLevel(s"filterCleanRows called with: dbName=$dbName tableName=$tableName " +
-      s"rowId=$rowId errCellView=$errCellView")
-    withSparkSession { sparkSession =>
-      val (inputDf, _, tableAttrs) = checkInputTable(dbName, tableName, rowId)
-
-      withTempView(inputDf) { inputView =>
-        sparkSession.sql(
-          s"""
-             |SELECT t1.$rowId, ${tableAttrs.map(v => s"t1.$v").mkString(", ")}
-             |FROM $inputView t1, (
-             |  SELECT DISTINCT $rowId
-             |  FROM $errCellView
-             |) t2
-             |WHERE t1.$rowId = t2.$rowId
-             |/*
-             |// This query throws an analysis exception in v2.4.x
-             |SELECT t1.$rowId, ${tableAttrs.map(v => s"t1.$v").mkString(", ")}
-             |FROM $inputView
-             |WHERE $rowId IN (
-             |  SELECT DISTINCT $rowId
-             |  FROM $errCellView
-             |)
-             | */
-         """.stripMargin)
-      }
-    }
-  }
-
-  def repairTableFrom(repairCandidateTable: String, dbName: String, tableName: String, rowId: String): DataFrame = {
-    logBasedOnLevel(s"repairTableFrom called with: repairCandidateTable=$repairCandidateTable " +
+  def repairAttrsFrom(repairedCells: String, dbName: String, tableName: String, rowId: String): String = {
+    logBasedOnLevel(s"repairAttrsFrom called with: repairedCellTable=$repairedCells " +
       s"dbName=$dbName tableName=$tableName rowId=$rowId")
 
     withSparkSession { sparkSession =>
+      // `repairedCells` must have `$rowId`, `attribute`, and `repaired` columns
+      checkIfColumnsExistIn(repairedCells, rowId :: "attrName" :: "weakValue" :: Nil)
+
       val (inputDf, inputName, tableAttrs) = checkInputTable(dbName, tableName, rowId)
       val attrsToRepair = {
-        sparkSession.sql(s"SELECT collect_set(attribute) FROM $repairCandidateTable")
+        sparkSession.sql(s"SELECT collect_set(attrName) FROM $repairedCells")
           .collect.head.getSeq[String](0).toSet
       }
 
       outputToConsole({
-        val repairNum =  sparkSession.table(repairCandidateTable).count()
+        val repairNum =  sparkSession.table(repairedCells).count()
         val totalCellNum = inputDf.count() * tableAttrs.length
         val repairRatio = (repairNum + 0.0) / totalCellNum
         s"Repairing $repairNum/$totalCellNum error cells (${repairRatio * 100.0}%) of " +
@@ -238,14 +203,14 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
            |SELECT
            |  $rowId, map_from_entries(COLLECT_LIST(r)) AS repairs
            |FROM (
-           |  select $rowId, struct(attribute, inferred) r
-           |  FROM $repairCandidateTable
+           |  select $rowId, struct(attrName, weakValue) r
+           |  FROM $repairedCells
            |)
            |GROUP BY
            |  $rowId
          """.stripMargin)
 
-      withTempView(inputDf) { inputView =>
+      val repaired = withTempView(inputDf) { inputView =>
         withTempView(repairDf) { repairView =>
           val cleanAttrs = tableAttrs.map {
             case attr if attr == rowId =>
@@ -264,6 +229,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
              """.stripMargin)
         }
       }
+
+      createAndCacheTempView(repaired, "repaired")
     }
   }
 
@@ -320,23 +287,70 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     }
   }
 
-  def computePrerequisiteMetadata(
+  def convertErrorCellsToNull(discreteAttrView: String, errCellView: String, rowId: String): String = {
+    logBasedOnLevel(s"convertErrorCellsToNull called with: discreteAttrView=$discreteAttrView " +
+      s"errCellView=$errCellView rowId=$rowId")
+    withSparkSession { sparkSession =>
+      // `errCellView` must have `$rowId` and `attrName` columns
+      checkIfColumnsExistIn(errCellView, rowId :: "attrName" :: Nil)
+
+      val attrsToRepair = {
+        sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
+          .collect.head.getSeq[String](0).toSet
+      }
+
+      val errAttrDf = sparkSession.sql(
+        s"""
+           |SELECT $rowId, collect_set(attrName) AS errors
+           |FROM $errCellView
+           |GROUP BY $rowId
+         """.stripMargin)
+
+      val repairBase = withTempView(errAttrDf) { errAttrView =>
+        val cleanAttrs = sparkSession.table(discreteAttrView).columns.map {
+          case attr if attr == rowId =>
+            s"$discreteAttrView.$rowId"
+          case attr if attrsToRepair.contains(attr) =>
+            s"IF(array_contains(errors, '$attr'), NULL, $attr) AS $attr"
+          case cleanAttr =>
+            cleanAttr
+        }
+        sparkSession.sql(
+          s"""
+             |SELECT ${cleanAttrs.mkString(", ")}
+             |FROM $discreteAttrView
+             |LEFT OUTER JOIN $errAttrView
+             |ON $discreteAttrView.$rowId = $errAttrView.$rowId
+           """.stripMargin)
+      }
+
+      createAndCacheTempView(repairBase, "repair_base")
+    }
+  }
+
+  def computeDomainInErrorCells(
       discreteAttrView: String,
       attrStatView: String,
       errCellView: String,
       rowId: String,
-      minCorrThres: Double,
-      minAttrsToComputeDomains: Int,
       maxAttrsToComputeDomains: Int,
-      defaultMaxDomainSize: Int): String = {
+      minCorrThres: Double,
+      domain_threshold_alpha: Double,
+      domain_threshold_beta: Double): String = {
 
-    logBasedOnLevel(s"computePrerequisiteMetadata called with: discreteAttrView=$discreteAttrView " +
-      s"attrStatView=$attrStatView errCellView=$errCellView rowId=$rowId minCorrThres=$minCorrThres " +
-      s"minAttrsToComputeDomains=$minAttrsToComputeDomains maxAttrsToComputeDomains=$maxAttrsToComputeDomains " +
-      s"defaultMaxDomainSize=$defaultMaxDomainSize")
+    require(0 < maxAttrsToComputeDomains, "maxAttrsToComputeDomains should be greater than 0.")
+    require(0.0 <= minCorrThres && minCorrThres < 1.0, "minCorrThres should be in [0.0, 1.0).")
+    require(0.0 <= domain_threshold_alpha && domain_threshold_alpha < 1.0,
+      "domain_threashold_alpha should be in [0.0, 1.0).")
+    require(0.0 <= domain_threshold_beta && domain_threshold_beta < 1.0,
+      "domain_threashold_beta should be in [0.0, 1.0).")
+
+    logBasedOnLevel(s"computeDomainInErrorCells called with: discreteAttrView=$discreteAttrView " +
+      s"attrStatView=$attrStatView errCellView=$errCellView rowId=$rowId " +
+      s"maxAttrsToComputeDomains=$maxAttrsToComputeDomains minCorrThres=$minCorrThres " +
+      s"domain_threshold=alpha:$domain_threshold_alpha,beta=$domain_threshold_beta")
 
     withSparkSession { sparkSession =>
-      val metadata = Metadata(sparkSession)
       val discreteAttrs = sparkSession.table(discreteAttrView).schema.map(_.name).filter(_ != rowId)
       val rowCnt = sparkSession.table(discreteAttrView).count()
 
@@ -367,7 +381,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                  |  WHERE $a1 IS NOT NULL AND
                  |    $a2 IS NOT NULL
                  |)
-             """.stripMargin)
+               """.stripMargin)
 
             df.collect().map { row =>
               if (!row.isNullAt(0)) row.getDouble(0) else 0.0
@@ -416,11 +430,18 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       }
       logBasedOnLevel({
         val pairStats = pairWiseStatMap.map { case (k, v) =>
-          s"$k(${v.head._2},${v.last._2})=>${v.map(a => s"${a._1}:${a._2}").mkString(",")}"
+          val stats = v.map { case (attrName, h) =>
+            val isEmployed = if (h > minCorrThres) "*" else ""
+            s"$isEmployed$attrName:$h"
+          }.mkString("\n    ")
+          s"""$k (min=${v.last._2} max=${v.head._2}):
+             |    $stats
+           """.stripMargin
         }
         s"""
-           |Pair-wise statistics:
-           |${pairStats.mkString("\n")}
+           |Pair-wise statistics H(x,y) '*' means it exceeds the threshold(=$minCorrThres):
+           |
+           |  ${pairStats.mkString("\n  ")}
          """.stripMargin
       })
 
@@ -428,9 +449,9 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         val attrs = v.filter(_._2 > minCorrThres)
         (k, if (attrs.size > maxAttrsToComputeDomains) {
           attrs.take(maxAttrsToComputeDomains)
-        } else if (attrs.size < minAttrsToComputeDomains) {
+        } else if (attrs.isEmpty) {
           // If correlated attributes not found, we pick up data from its domain randomly
-          logBasedOnLevel(s"Correlated attributes not found for $k")
+          logWarning(s"Correlated attributes not found for $k")
           Nil
         } else {
           attrs
@@ -462,33 +483,18 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
            |  l.$rowId = r.$rowId
          """.stripMargin)
 
-      // TODO: More efficient way to assign unique IDs
-      val rvWithIdDf = {
-        val rvRdd = rvDf.rdd.zipWithIndex().map { case (r, i) => Row.fromSeq(i +: r.toSeq) }
-        val rvSchemaWithId = StructType(StructField(rvId, LongType) +: rvDf.schema)
-        sparkSession.createDataFrame(rvRdd, rvSchemaWithId)
-      }
-
-      // TODO: Needs to revisit this feature selection
-      val featureAttrs = if (true) {
-        discreteAttrs.filter { attr =>
-          attrsToRepair.contains(attr) || corrAttrSet.contains(attr)
-        }
-      } else {
-        discreteAttrs
-      }
-
-      val cellDomainDf = withTempView(rvWithIdDf) { rvView =>
+      val cellDomainDf = withTempView(rvDf) { rvView =>
         corrAttrs.map { case (attrName, corrAttrsWithScores) =>
           // Adds an empty domain for initial state
+          val domainInitValue = "CAST(NULL AS ARRAY<STRUCT<n: STRING, cnt: DOUBLE>>)"
           val initDomainDf = sparkSession.sql(
             s"""
-               |SELECT $rvId, $rowId, attrName, initValue, array() domain $corrCols
+               |SELECT $rowId, attrName, initValue, $domainInitValue domain $corrCols
                |FROM $rvView
                |WHERE attrName = '$attrName'
              """.stripMargin)
 
-          val domainSpaceDf = if (corrAttrsWithScores.nonEmpty) {
+          val domainDf = if (corrAttrsWithScores.nonEmpty) {
             val corrAttrs = corrAttrsWithScores.map(_._1)
             logBasedOnLevel(s"Computing '$attrName' domain from ${corrAttrs.size} correlated " +
               s"attributes (${corrAttrs.mkString(",")})...")
@@ -498,21 +504,20 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                 val tau = {
                   // `tau` becomes a threshold on co-occurrence frequency
                   val productSpaceSize = domainStatMap(attr) * domainStatMap(attrName)
-                  (0.80 * (rowCnt / productSpaceSize)).toLong
+                  (domain_threshold_alpha * (rowCnt / productSpaceSize)).toLong
                 }
                 sparkSession.sql(
                   s"""
                      |SELECT
-                     |  $rvId,
                      |  $rowId,
                      |  attrName,
                      |  initValue,
-                     |  concat(l.domain, IF(ISNOTNULL(r.d), r.d, array())) domain,
+                     |  IF(ISNOTNULL(l.domain), CONCAT(l.domain, r.d), r.d) domain,
                      |  ${corrAttrSet.map(a => s"l.$a").mkString(",")}
                      |FROM
                      |  $domainSpaceView l
                      |LEFT OUTER JOIN (
-                     |  SELECT $attr, collect_set($attrName) d
+                     |  SELECT $attr, collect_set(named_struct('n', $attrName, 'cnt', array_max(array(double(cnt) - 1.0, 0.1)))) d
                      |  FROM (
                      |    SELECT *
                      |    FROM $attrStatView
@@ -532,113 +537,74 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
             initDomainDf
           }
 
-          // If `domainSpaceDf` has any row with an empty domain, fills it with a default domain.
-          val domainDf = if (corrAttrsWithScores.isEmpty || domainSpaceDf.where("size(domain) = 0").count() > 0) {
-            logWarning(s"Empty domains found in '$attrName', so fills them with default ones")
-
-            withTempView(domainSpaceDf) { domainView =>
-              // Since any correlated attribute not found, we need to select domains randomly
-              sparkSession.sql(
-                s"""
-                   |SELECT
-                   |  $rvId,
-                   |  $rowId,
-                   |  attrName,
-                   |  initValue,
-                   |  IF(size(domain) > 0, domain, defaultDomain) domain
-                   |FROM
-                   |  $domainView, (
-                   |    SELECT collect_set($attrName) defaultDomain
-                   |    FROM (
-                   |      SELECT *
-                   |      FROM $attrStatView
-                   |      WHERE ${whereCaluseToFilterStat(attrName)}
-                   |      ORDER BY cnt DESC
-                   |      LIMIT $defaultMaxDomainSize
-                   |    )
-                   |  )
-                 """.stripMargin)
-            }
-          } else {
-            domainSpaceDf
-          }
-
-          withTempView(domainDf) { domainView =>
-            // Computes domains for error cells
-            val ftAttrToId = featureAttrs.zipWithIndex.toMap
+          // To prune the domain, we use NaiveBayes that is an estimator of posterior probabilities
+          // using the naive independence assumption where
+          //   p(v_cur | v_init) = p(v_cur) * \prod_i (v_init_i | v_cur)
+          // where v_init_i is the init value for corresponding to attribute i.
+          val domainWithScoreDf = withTempView(domainDf) { domainView =>
             sparkSession.sql(
               s"""
                  |SELECT
-                 |  $rvId,
-                 |  $rowId,
-                 |  ${ftAttrToId(attrName)} feature_idx,
-                 |  attrName,
-                 |  domain,
-                 |  size(domain) domainSize,
-                 |  0 fixed,
-                 |  initValue,
-                 |  (array_position(domain, initValue) - int(1)) AS initIndex,
-                 |  initValue weakLabel,
-                 |  (array_position(domain, initValue) - int(1)) AS weakLabelIndex
+                 |  $rowId, attrName, initValue, domValue, SUM(score) score
                  |FROM (
                  |  SELECT
-                 |    $rvId,
                  |    $rowId,
                  |    attrName,
-                 |    array_sort(array_union(array(initValue), domain)) domain,
-                 |    IF(ISNULL(initValue), shuffle(domain)[0], initValue) initValue
-                 |  FROM
-                 |    $domainView
+                 |    initValue,
+                 |    domValueWithFreq.n domValue,
+                 |    exp(ln(cnt / $rowCnt) + ln(domValueWithFreq.cnt / cnt)) score
+                 |  FROM (
+                 |    SELECT
+                 |      $rowId,
+                 |      attrName,
+                 |      initValue,
+                 |      explode_outer(domain) domValueWithFreq
+                 |    FROM
+                 |      $domainView
+                 |  ) d LEFT OUTER JOIN (
+                 |    SELECT $attrName, MAX(cnt) cnt
+                 |    FROM $attrStatView
+                 |    WHERE ${whereCaluseToFilterStat(attrName)}
+                 |    GROUP BY $attrName
+                 |  ) s
+                 |  ON
+                 |    d.domValueWithFreq.n = s.$attrName
                  |)
+                 |GROUP BY
+                 |  $rowId, attrName, initValue, domValue
+               """.stripMargin)
+          }
+
+          withTempView(domainWithScoreDf) { domainWithScoreView =>
+            sparkSession.sql(
+              s"""
+                 |SELECT
+                 |  l.$rowId,
+                 |  l.attrName,
+                 |  initValue,
+                 |  filter(collect_set(named_struct('n', domValue, 'prob', score / denom)), x -> x.prob > $domain_threshold_beta) domain
+                 |FROM
+                 |  $domainWithScoreView l, (
+                 |    SELECT
+                 |      $rowId, attrName, SUM(score) denom
+                 |    FROM
+                 |      $domainWithScoreView
+                 |    GROUP BY
+                 |      $rowId, attrName
+                 |  ) r
+                 |WHERE
+                 |  l.$rowId = r.$rowId AND l.attrName = r.attrName
+                 |GROUP BY
+                 |  l.$rowId, l.attrName, initValue
                """.stripMargin)
           }
         }
       }.reduce(_.union(_))
 
       val cellDomainView = createAndCacheTempView(cellDomainDf, "cell_domain")
-      metadata.add("cell_domain", cellDomainView)
-
       // Number of rows in `cellDomainView` is the same with the number of error cells
       assert(cellDomainDf.count == sparkSession.table(errCellView).count)
-
-      val weakLabelDf = sparkSession.sql(
-        s"""
-           |SELECT
-           |  $rvId, weakLabel, weakLabelIndex, fixed, IF(domainSize > 1, false, true) AS clean
-           |FROM
-           |  $cellDomainView AS t1
-           |LEFT OUTER JOIN
-           |  $errCellView AS t2
-           |ON
-           |  t1.$rowId = t2.$rowId AND
-           |  t1.attrName = t2.attrName
-           |WHERE
-           |  weakLabel IS NOT NULL AND
-           |  t1.fixed != 1
-         """.stripMargin)
-
-      metadata.add("weak_labels", createAndCacheTempView(weakLabelDf, "weak_labels"))
-
-      val varMaskDf = sparkSession.sql(s"SELECT $rvId, domainSize FROM $cellDomainView")
-      metadata.add("var_masks", createAndCacheTempView(varMaskDf, "var_masks"))
-
-      val (totalVars, classes) = sparkSession.sql(s"SELECT COUNT($rvId), MAX(domainSize) FROM $cellDomainView")
-        .collect.headOption.map { case Row(l: Long, i: Int) => (l, i) }.get
-
-      logBasedOnLevel(s"totalVars=$totalVars classes=$classes " +
-        s"featureAttrs(${featureAttrs.size})=${featureAttrs.mkString(",")}")
-      metadata.add("total_vars", s"$totalVars")
-      metadata.add("feature_attrs", featureAttrs)
-      metadata.add("classes", s"$classes")
-
-      val posValDf = sparkSession.sql(
-        s"""
-           |SELECT $rvId, $rowId, attrName, posexplode(domain) (valId, rVal)
-           |FROM $cellDomainView
-         """.stripMargin)
-
-      metadata.add("pos_values", createAndCacheTempView(posValDf, "pos_values"))
-      metadata.toJson
+      Seq("cell_domain" -> cellDomainView, "pairwise_attr_stats" -> corrAttrs).asJson
     }
   }
 }

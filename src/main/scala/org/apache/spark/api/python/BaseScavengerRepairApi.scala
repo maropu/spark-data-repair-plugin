@@ -27,31 +27,23 @@ import org.apache.spark.sql._
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.{Utils => SparkUtils}
 
+private[python] case class JsonEncoder(v: Seq[(String, AnyRef)]) {
+
+  def asJson: String = v.map {
+    case (k, v: String) => s""""$k":"$v""""
+    case (k, map: Map[String, String]) =>
+      s""""$k":${map.map(kv => s""""${kv._1}": "${kv._2}"""").mkString("{", ",", "}")}"""
+    case (k, map: Map[String, Seq[(String, Double)]]) =>
+      def toValueString(values: Seq[(String, Double)]) =
+        values.map(v => s"""["${v._1}","${v._2}"]""").mkString("[", ",", "]")
+      s""""$k":${map.map(kv => s""""${kv._1}": ${toValueString(kv._2)}""")
+        .mkString("{", ",", "}")}"""
+  }.mkString("{", ",", "}")
+}
+
 class BaseScavengerRepairApi extends Logging {
 
-  protected val rvId = "__random_variable_id__"
-
-  protected case class Metadata(spark: SparkSession) {
-    private val kvs = mutable.ArrayBuffer[(String, Any)]()
-
-    def add(key: String, value: Any): Unit = {
-      kvs += key -> value
-    }
-
-    def toJson: String = {
-      kvs.map {
-        case (k, v: String) => s""""$k":"$v""""
-        case (k, ar: Seq[String]) => s""""$k":${ar.map(v => s""""$v"""").mkString("[", ",", "]")}"""
-      }.mkString("{", ",", "}")
-    }
-
-    override def toString: String = {
-      kvs.map {
-        case (k, v: String) => s"""$k=>"$v""""
-        case (k, ar: Seq[String]) => s"$k=>${ar.map(v => s""""$v"""").mkString(",")}"
-      }.mkString(", ")
-    }
-  }
+  protected implicit def seqToJsonEncoder(ar: Seq[(String, AnyRef)]) = JsonEncoder(ar)
 
   protected def logBasedOnLevel(msg: => String): Unit = {
     // This method should be called inside `withSparkSession`
@@ -85,6 +77,16 @@ class BaseScavengerRepairApi extends Logging {
       throw new SparkException(s"Column '$rowId' does not exist in $inputName.")
     }
     (inputDf, inputName, tableAttrs)
+  }
+
+  protected def checkIfColumnsExistIn(tableName: String, expectedColumns: Seq[String]): Unit = {
+    assert(SparkSession.getActiveSession.nonEmpty)
+    val spark = SparkSession.getActiveSession.get
+    val columnsInRepairedCells = spark.table(tableName).columns
+    if (!expectedColumns.forall(columnsInRepairedCells.contains)) {
+      throw new SparkException(s"$tableName must have " +
+        s"${expectedColumns.map(c => s"'$c'").mkString(", ")} columns.")
+    }
   }
 
   protected def loadConstraintsFromFile(constraintFilePath: String, inputName: String, tableAttrs: Seq[String]): DenialConstraints = {

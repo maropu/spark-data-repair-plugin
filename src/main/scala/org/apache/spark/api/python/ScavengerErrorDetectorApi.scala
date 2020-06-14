@@ -24,11 +24,25 @@ import io.github.maropu.Utils._
 
 object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
 
-  private def outputErrCellLog(
-      name: String, inputName: String, errCellView: String, attrsToRepair: Seq[String]): Unit = {
+  private def outputErrorStatsToConsole(
+      detectorIdent: String,
+      inputName: String,
+      errCellView: String,
+      attrsToRepair: Seq[String]): Unit = {
     assert(SparkSession.getActiveSession.nonEmpty)
     outputToConsole({
       val spark = SparkSession.getActiveSession.get
+      logBasedOnLevel({
+        val errorNumOfEachAttribute = {
+          val df = spark.sql(s"SELECT attrName, COUNT(1) FROM $errCellView GROUP BY attrName")
+          df.collect.map { case Row(attrName: String, n: Long) => s"$attrName:$n" }
+        }
+        s"""
+           |$detectorIdent found errors:
+           |  ${errorNumOfEachAttribute.mkString("\n  ")}
+         """.stripMargin
+      })
+
       val inputDf = spark.table(inputName)
       val tableAttrs = inputDf.schema.map(_.name)
       val tableAttrNum = tableAttrs.length
@@ -36,7 +50,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
       val errCellNum = spark.table(errCellView).count()
       val totalCellNum = tableRowCnt * tableAttrNum
       val errRatio = (errCellNum + 0.0) / totalCellNum
-      s"$name found $errCellNum/$totalCellNum error cells (${errRatio * 100.0}%) of " +
+      s"$detectorIdent found $errCellNum/$totalCellNum error cells (${errRatio * 100.0}%) of " +
         s"${attrsToRepair.size}/${tableAttrs.size} attributes (${attrsToRepair.mkString(",")}) " +
         s"in the input '$inputName'"
     })
@@ -65,7 +79,8 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
             sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
               .collect.head.getSeq[String](0)
           }
-          outputErrCellLog("NULL error detector", inputName, errCellView, attrsToRepair)
+          outputErrorStatsToConsole(
+            "NULL error detector", inputName, errCellView, attrsToRepair)
         }
         errCellDf
       }
@@ -128,7 +143,8 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
           }.reduce(_.union(_)).distinct().cache()
 
           val errCellView = createAndCacheTempView(errCellDf, "err_cells_from_constraints")
-          outputErrCellLog("Constraint error detector", inputName, errCellView, constraints.attrNames)
+          outputErrorStatsToConsole(
+            "Constraint error detector", inputName, errCellView, constraints.attrNames)
           errCellDf
         }
       }

@@ -67,8 +67,9 @@ object DenialConstraints extends Logging {
               logDebug(s"$dcStr => ${toWhereCondition(es, t1, t2)}")
               predicates.append(es)
             }
-          case s =>
-            logWarning(s"Illegal constraint format found: $s")
+          case Nil => // Just ignores this case
+          case Seq(s) if s.trim.isEmpty =>
+          case s => logWarning(s"Illegal constraint format found: ${s.mkString(",")}")
         }
       }
 
