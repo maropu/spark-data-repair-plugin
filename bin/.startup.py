@@ -229,6 +229,11 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.black_attr_list = black_attr_list
         return self
 
+    def setDomainThresholds(self, alpha, beta):
+        self.domain_threshold_alpha = alpha
+        self.domain_threshold_beta = beta
+        return self
+
     def setAttrMaxNumToComputeDomains(self, max):
         self.max_attrs_to_compute_domains = max
         return self
@@ -302,9 +307,11 @@ class ScavengerRepairModel(SchemaSpyBase):
                 raise ValueError("`%s` must have `%s` and `attrName` in columns" % \
                     (str(error_cells), self.row_id))
 
-            # TODO: Needs to avoid computing error domains for this case
             self.outputToConsole("Error cells provided by `%s`" % str(error_cells))
             env["gray_cells"] = str(error_cells)
+            # We assume that the given error cells are true, so we skip computing error domains
+            # with probability because the computational cost is much high.
+            self.domain_threshold_beta = 1.0
         else:
             # Applys error detectors to get gray cells
             self.__startSparkJobs("detect errors",

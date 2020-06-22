@@ -329,8 +329,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     require(0.0 <= minCorrThres && minCorrThres < 1.0, "minCorrThres should be in [0.0, 1.0).")
     require(0.0 <= domain_threshold_alpha && domain_threshold_alpha < 1.0,
       "domain_threashold_alpha should be in [0.0, 1.0).")
-    require(0.0 <= domain_threshold_beta && domain_threshold_beta < 1.0,
-      "domain_threashold_beta should be in [0.0, 1.0).")
+    require(0.0 <= domain_threshold_beta && domain_threshold_beta <= 1.0,
+      "domain_threashold_beta should be in [0.0, 1.0].")
 
     logBasedOnLevel(s"computeDomainInErrorCells called with: discreteAttrView=$discreteAttrView " +
       s"attrStatView=$attrStatView errCellView=$errCellView rowId=$rowId " +
@@ -472,123 +472,128 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
            |  l.$rowId = r.$rowId
          """.stripMargin)
 
-      val cellDomainDf = withTempView(rvDf) { rvView =>
-        corrAttrs.map { case (attrName, corrAttrsWithScores) =>
-          // Adds an empty domain for initial state
-          val domainInitValue = "CAST(NULL AS ARRAY<STRUCT<n: STRING, cnt: DOUBLE>>)"
-          val initDomainDf = sparkSession.sql(
-            s"""
-               |SELECT $rowId, attrName, initValue, $domainInitValue domain $corrCols
-               |FROM $rvView
-               |WHERE attrName = '$attrName'
+      val domainInitValue = "CAST(NULL AS ARRAY<STRUCT<n: STRING, cnt: DOUBLE>>)"
+      val cellDomainDf = if (domain_threshold_beta >= 1.0) {
+        // The case where we don't need to compute error domains
+        rvDf.selectExpr(rowId, "attrName", "initValue", s"$domainInitValue domain")
+      } else {
+        withTempView(rvDf) { rvView =>
+          corrAttrs.map { case (attrName, corrAttrsWithScores) =>
+            // Adds an empty domain for initial state
+            val initDomainDf = sparkSession.sql(
+              s"""
+                 |SELECT $rowId, attrName, initValue, $domainInitValue domain $corrCols
+                 |FROM $rvView
+                 |WHERE attrName = '$attrName'
              """.stripMargin)
 
-          val domainDf = if (corrAttrsWithScores.nonEmpty) {
-            val corrAttrs = corrAttrsWithScores.map(_._1)
-            logBasedOnLevel(s"Computing '$attrName' domain from ${corrAttrs.size} correlated " +
-              s"attributes (${corrAttrs.mkString(",")})...")
+            val domainDf = if (corrAttrsWithScores.nonEmpty) {
+              val corrAttrs = corrAttrsWithScores.map(_._1)
+              logBasedOnLevel(s"Computing '$attrName' domain from ${corrAttrs.size} correlated " +
+                s"attributes (${corrAttrs.mkString(",")})...")
 
-            corrAttrs.foldLeft(initDomainDf) { case (df, attr) =>
-              withTempView(df) { domainSpaceView =>
-                val tau = {
-                  // `tau` becomes a threshold on co-occurrence frequency
-                  val productSpaceSize = domainStatMap(attr) * domainStatMap(attrName)
-                  (domain_threshold_alpha * (rowCnt / productSpaceSize)).toLong
-                }
-                sparkSession.sql(
-                  s"""
-                     |SELECT
-                     |  $rowId,
-                     |  attrName,
-                     |  initValue,
-                     |  IF(ISNOTNULL(l.domain), CONCAT(l.domain, r.d), r.d) domain,
-                     |  ${corrAttrSet.map(a => s"l.$a").mkString(",")}
-                     |FROM
-                     |  $domainSpaceView l
-                     |LEFT OUTER JOIN (
-                     |  SELECT $attr, collect_set(named_struct('n', $attrName, 'cnt', array_max(array(double(cnt) - 1.0, 0.1)))) d
-                     |  FROM (
-                     |    SELECT *
-                     |    FROM $attrStatView
-                     |    WHERE $attrName IS NOT NULL AND
-                     |      $attr IS NOT NULL AND
-                     |      cnt > $tau
-                     |  )
-                     |  GROUP BY
-                     |    $attr
-                     |) r
-                     |ON
-                     |  l.$attr = r.$attr
+              corrAttrs.foldLeft(initDomainDf) { case (df, attr) =>
+                withTempView(df) { domainSpaceView =>
+                  val tau = {
+                    // `tau` becomes a threshold on co-occurrence frequency
+                    val productSpaceSize = domainStatMap(attr) * domainStatMap(attrName)
+                    (domain_threshold_alpha * (rowCnt / productSpaceSize)).toLong
+                  }
+                  sparkSession.sql(
+                    s"""
+                       |SELECT
+                       |  $rowId,
+                       |  attrName,
+                       |  initValue,
+                       |  IF(ISNOTNULL(l.domain), CONCAT(l.domain, r.d), r.d) domain,
+                       |  ${corrAttrSet.map(a => s"l.$a").mkString(",")}
+                       |FROM
+                       |  $domainSpaceView l
+                       |LEFT OUTER JOIN (
+                       |  SELECT $attr, collect_set(named_struct('n', $attrName, 'cnt', array_max(array(double(cnt) - 1.0, 0.1)))) d
+                       |  FROM (
+                       |    SELECT *
+                       |    FROM $attrStatView
+                       |    WHERE $attrName IS NOT NULL AND
+                       |      $attr IS NOT NULL AND
+                       |      cnt > $tau
+                       |  )
+                       |  GROUP BY
+                       |    $attr
+                       |) r
+                       |ON
+                       |  l.$attr = r.$attr
                    """.stripMargin)
+                }
               }
+            } else {
+              initDomainDf
             }
-          } else {
-            initDomainDf
-          }
 
-          // To prune the domain, we use NaiveBayes that is an estimator of posterior probabilities
-          // using the naive independence assumption where
-          //   p(v_cur | v_init) = p(v_cur) * \prod_i (v_init_i | v_cur)
-          // where v_init_i is the init value for corresponding to attribute i.
-          val domainWithScoreDf = withTempView(domainDf) { domainView =>
-            sparkSession.sql(
-              s"""
-                 |SELECT
-                 |  $rowId, attrName, initValue, domValue, SUM(score) score
-                 |FROM (
-                 |  SELECT
-                 |    $rowId,
-                 |    attrName,
-                 |    initValue,
-                 |    domValueWithFreq.n domValue,
-                 |    exp(ln(cnt / $rowCnt) + ln(domValueWithFreq.cnt / cnt)) score
-                 |  FROM (
-                 |    SELECT
-                 |      $rowId,
-                 |      attrName,
-                 |      initValue,
-                 |      explode_outer(domain) domValueWithFreq
-                 |    FROM
-                 |      $domainView
-                 |  ) d LEFT OUTER JOIN (
-                 |    SELECT $attrName, MAX(cnt) cnt
-                 |    FROM $attrStatView
-                 |    WHERE ${whereCaluseToFilterStat(attrName)}
-                 |    GROUP BY $attrName
-                 |  ) s
-                 |  ON
-                 |    d.domValueWithFreq.n = s.$attrName
-                 |)
-                 |GROUP BY
-                 |  $rowId, attrName, initValue, domValue
+            // To prune the domain, we use NaiveBayes that is an estimator of posterior probabilities
+            // using the naive independence assumption where
+            //   p(v_cur | v_init) = p(v_cur) * \prod_i (v_init_i | v_cur)
+            // where v_init_i is the init value for corresponding to attribute i.
+            val domainWithScoreDf = withTempView(domainDf) { domainView =>
+              sparkSession.sql(
+                s"""
+                   |SELECT
+                   |  $rowId, attrName, initValue, domValue, SUM(score) score
+                   |FROM (
+                   |  SELECT
+                   |    $rowId,
+                   |    attrName,
+                   |    initValue,
+                   |    domValueWithFreq.n domValue,
+                   |    exp(ln(cnt / $rowCnt) + ln(domValueWithFreq.cnt / cnt)) score
+                   |  FROM (
+                   |    SELECT
+                   |      $rowId,
+                   |      attrName,
+                   |      initValue,
+                   |      explode_outer(domain) domValueWithFreq
+                   |    FROM
+                   |      $domainView
+                   |  ) d LEFT OUTER JOIN (
+                   |    SELECT $attrName, MAX(cnt) cnt
+                   |    FROM $attrStatView
+                   |    WHERE ${whereCaluseToFilterStat(attrName)}
+                   |    GROUP BY $attrName
+                   |  ) s
+                   |  ON
+                   |    d.domValueWithFreq.n = s.$attrName
+                   |)
+                   |GROUP BY
+                   |  $rowId, attrName, initValue, domValue
                """.stripMargin)
-          }
+            }
 
-          withTempView(domainWithScoreDf) { domainWithScoreView =>
-            sparkSession.sql(
-              s"""
-                 |SELECT
-                 |  l.$rowId,
-                 |  l.attrName,
-                 |  initValue,
-                 |  filter(collect_set(named_struct('n', domValue, 'prob', score / denom)), x -> x.prob > $domain_threshold_beta) domain
-                 |FROM
-                 |  $domainWithScoreView l, (
-                 |    SELECT
-                 |      $rowId, attrName, SUM(score) denom
-                 |    FROM
-                 |      $domainWithScoreView
-                 |    GROUP BY
-                 |      $rowId, attrName
-                 |  ) r
-                 |WHERE
-                 |  l.$rowId = r.$rowId AND l.attrName = r.attrName
-                 |GROUP BY
-                 |  l.$rowId, l.attrName, initValue
+            withTempView(domainWithScoreDf) { domainWithScoreView =>
+              sparkSession.sql(
+                s"""
+                   |SELECT
+                   |  l.$rowId,
+                   |  l.attrName,
+                   |  initValue,
+                   |  filter(collect_set(named_struct('n', domValue, 'prob', score / denom)), x -> x.prob > $domain_threshold_beta) domain
+                   |FROM
+                   |  $domainWithScoreView l, (
+                   |    SELECT
+                   |      $rowId, attrName, SUM(score) denom
+                   |    FROM
+                   |      $domainWithScoreView
+                   |    GROUP BY
+                   |      $rowId, attrName
+                   |  ) r
+                   |WHERE
+                   |  l.$rowId = r.$rowId AND l.attrName = r.attrName
+                   |GROUP BY
+                   |  l.$rowId, l.attrName, initValue
                """.stripMargin)
+            }
           }
-        }
-      }.reduce(_.union(_))
+        }.reduce(_.union(_))
+      }
 
       val cellDomainView = withJobDescription("compute domain values with posteriori probability") {
         createAndCacheTempView(cellDomainDf, "cell_domain")
