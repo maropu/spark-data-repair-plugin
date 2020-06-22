@@ -22,8 +22,6 @@ import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.plans.logical.LeafNode
 import org.apache.spark.util.{Utils => SparkUtils}
 
-import io.github.maropu.Utils._
-
 /** A Python API entry point for data cleaning. */
 object ScavengerRepairApi extends BaseScavengerRepairApi {
 
