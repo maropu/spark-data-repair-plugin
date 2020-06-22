@@ -302,7 +302,8 @@ class ScavengerRepairModel(SchemaSpyBase):
                 raise ValueError("`%s` must have `%s` and `attrName` in columns" % \
                     (str(error_cells), self.row_id))
 
-            self.outputToConsole("Provided error cells found in `%s`" % str(error_cells))
+            # TODO: Needs to avoid computing error domains for this case
+            self.outputToConsole("Error cells provided by `%s`" % str(error_cells))
             env["gray_cells"] = str(error_cells)
         else:
             # Applys error detectors to get gray cells
