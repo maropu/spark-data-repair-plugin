@@ -270,6 +270,7 @@ object IntegrityConstraintDiscovery extends Logging {
           val threshold = (totalEvCount * (1.0 - approxEpsilon)).toLong
 
           (2 until numSymbols + 1).foreach { level =>
+
             outputToConsole(s"Starts processing level $level/$numSymbols...")
             // TODO: We need to split a query into multiple ones if `exprToValidateConstraints`
             // has many expressions.

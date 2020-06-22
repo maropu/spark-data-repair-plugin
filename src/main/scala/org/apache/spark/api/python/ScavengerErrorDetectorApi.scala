@@ -24,13 +24,13 @@ import io.github.maropu.Utils._
 
 object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
 
-  private def outputErrorStatsToConsole(
+  private def loggingErrorStats(
       detectorIdent: String,
       inputName: String,
       errCellView: String,
       attrsToRepair: Seq[String]): Unit = {
     assert(SparkSession.getActiveSession.nonEmpty)
-    outputToConsole({
+    logBasedOnLevel({
       val spark = SparkSession.getActiveSession.get
       logBasedOnLevel({
         val errorNumOfEachAttribute = {
@@ -79,8 +79,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
             sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
               .collect.head.getSeq[String](0)
           }
-          outputErrorStatsToConsole(
-            "NULL error detector", inputName, errCellView, attrsToRepair)
+          loggingErrorStats("NULL error detector", inputName, errCellView, attrsToRepair)
         }
         errCellDf
       }
@@ -143,8 +142,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
           }.reduce(_.union(_)).distinct().cache()
 
           val errCellView = createAndCacheTempView(errCellDf, "err_cells_from_constraints")
-          outputErrorStatsToConsole(
-            "Constraint error detector", inputName, errCellView, constraints.attrNames)
+          loggingErrorStats("Constraint error detector", inputName, errCellView, constraints.attrNames)
           errCellDf
         }
       }

@@ -34,6 +34,16 @@ package object python {
     }
   }
 
+  def withJobDescription[T](desc: String)(f: => T): T = {
+    assert(SparkSession.getActiveSession.nonEmpty)
+    val spark = SparkSession.getActiveSession.get
+    val currentJobDesc = spark.sparkContext.getLocalProperty("spark.job.description")
+    spark.sparkContext.setJobDescription(desc)
+    val ret = f
+    spark.sparkContext.setJobDescription(currentJobDesc)
+    ret
+  }
+
   def withTempView[T](df: DataFrame, cache: Boolean = false)(f: String => T): T = {
     assert(SparkSession.getActiveSession.nonEmpty)
     val tempView = getRandomString("temp_view_")

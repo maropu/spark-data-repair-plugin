@@ -27,14 +27,12 @@ import functools
 import json
 import logging
 import pandas as pd
+import time
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions
 
 from repair.detectors import *
-
-# Sets `INFO` to the logging level for debugging
-logging.basicConfig(level=logging.INFO)
 
 class SchemaSpyResult():
     """A result container class for SchemaSpy"""
@@ -62,6 +60,9 @@ class SchemaSpyBase():
     def setDbName(self, db_name):
         self.db_name = db_name
         return self
+
+    def outputToConsole(self, msg):
+        print(msg)
 
 class SchemaSpy(SchemaSpyBase):
 
@@ -189,6 +190,9 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.stat_thres_ratio = 0.0
         self.min_features_num = 1
 
+        # Internally used to check elapsed time
+        self.__timer_base = None
+
         # Defines detectors to discover error cells
         self.detectors = [
             # NullErrorDetector(),
@@ -244,18 +248,29 @@ class ScavengerRepairModel(SchemaSpyBase):
     def __tempName(self, prefix):
         return "%s_%s" % (prefix, datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
 
-    def __exportDataFrameAsTempView(self, df, name):
-        view_name = self.__tempName(name)
-        df.createOrReplaceTempView(view_name)
-        logging.info("Exporting a dataframe '%s' as a view '%s'" % (name, view_name))
+    def __startSparkJobs(self, name, desc):
+        self.spark.sparkContext.setJobGroup(name, name)
+        self.__timer_base = time.time()
+        self.outputToConsole(desc)
+
+    def __clearJobGroup(self):
+        # TODO: Uses `SparkContext.clearJobGroup()` instead
+        self.spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)
+        self.spark.sparkContext.setLocalProperty("spark.job.description", None)
+        self.spark.sparkContext.setLocalProperty("spark.job.interruptOnCancel", None)
+
+    def __endSparkJobs(self, msg=None):
+        id = msg if msg is not None else self.spark.sparkContext.getLocalProperty("spark.jobGroup.id")
+        self.outputToConsole("Time to %s is %s(s)" % (id, time.time() - self.__timer_base))
+        self.__clearJobGroup()
 
     def __releaseResources(self, env):
         for t in list(filter(lambda x: x in self.meta_view_names, env.values())):
             self.spark.sql("DROP VIEW IF EXISTS %s" % env[t])
 
-    def run(self, error_cells=None, detect_errors_only=False):
+    def __run(self, error_cells, detect_errors_only):
         if self.table_name is None or self.row_id is None:
-            raise ValueError("`setTableName` and `setRowId` should be called before doing inferences")
+            raise ValueError("`setTableName` and `setRowId` should be called before repairing")
 
         # Env used to repair the given table
         env = {}
@@ -266,86 +281,115 @@ class ScavengerRepairModel(SchemaSpyBase):
 
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
+        self.__startSparkJobs("preprocess rows",
+            "Preprocessing an input table `%s` with rowId=`%s`..." % (self.table_name, self.row_id))
         env.update(json.loads(self.svg_api.convertToDiscreteAttrs(
             self.db_name, self.table_name, self.row_id,
             self.discrete_thres,
             self.cnt_value_discretization,
             self.black_attr_list)))
+        self.__endSparkJobs()
 
-        # If `error_cells` provided, just use it
+        # Checks # of input rows and attributes
+        input_table = self.spark.table(env["discrete_attrs"])
+        num_input_rows = input_table.count()
+        num_attrs = len(input_table.columns)
+
+        # If `error_cells` provided, just uses it
         if error_cells is not None:
             df = self.spark.table(str(error_cells))
             if not all(c in df.columns for c in (self.row_id, "attrName")):
                 raise ValueError("`%s` must have `%s` and `attrName` in columns" % \
                     (str(error_cells), self.row_id))
 
+            self.outputToConsole("Provided error cells found in `%s`" % str(error_cells))
             env["gray_cells"] = str(error_cells)
         else:
             # Applys error detectors to get gray cells
+            self.__startSparkJobs("detect errors",
+                "Detecting errors in a table `%s` (%s rows x %s cols)..." % (env["discrete_attrs"], num_input_rows, num_attrs))
             env["gray_cells"] = self.__detectErrorCells(env)
+            self.__endSparkJobs()
+
+            # If `detect_errors_only` is True, returns found error cells
             if detect_errors_only:
                 df = self.spark.table(env["gray_cells"])
                 self.__releaseResources(env)
                 return df
 
         # If no error found, it just returns the given table
-        if self.spark.table(env["gray_cells"]).count() == 0:
+        num_gray_cells = self.spark.table(env["gray_cells"]).count()
+        if num_gray_cells == 0:
+            self.outputToConsole("Any error cells not found, so returns the input as clean cells")
             self.__releaseResources(env)
             table_name = "`%s`.`%s`" % (self.db_name, self.table_name) \
                 if not self.db_name else "`%s`" % self.table_name
             return self.spark.table(table_name)
 
         # Sets NULL at the detected gray cells
-        env["repair_base"] = self.svg_api.convertErrorCellsToNull(env["discrete_attrs"], env["gray_cells"], self.row_id)
+        self.outputToConsole("%s/%s suspicious cells found, then converts them into NULL cells..." % \
+            (num_gray_cells, num_input_rows * num_attrs))
+        env["repair_base"] = self.svg_api.convertErrorCellsToNull(
+            env["discrete_attrs"], env["gray_cells"],
+            self.row_id)
 
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
+        self.__startSparkJobs("collect stat rows",
+            "Collecting and sampling attribute stats (ratio=%s threshold=%s) before computing error domains..." % \
+                (self.attr_stats_sample_ratio, self.stat_thres_ratio))
         env["attr_stats"] = self.svg_api.computeAttrStats(
             env["discrete_attrs"], env["gray_cells"], self.row_id,
             self.attr_stats_sample_ratio,
             self.stat_thres_ratio)
+        self.__endSparkJobs("collect %s stat rows" % \
+            self.spark.table(env["attr_stats"]).count())
+
+        self.__startSparkJobs("compute domains",
+            "Computing error domains with posteriori probability...")
         env.update(json.loads(self.svg_api.computeDomainInErrorCells(
             env["discrete_attrs"], env["attr_stats"], env["gray_cells"], self.row_id,
             self.max_attrs_to_compute_domains,
             self.min_corr_thres,
             self.domain_threshold_alpha,
             self.domain_threshold_beta)))
-
-        # For debbugging, exports as a temporary view
-        self.__exportDataFrameAsTempView(self.spark.table(env["cell_domain"]), "cell_domain")
+        self.__endSparkJobs()
 
         # Sets the high-confident inferred values to the gray cells if it can follow
         # the principle of minimality.
         weak_df = self.spark.table(env["cell_domain"]) \
             .selectExpr(self.row_id, "attrName", "initValue", "if(initValue = domain[0].n, initValue, NULL) weakValue").cache()
-
         weak_df.where("weakValue IS NOT NULL").drop("initValue").cache().createOrReplaceTempView(env["weak"])
         env["partial_repaired"] = self.svg_api.repairAttrsFrom(env["weak"], "", env["repair_base"], self.row_id)
 
         # If no error cell found, ready to return a clean table
         error_cells_df = weak_df.where("weakValue IS NULL").drop("weakValue").cache()
-        if error_cells_df.count() == 0:
+        num_error_cells = error_cells_df.count()
+        if num_error_cells == 0:
             clean_df = self.spark.table(env["partial_repaired"])
             assert clean_df.count() == self.spark.table(env["discrete_attrs"]).count()
             return clean_df
 
-        logging.info("%d/%d error cells repaired and %d error cells remaining" %
-            (self.spark.table(env["weak"]).count(), self.spark.table(env["cell_domain"]).count(), error_cells_df.count()))
-
-        # For debbugging, exports as a temporary view
-        self.__exportDataFrameAsTempView(error_cells_df, "error_cells")
+        self.outputToConsole("%d suspicious cells fixed by the computed domain `%s` and %d error cells remaining" %
+            (self.spark.table(env["weak"]).count(), env["cell_domain"], num_error_cells))
 
         # Prepares training data to repair the remaining error cells
         # TODO: Needs more smart sampling, e.g., down-sampling
         error_rows_df = error_cells_df.selectExpr(self.row_id).distinct().cache()
-        partial_clean_df = self.spark.table(env["partial_repaired"]).join(error_rows_df, self.row_id, "left_anti").cache()
-        train_df = partial_clean_df.sample(self.training_data_sample_ratio).drop(self.row_id)
+        fixed_df = self.spark.table(env["partial_repaired"]).join(error_rows_df, self.row_id, "left_anti").cache()
+        train_df = fixed_df.sample(self.training_data_sample_ratio).drop(self.row_id).cache()
+
+        self.outputToConsole("Sampling %s training data (ratio=%s) from %s fixed rows..." % \
+            (train_df.count(), self.training_data_sample_ratio, fixed_df.count()))
 
         # Computes domain sizes for training data
         # TODO: Needs to Replace `saveAsTable` with `createOrReplaceTempView`
-        # train_df.cache().createOrReplaceTempView(env["train"])
+        # train_df.createOrReplaceTempView(env["train"])
+        self.__startSparkJobs("collect training data stats",
+            "Collecting training data stats before building ML models...")
         train_df.write.saveAsTable(env["train"])
         env.update(json.loads(self.svg_api.computeDomainSizes(env["train"])))
+        self.__endSparkJobs()
 
         # TODO: Makes this classifier pluggable
         import lightgbm as lgb
@@ -360,7 +404,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         # predictable column as a staring feature.
         num_features = len(train_df.columns) - len(error_attrs)
         if num_features < self.min_features_num:
-            logging.warning("At least %s features needed to repair error cells, but %s features found" %
+            self.outputToConsole("At least %s features needed to repair error cells, but %s features found" %
                 (self.min_features_num, num_features))
             return self.spark.table(env["partial_repaired"])
 
@@ -381,6 +425,8 @@ class ScavengerRepairModel(SchemaSpyBase):
             logging.info("%s: |domain|=%s #errors=%s" % (y, env["distinct_stats"][y], error_num_map[y]))
 
         # Builds classifiers for the target columns
+        self.__startSparkJobs("build ML models",
+            "Building %s ML models to repair the error cells..." % len(target_columns))
         clfs = {}
         train_pdf = train_df.toPandas()
         # TODO: Needs to think more about this category encoding
@@ -393,6 +439,7 @@ class ScavengerRepairModel(SchemaSpyBase):
             clf.fit(X[features], train_pdf[y])
             logging.info("LGBMClassifier[%d]: y(%s)<=X(%s)" % (index, y, ",".join(features)))
             clfs[y] = (clf, features)
+        self.__endSparkJobs()
 
         # Shares all the variables for the learnt models in a Spark cluster
         broadcasted_target_columns = self.spark.sparkContext.broadcast(target_columns)
@@ -424,13 +471,22 @@ class ScavengerRepairModel(SchemaSpyBase):
         # Predicts the remaining error cells based on the trained models.
         # TODO: Might need to compare repair costs (cost of an update, c) to
         # the likelihood benefits of the updates (likelihood benefit of an update, l).
-        repaired_df = dirty_df.groupBy(grouping_key).apply(repair).drop(grouping_key)
+        self.__startSparkJobs("apply the ML models", "Repairing error cells...")
+        repaired_df = dirty_df.groupBy(grouping_key).apply(repair).drop(grouping_key).cache()
+        repaired_df.write.format("noop").mode("overwrite").save()
+        self.__endSparkJobs()
 
         # self.__releaseResources(env)
 
-        clean_df = partial_clean_df.union(repaired_df)
+        clean_df = fixed_df.union(repaired_df)
         # assert clean_df.count == self.spark.table(env["discrete_attrs"]).count()
         return clean_df
+
+    def run(self, error_cells=None, detect_errors_only=False):
+        __start = time.time()
+        df = self.__run(error_cells, detect_errors_only)
+        self.outputToConsole("!!!Total processing time is %s(s)!!!" % (time.time() - __start))
+        return df
 
 class Scavenger(SchemaSpyBase):
 
@@ -471,13 +527,28 @@ scavenger = Scavenger.getOrCreate()
 def spySchema(args=""):
     sc._jvm.SchemaSpyApi.run(args)
 
-# TODO: Any smarter way to initialize a Spark session?
+# Initializes a Spark session
 if not sc._jvm.SparkSession.getActiveSession().isDefined():
-    spark.range(1)
+    spark.sql("SELECT 1")
+
+# Suppress warinig messages in PySpark
+warnings.simplefilter('ignore')
+
+# Sets `INFO` to the logging level for debugging
+# logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARN)
+
+# Supresses `WARN` messages in JVM
+spark.sparkContext.setLogLevel("ERROR")
 
 # Since 3.0, `spark.sql.crossJoin.enabled` is set to true by default
 spark.sql("SET spark.sql.crossJoin.enabled=true")
 spark.sql("SET spark.sql.cbo.enabled=true")
 
-print("Scavenger APIs (version %s) available as 'scavenger'." % ("0.1.0-spark2.4-EXPERIMENTAL"))
+# Tunes # shuffle partitions
+num_tasks_per_core = 1
+num_parallelism = spark.sparkContext.defaultParallelism
+spark.sql("SET spark.sql.shuffle.partitions=%s" % (num_parallelism * num_tasks_per_core))
+
+print("Scavenger APIs (version %s) available as 'scavenger'." % ("0.1.0-spark3.0-EXPERIMENTAL"))
 

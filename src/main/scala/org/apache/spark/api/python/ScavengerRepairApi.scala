@@ -89,12 +89,11 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
   private def computeAndGetTableStats(tableIdentifier: String): Map[String, Long] = {
     assert(SparkSession.getActiveSession.isDefined)
     val spark = SparkSession.getActiveSession.get
-    val tableAttrs = spark.table(tableIdentifier).columns
     // To compute the number of distinct values, runs `ANALYZE TABLE` first
     spark.sql(
       s"""
          |ANALYZE TABLE $tableIdentifier COMPUTE STATISTICS
-         |FOR COLUMNS ${tableAttrs.mkString(", ")}
+         |FOR ALL COLUMNS
        """.stripMargin)
 
     distinctStatMap(tableIdentifier)
@@ -167,8 +166,6 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         discreteAttrs
       }).map(_._1).toSet
 
-      outputToConsole(s"Loaded $rowCnt rows with ${rowCnt * discreteAttrs.size} cells")
-
       val discreteDf = inputDf.selectExpr(inputDf.columns.filter(attrSet.contains) :+ rowId: _*)
       Seq("discrete_attrs" -> createAndCacheTempView(discreteDf, "discrete_attrs"),
         "distinct_stats" -> statMap.mapValues(_.toString)).asJson
@@ -188,15 +185,6 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         sparkSession.sql(s"SELECT collect_set(attrName) FROM $repairedCells")
           .collect.head.getSeq[String](0).toSet
       }
-
-      outputToConsole({
-        val repairNum =  sparkSession.table(repairedCells).count()
-        val totalCellNum = inputDf.count() * tableAttrs.length
-        val repairRatio = (repairNum + 0.0) / totalCellNum
-        s"Repairing $repairNum/$totalCellNum error cells (${repairRatio * 100.0}%) of " +
-          s"${attrsToRepair.size}/${tableAttrs.size} attributes (${attrsToRepair.mkString(",")}) " +
-          s"in the input '$inputName'"
-      })
 
       val repairDf = sparkSession.sql(
         s"""
@@ -222,6 +210,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
           }
           sparkSession.sql(
             s"""
+
                |SELECT ${cleanAttrs.mkString(", ")}
                |FROM $inputView
                |LEFT OUTER JOIN $repairView
@@ -367,7 +356,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
       // Computes the conditional entropy: H(x|y) = H(x,y) - H(y).
       // H(x,y) denotes H(x U y). If H(x|y) = 0, then y determines x, i.e., y -> x.
-      val hXYs = {
+      val hXYs = withJobDescription("compute conditional entropy H(x|y)") {
         val pairSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
         pairSets.map { attrPairKey =>
           attrPairKey -> {
@@ -387,29 +376,31 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
               if (!row.isNullAt(0)) row.getDouble(0) else 0.0
             }.head
           }
-        }
-      }.toMap
+        }.toMap
+      }
 
-      val hYs = discreteAttrs.map { attrKey =>
-        attrKey -> {
-          val df = sparkSession.sql(
-            s"""
-               |SELECT -SUM(hY) hY
-               |FROM (
-               |  /* TODO: Needs to reconsider how-to-handle NULL */
-               |  /* Use `MAX` to drop ($attrKey, null) tuples in `$discreteAttrView` */
-               |  SELECT $attrKey Y, (MAX(cnt) / $rowCnt) * log10(MAX(cnt) / $rowCnt) hY
-               |  FROM $attrStatView
-               |  WHERE ${whereCaluseToFilterStat(attrKey)}
-               |  GROUP BY $attrKey
-               |)
+      val hYs = withJobDescription("compute entropy H(y)") {
+        discreteAttrs.map { attrKey =>
+          attrKey -> {
+            val df = sparkSession.sql(
+              s"""
+                 |SELECT -SUM(hY) hY
+                 |FROM (
+                 |  /* TODO: Needs to reconsider how-to-handle NULL */
+                 |  /* Use `MAX` to drop ($attrKey, null) tuples in `$discreteAttrView` */
+                 |  SELECT $attrKey Y, (MAX(cnt) / $rowCnt) * log10(MAX(cnt) / $rowCnt) hY
+                 |  FROM $attrStatView
+                 |  WHERE ${whereCaluseToFilterStat(attrKey)}
+                 |  GROUP BY $attrKey
+                 |)
            """.stripMargin)
 
-          df.collect().map { row =>
-            if (!row.isNullAt(0)) row.getDouble(0) else 0.0
-          }.head
-        }
-      }.toMap
+            df.collect().map { row =>
+              if (!row.isNullAt(0)) row.getDouble(0) else 0.0
+            }.head
+          }
+        }.toMap
+      }
 
       // Uses the domain size of X as a log base for normalization
       val domainStatMap = distinctStatMap(discreteAttrView)
@@ -601,7 +592,9 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         }
       }.reduce(_.union(_))
 
-      val cellDomainView = createAndCacheTempView(cellDomainDf, "cell_domain")
+      val cellDomainView = withJobDescription("compute domain values with posteriori probability") {
+        createAndCacheTempView(cellDomainDf, "cell_domain")
+      }
       // Number of rows in `cellDomainView` is the same with the number of error cells
       assert(cellDomainDf.count == sparkSession.table(errCellView).count)
       Seq("cell_domain" -> cellDomainView, "pairwise_attr_stats" -> corrAttrs).asJson
