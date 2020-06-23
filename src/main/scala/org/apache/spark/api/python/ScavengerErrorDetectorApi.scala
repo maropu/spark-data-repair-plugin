@@ -20,8 +20,6 @@ package org.apache.spark.api.python
 import org.apache.spark.python._
 import org.apache.spark.sql._
 
-import io.github.maropu.Utils._
-
 object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
 
   private def loggingErrorStats(
@@ -34,8 +32,8 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
       val spark = SparkSession.getActiveSession.get
       logBasedOnLevel({
         val errorNumOfEachAttribute = {
-          val df = spark.sql(s"SELECT attrName, COUNT(1) FROM $errCellView GROUP BY attrName")
-          df.collect.map { case Row(attrName: String, n: Long) => s"$attrName:$n" }
+          val df = spark.sql(s"SELECT attribute, COUNT(1) FROM $errCellView GROUP BY attribute")
+          df.collect.map { case Row(attribute: String, n: Long) => s"$attribute:$n" }
         }
         s"""
            |$detectorIdent found errors:
@@ -67,7 +65,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
         val errCellDf = tableAttrs.map { attr =>
           sparkSession.sql(
             s"""
-               |SELECT $rowId, '$attr' AS attrName
+               |SELECT $rowId, '$attr' AS attribute
                |FROM $inputView
                |WHERE $attr IS NULL
              """.stripMargin)
@@ -76,7 +74,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
 
         withTempView(errCellDf) { errCellView =>
           val attrsToRepair = {
-            sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
+            sparkSession.sql(s"SELECT collect_set(attribute) FROM $errCellView")
               .collect.head.getSeq[String](0)
           }
           loggingErrorStats("NULL error detector", inputName, errCellView, attrsToRepair)
@@ -103,7 +101,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
         if (constraints.entries.isEmpty) {
           // Case of non-found constraints
           val rowIdType = inputDf.schema.find(_.name == rowId).get.dataType.sql
-          createEmptyTable(s"$rowId $rowIdType, attrName STRING")
+          createEmptyTable(s"$rowId $rowIdType, attribute STRING")
         } else {
           logBasedOnLevel({
             val constraintLists = constraints.entries.zipWithIndex.map { case (preds, i) =>
@@ -137,7 +135,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
                """.stripMargin)
 
             preds.flatMap { p => p.leftAttr :: p.rightAttr :: Nil }.map { attr =>
-              df.selectExpr(rowId, s"'$attr' AS attrName")
+              df.selectExpr(rowId, s"'$attr' AS attribute")
             }
           }.reduce(_.union(_)).distinct().cache()
 

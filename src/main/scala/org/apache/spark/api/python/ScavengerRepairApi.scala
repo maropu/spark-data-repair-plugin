@@ -63,7 +63,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       val expr = inputDf.schema.filter(_.name != rowId)
         .map { f => s"STRUCT($rowId, '${f.name}', CAST(${f.name} AS STRING))" }
         .mkString("ARRAY(", ", ", ")")
-      inputDf.selectExpr(s"INLINE($expr) AS (tid, attrName, val)")
+      inputDf.selectExpr(s"INLINE($expr) AS (tid, attribute, val)")
     }
     Seq("flatten" -> createAndCacheTempView(df)).asJson
   }
@@ -178,11 +178,11 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
     withSparkSession { sparkSession =>
       // `repairedCells` must have `$rowId`, `attribute`, and `repaired` columns
-      checkIfColumnsExistIn(repairedCells, rowId :: "attrName" :: "val" :: Nil)
+      checkIfColumnsExistIn(repairedCells, rowId :: "attribute" :: "val" :: Nil)
 
       val (inputDf, inputName, tableAttrs) = checkInputTable(dbName, tableName, rowId)
       val attrsToRepair = {
-        sparkSession.sql(s"SELECT collect_set(attrName) FROM $repairedCells")
+        sparkSession.sql(s"SELECT collect_set(attribute) FROM $repairedCells")
           .collect.head.getSeq[String](0).toSet
       }
 
@@ -191,7 +191,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
            |SELECT
            |  $rowId, map_from_entries(COLLECT_LIST(r)) AS repairs
            |FROM (
-           |  select $rowId, struct(attrName, val) r
+           |  select $rowId, struct(attribute, val) r
            |  FROM $repairedCells
            |)
            |GROUP BY
@@ -236,7 +236,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       // Computes numbers for single and pair-wise statistics in the input table
       val tableAttrs = sparkSession.table(discreteAttrView).schema.map(_.name)
       val attrsToRepair = {
-        sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
+        sparkSession.sql(s"SELECT collect_set(attribute) FROM $errCellView")
           .collect.head.getSeq[String](0)
       }
       val attrPairsToRepair = attrsToRepair.flatMap { attrToRepair =>
@@ -279,17 +279,17 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       s"errCellView=$errCellView rowId=$rowId")
 
     withSparkSession { sparkSession =>
-      // `errCellView` must have `$rowId` and `attrName` columns
-      checkIfColumnsExistIn(errCellView, rowId :: "attrName" :: Nil)
+      // `errCellView` must have `$rowId` and `attribute` columns
+      checkIfColumnsExistIn(errCellView, rowId :: "attribute" :: Nil)
 
       val attrsToRepair = {
-        sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
+        sparkSession.sql(s"SELECT collect_set(attribute) FROM $errCellView")
           .collect.head.getSeq[String](0).toSet
       }
 
       val errAttrDf = sparkSession.sql(
         s"""
-           |SELECT $rowId, collect_set(attrName) AS errors
+           |SELECT $rowId, collect_set(attribute) AS errors
            |FROM $errCellView
            |GROUP BY $rowId
          """.stripMargin)
@@ -342,7 +342,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       val rowCnt = sparkSession.table(discreteAttrView).count()
 
       val attrsToRepair = {
-        sparkSession.sql(s"SELECT collect_set(attrName) FROM $errCellView")
+        sparkSession.sql(s"SELECT collect_set(attribute) FROM $errCellView")
           .collect.head.getSeq[String](0)
       }
       val attrPairsToRepair = attrsToRepair.flatMap { attrToRepair =>
@@ -419,9 +419,9 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       }
       logBasedOnLevel({
         val pairStats = pairWiseStatMap.map { case (k, v) =>
-          val stats = v.map { case (attrName, h) =>
+          val stats = v.map { case (attribute, h) =>
             val isEmployed = if (h > minCorrThres) "*" else ""
-            s"$isEmployed$attrName:$h"
+            s"$isEmployed$attribute:$h"
           }.mkString("\n    ")
           s"""$k (min=${v.last._2} max=${v.head._2}):
              |    $stats
@@ -448,8 +448,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       }
 
       val attrToId = discreteAttrs.zipWithIndex.toMap
-      sparkSession.udf.register("extractField", (row: Row, attrName: String) => {
-        row.getString(attrToId(attrName))
+      sparkSession.udf.register("extractField", (row: Row, attribute: String) => {
+        row.getString(attrToId(attribute))
       })
       val cellExprs = discreteAttrs.map { a => s"CAST(l.$a AS STRING) $a" }
       // Needs to keep the correlated attributes for selecting their domains
@@ -463,8 +463,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         s"""
            |SELECT
            |  l.$rowId,
-           |  attrName,
-           |  extractField(struct(${cellExprs.mkString(", ")}), attrName) initValue
+           |  attribute,
+           |  extractField(struct(${cellExprs.mkString(", ")}), attribute) initValue
            |  $corrCols
            |FROM
            |  $discreteAttrView l, $errCellView r
@@ -475,46 +475,46 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       val domainInitValue = "CAST(NULL AS ARRAY<STRUCT<n: STRING, cnt: DOUBLE>>)"
       val cellDomainDf = if (domain_threshold_beta >= 1.0) {
         // The case where we don't need to compute error domains
-        rvDf.selectExpr(rowId, "attrName", "initValue", s"$domainInitValue domain")
+        rvDf.selectExpr(rowId, "attribute", "initValue", s"$domainInitValue domain")
       } else {
         withTempView(rvDf) { rvView =>
-          corrAttrs.map { case (attrName, corrAttrsWithScores) =>
+          corrAttrs.map { case (attribute, corrAttrsWithScores) =>
             // Adds an empty domain for initial state
             val initDomainDf = sparkSession.sql(
               s"""
-                 |SELECT $rowId, attrName, initValue, $domainInitValue domain $corrCols
+                 |SELECT $rowId, attribute, initValue, $domainInitValue domain $corrCols
                  |FROM $rvView
-                 |WHERE attrName = '$attrName'
+                 |WHERE attribute = '$attribute'
              """.stripMargin)
 
             val domainDf = if (corrAttrsWithScores.nonEmpty) {
               val corrAttrs = corrAttrsWithScores.map(_._1)
-              logBasedOnLevel(s"Computing '$attrName' domain from ${corrAttrs.size} correlated " +
+              logBasedOnLevel(s"Computing '$attribute' domain from ${corrAttrs.size} correlated " +
                 s"attributes (${corrAttrs.mkString(",")})...")
 
               corrAttrs.foldLeft(initDomainDf) { case (df, attr) =>
                 withTempView(df) { domainSpaceView =>
                   val tau = {
                     // `tau` becomes a threshold on co-occurrence frequency
-                    val productSpaceSize = domainStatMap(attr) * domainStatMap(attrName)
+                    val productSpaceSize = domainStatMap(attr) * domainStatMap(attribute)
                     (domain_threshold_alpha * (rowCnt / productSpaceSize)).toLong
                   }
                   sparkSession.sql(
                     s"""
                        |SELECT
                        |  $rowId,
-                       |  attrName,
+                       |  attribute,
                        |  initValue,
                        |  IF(ISNOTNULL(l.domain), CONCAT(l.domain, r.d), r.d) domain,
                        |  ${corrAttrSet.map(a => s"l.$a").mkString(",")}
                        |FROM
                        |  $domainSpaceView l
                        |LEFT OUTER JOIN (
-                       |  SELECT $attr, collect_set(named_struct('n', $attrName, 'cnt', array_max(array(double(cnt) - 1.0, 0.1)))) d
+                       |  SELECT $attr, collect_set(named_struct('n', $attribute, 'cnt', array_max(array(double(cnt) - 1.0, 0.1)))) d
                        |  FROM (
                        |    SELECT *
                        |    FROM $attrStatView
-                       |    WHERE $attrName IS NOT NULL AND
+                       |    WHERE $attribute IS NOT NULL AND
                        |      $attr IS NOT NULL AND
                        |      cnt > $tau
                        |  )
@@ -538,33 +538,33 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
               sparkSession.sql(
                 s"""
                    |SELECT
-                   |  $rowId, attrName, initValue, domValue, SUM(score) score
+                   |  $rowId, attribute, initValue, domValue, SUM(score) score
                    |FROM (
                    |  SELECT
                    |    $rowId,
-                   |    attrName,
+                   |    attribute,
                    |    initValue,
                    |    domValueWithFreq.n domValue,
                    |    exp(ln(cnt / $rowCnt) + ln(domValueWithFreq.cnt / cnt)) score
                    |  FROM (
                    |    SELECT
                    |      $rowId,
-                   |      attrName,
+                   |      attribute,
                    |      initValue,
                    |      explode_outer(domain) domValueWithFreq
                    |    FROM
                    |      $domainView
                    |  ) d LEFT OUTER JOIN (
-                   |    SELECT $attrName, MAX(cnt) cnt
+                   |    SELECT $attribute, MAX(cnt) cnt
                    |    FROM $attrStatView
-                   |    WHERE ${whereCaluseToFilterStat(attrName)}
-                   |    GROUP BY $attrName
+                   |    WHERE ${whereCaluseToFilterStat(attribute)}
+                   |    GROUP BY $attribute
                    |  ) s
                    |  ON
-                   |    d.domValueWithFreq.n = s.$attrName
+                   |    d.domValueWithFreq.n = s.$attribute
                    |)
                    |GROUP BY
-                   |  $rowId, attrName, initValue, domValue
+                   |  $rowId, attribute, initValue, domValue
                """.stripMargin)
             }
 
@@ -573,22 +573,22 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                 s"""
                    |SELECT
                    |  l.$rowId,
-                   |  l.attrName,
+                   |  l.attribute,
                    |  initValue,
                    |  filter(collect_set(named_struct('n', domValue, 'prob', score / denom)), x -> x.prob > $domain_threshold_beta) domain
                    |FROM
                    |  $domainWithScoreView l, (
                    |    SELECT
-                   |      $rowId, attrName, SUM(score) denom
+                   |      $rowId, attribute, SUM(score) denom
                    |    FROM
                    |      $domainWithScoreView
                    |    GROUP BY
-                   |      $rowId, attrName
+                   |      $rowId, attribute
                    |  ) r
                    |WHERE
-                   |  l.$rowId = r.$rowId AND l.attrName = r.attrName
+                   |  l.$rowId = r.$rowId AND l.attribute = r.attribute
                    |GROUP BY
-                   |  l.$rowId, l.attrName, initValue
+                   |  l.$rowId, l.attribute, initValue
                """.stripMargin)
             }
           }

@@ -324,8 +324,8 @@ class ScavengerRepairModel(SchemaSpyBase):
         # If `error_cells` provided, just uses it
         if error_cells is not None:
             df = self.spark.table(str(error_cells))
-            if not all(c in df.columns for c in (self.row_id, "attrName")):
-                raise ValueError("`%s` must have `%s` and `attrName` in columns" % \
+            if not all(c in df.columns for c in (self.row_id, "attribute")):
+                raise ValueError("`%s` must have `%s` and `attribute` in columns" % \
                     (str(error_cells), self.row_id))
 
             self.outputToConsole("Error cells provided by `%s`" % str(error_cells))
@@ -387,7 +387,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         # Sets the high-confident inferred values to the gray cells if it can follow
         # the principle of minimality.
         weak_df = self.spark.table(env["cell_domain"]) \
-            .selectExpr(self.row_id, "attrName", "initValue", "if(initValue = domain[0].n, initValue, NULL) val").cache()
+            .selectExpr(self.row_id, "attribute", "initValue", "if(initValue = domain[0].n, initValue, NULL) val").cache()
         weak_df.where("val IS NOT NULL").drop("initValue").cache().createOrReplaceTempView(env["weak"])
         ret_as_json = self.__svg_api.repairAttrsFrom(env["weak"], "", env["repair_base"], self.row_id)
         env["partial_repaired"] = json.loads(ret_as_json)["repaired"]
@@ -422,10 +422,10 @@ class ScavengerRepairModel(SchemaSpyBase):
         # TODO: Makes this classifier pluggable
         import lightgbm as lgb
         error_num_map = {}
-        error_attrs = error_cells_df.groupBy("attrName").agg(functions.count("attrName").alias("cnt")).collect()
+        error_attrs = error_cells_df.groupBy("attribute").agg(functions.count("attribute").alias("cnt")).collect()
         assert len(error_attrs) > 0
         for row in error_attrs:
-            error_num_map[row.attrName] = row.cnt
+            error_num_map[row.attribute] = row.cnt
 
         # Checks if we have the enough number of features for inference
         # TODO: In case of `num_features == 0`, we might be able to select the most accurate and
@@ -440,15 +440,15 @@ class ScavengerRepairModel(SchemaSpyBase):
         # a target column and the other ones for decideing a inference order.
         #
         # for row in error_attrs:
-        #     logging.warning("%s: %s" % (row.attrName, ", ".join(list(map(lambda x: str(x), env["pairwise_attr_stats"][row.attrName])))))
-        #     for f, corr in list(map(lambda x: tuple(x), env["pairwise_attr_stats"][row.attrName])):
+        #     logging.warning("%s: %s" % (row.attribute, ", ".join(list(map(lambda x: str(x), env["pairwise_attr_stats"][row.attribute])))))
+        #     for f, corr in list(map(lambda x: tuple(x), env["pairwise_attr_stats"][row.attribute])):
         #         // Process `f` and `float(corr)` here
 
         # Sorts target columns by the domain sizes of training data
         # TODO: Needs to think more about feature selection, the order in which models
         # are applied, and corelation of features.
-        target_columns = list(map(lambda row: row.attrName, \
-            sorted(error_attrs, key=lambda row: int(env["distinct_stats"][row.attrName]), reverse=False)))
+        target_columns = list(map(lambda row: row.attribute, \
+            sorted(error_attrs, key=lambda row: int(env["distinct_stats"][row.attribute]), reverse=False)))
         for y in target_columns:
             logging.info("%s: |domain|=%s #errors=%s" % (y, env["distinct_stats"][y], error_num_map[y]))
 
@@ -525,9 +525,9 @@ class ScavengerRepairModel(SchemaSpyBase):
             to_current_expr = "named_struct('val', initValue, 'prob', " \
                 "coalesce(dist.probs[array_position(dist.classes, initValue) - 1], 0.0)) current"
             dist_df = self.__flattenDataFrame(repaired_df) \
-                .selectExpr(self.row_id, "attrName", parse_dist_json_expr) \
-                .join(error_cells_df, [self.row_id, "attrName"], "inner") \
-                .selectExpr(self.row_id, "attrName", to_current_expr, to_dist_expr)
+                .selectExpr(self.row_id, "attribute", parse_dist_json_expr) \
+                .join(error_cells_df, [self.row_id, "attribute"], "inner") \
+                .selectExpr(self.row_id, "attribute", to_current_expr, to_dist_expr)
             dist_df.createOrReplaceTempView(env["dist"])
 
             # Selects maximal likelihood candidates as correct repairs
@@ -541,10 +541,10 @@ class ScavengerRepairModel(SchemaSpyBase):
             max_likelihood_repair_expr = "named_struct('val', dist[0].`0`, 'prob', dist[0].`1`) repaired"
             score_expr = "ln(repaired.prob / IF(current.prob > 0.0, current.prob, 1e-6)) * (1.0 / (1.0 + distance)) score"
             score_df = dist_df \
-                .selectExpr(self.row_id, "attrName", "current", sorted_dist_expr) \
-                .selectExpr(self.row_id, "attrName", "current", max_likelihood_repair_expr) \
+                .selectExpr(self.row_id, "attribute", "current", sorted_dist_expr) \
+                .selectExpr(self.row_id, "attribute", "current", max_likelihood_repair_expr) \
                 .withColumn("distance", distance(col("current.val"), col("repaired.val"))) \
-                .selectExpr(self.row_id, "attrName", "repaired.val val", score_expr)
+                .selectExpr(self.row_id, "attribute", "repaired.val val", score_expr)
 
             if self.repair_delta is not None:
                 row = score_df.selectExpr("percentile(score, %s) thres" % (float(self.repair_delta) / num_error_cells)).collect()[0]
