@@ -27,7 +27,7 @@
 
   <groupId>io.github.maropu</groupId>
   <artifactId>scavenger-plugin_2.12</artifactId>
-  <version>0.1.0-spark2.4-EXPERIMENTAL</version>
+  <version>0.1.0-spark3.0-EXPERIMENTAL</version>
   <packaging>jar</packaging>
   <name>Scavenger: Profile Relational Data in Spark Catalog Tables</name>
 

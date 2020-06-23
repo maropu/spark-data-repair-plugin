@@ -25,27 +25,11 @@ import org.apache.spark.util.{Utils => SparkUtils}
 /** A Python API entry point for data cleaning. */
 object ScavengerRepairApi extends BaseScavengerRepairApi {
 
-  /**
-   * To compare result rows easily, this method flattens an input table
-   * as a schema (`rowId`, attribute, val).
-   */
-  def flattenAsDataFrame(dbName: String, tableName: String, rowId: String): DataFrame = {
-    logBasedOnLevel(s"flattenAsDataFrame called with: dbName=$dbName tableName=$tableName rowId=$rowId")
-
-    withSparkSession { _ =>
-      val (inputDf, _, _) = checkInputTable(dbName, tableName, rowId)
-      val expr = inputDf.schema.filter(_.name != rowId)
-        .map { f => s"STRUCT($rowId, '${f.name}', CAST(${f.name} AS STRING))" }
-        .mkString("ARRAY(", ", ", ")")
-      inputDf.selectExpr(s"INLINE($expr) AS (tid, attribute, val)")
-    }
-  }
-
-  def injectNullAt(dbName: String, tableName: String, targetAttrList: String, nullRatio: Double): DataFrame = {
-    logBasedOnLevel(s"flattenAsDataFrame called with: dbName=$dbName tableName=$tableName " +
+  def injectNullAt(dbName: String, tableName: String, targetAttrList: String, nullRatio: Double): String = {
+    logBasedOnLevel(s"injectNullAt called with: dbName=$dbName tableName=$tableName " +
       s"targetAttrList=$targetAttrList, nullRatio=$nullRatio")
 
-    withSparkSession { _ =>
+    val df = withSparkSession { _ =>
       val (inputDf, inputName, tableAttrs) = checkInputTable(dbName, tableName)
       val targetAttrSet = if (targetAttrList.nonEmpty) {
         val attrSet = SparkUtils.stringToSeq(targetAttrList).toSet
@@ -64,6 +48,24 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       }
       inputDf.selectExpr(exprs: _*)
     }
+    Seq("injected" -> createAndCacheTempView(df)).asJson
+  }
+
+  /**
+   * To compare result rows easily, this method flattens an input table
+   * as a schema (`rowId`, attribute, val).
+   */
+  def flattenTable(dbName: String, tableName: String, rowId: String): String = {
+    logBasedOnLevel(s"flattenTable called with: dbName=$dbName tableName=$tableName rowId=$rowId")
+
+    val df = withSparkSession { _ =>
+      val (inputDf, _, _) = checkInputTable(dbName, tableName, rowId)
+      val expr = inputDf.schema.filter(_.name != rowId)
+        .map { f => s"STRUCT($rowId, '${f.name}', CAST(${f.name} AS STRING))" }
+        .mkString("ARRAY(", ", ", ")")
+      inputDf.selectExpr(s"INLINE($expr) AS (tid, attrName, val)")
+    }
+    Seq("flatten" -> createAndCacheTempView(df)).asJson
   }
 
   private def distinctStatMap(inputName: String): Map[String, Long] = {
@@ -176,7 +178,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
     withSparkSession { sparkSession =>
       // `repairedCells` must have `$rowId`, `attribute`, and `repaired` columns
-      checkIfColumnsExistIn(repairedCells, rowId :: "attrName" :: "weakValue" :: Nil)
+      checkIfColumnsExistIn(repairedCells, rowId :: "attrName" :: "val" :: Nil)
 
       val (inputDf, inputName, tableAttrs) = checkInputTable(dbName, tableName, rowId)
       val attrsToRepair = {
@@ -189,7 +191,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
            |SELECT
            |  $rowId, map_from_entries(COLLECT_LIST(r)) AS repairs
            |FROM (
-           |  select $rowId, struct(attrName, weakValue) r
+           |  select $rowId, struct(attrName, val) r
            |  FROM $repairedCells
            |)
            |GROUP BY
@@ -216,8 +218,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
              """.stripMargin)
         }
       }
-
-      createAndCacheTempView(repaired, "repaired")
+      Seq("repaired" -> createAndCacheTempView(repaired, "repaired")).asJson
     }
   }
 
@@ -269,14 +270,14 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
              """.stripMargin)
         }
       }
-
-      createAndCacheTempView(statDf, "attr_stats")
+      Seq("attr_stats" -> createAndCacheTempView(statDf, "attr_stats")).asJson
     }
   }
 
   def convertErrorCellsToNull(discreteAttrView: String, errCellView: String, rowId: String): String = {
     logBasedOnLevel(s"convertErrorCellsToNull called with: discreteAttrView=$discreteAttrView " +
       s"errCellView=$errCellView rowId=$rowId")
+
     withSparkSession { sparkSession =>
       // `errCellView` must have `$rowId` and `attrName` columns
       checkIfColumnsExistIn(errCellView, rowId :: "attrName" :: Nil)
@@ -310,8 +311,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
              |ON $discreteAttrView.$rowId = $errAttrView.$rowId
            """.stripMargin)
       }
-
-      createAndCacheTempView(repairBase, "repair_base")
+      Seq("repair_base" -> createAndCacheTempView(repairBase, "repair_base")).asJson
     }
   }
 
@@ -600,7 +600,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       }
       // Number of rows in `cellDomainView` is the same with the number of error cells
       assert(cellDomainDf.count == sparkSession.table(errCellView).count)
-      Seq("cell_domain" -> cellDomainView, "pairwise_attr_stats" -> corrAttrs).asJson
+      Seq("cell_domain" -> cellDomainView,
+        "pairwise_attr_stats" -> corrAttrs).asJson
     }
   }
 }

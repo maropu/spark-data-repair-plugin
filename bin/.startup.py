@@ -29,8 +29,8 @@ import logging
 import pandas as pd
 import time
 
-from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql import functions
+from pyspark.sql import DataFrame, SparkSession, functions
+from pyspark.sql.functions import col
 
 from repair.detectors import *
 
@@ -112,24 +112,24 @@ class ScavengerConstraints(SchemaSpyBase):
         self.output = output
         self.db_name = db_name
         self.table_name = ""
-        self.svg_api = sc._jvm.ScavengerApi
+        self.__svg_api = sc._jvm.ScavengerApi
 
     def setTableName(self, table_name):
         self.table_name = table_name
         return self
 
     def infer(self):
-        result_path = self.svg_api.inferConstraints(self.output, self.db_name, self.table_name)
+        result_path = self.__svg_api.inferConstraints(self.output, self.db_name, self.table_name)
         return SchemaSpyResult(result_path)
 
 class ScavengerRepairMisc(SchemaSpyBase):
 
     # TODO: Prohibit instantiation directly
-    def __init__(self, db_name, table_name, row_id, svg_api):
+    def __init__(self, db_name, table_name, row_id, __svg_api):
         super().__init__()
         self.db_name = db_name
         self.table_name = table_name
-        self.svg_api = svg_api
+        self.__svg_api = __svg_api
         self.row_id = row_id
         self.target_attr_list = ""
         self.null_ratio = 0.01
@@ -150,29 +150,26 @@ class ScavengerRepairMisc(SchemaSpyBase):
         self.null_ratio = null_ratio
         return self
 
-    def flattenAsDataFrame(self):
-        if self.table_name is None or self.row_id is None:
-            raise ValueError("`setTableName` and `setRowId` should be called before doing inferences")
-
-        jdf = self.svg_api.flattenAsDataFrame(self.db_name, self.table_name, self.row_id)
-        df = DataFrame(jdf, self.spark._wrapped)
-        return df
-
     def injectNull(self):
         if self.table_name is None:
-            raise ValueError("`setTableName` should be called before doing inferences")
+            raise ValueError("`setTableName` should be called before injecting NULL")
 
-        jdf = self.svg_api.injectNullAt(self.db_name, self.table_name, self.target_attr_list, self.null_ratio)
+        jdf = self.__svg_api.injectNullAt(self.db_name, self.table_name, self.target_attr_list, self.null_ratio)
         df = DataFrame(jdf, self.spark._wrapped)
         return df
+
+    def flatten(self):
+        if self.table_name is None or self.row_id is None:
+            raise ValueError("`setTableName` and `setRowId` should be called before flattening")
+
+        ret_as_json = json.loads(self.__svg_api.flattenTable(self.db_name, self.table_name, self.row_id))
+        return self.spark.table(ret_as_json["flatten"])
 
 class ScavengerRepairModel(SchemaSpyBase):
 
     # TODO: Prohibit instantiation directly
     def __init__(self, output, db_name):
         super().__init__()
-
-        self.svg_api = sc._jvm.ScavengerRepairApi
 
         self.constraint_input_path = None
         self.db_name = db_name
@@ -189,29 +186,39 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.training_data_sample_ratio = 1.0
         self.stat_thres_ratio = 0.0
         self.min_features_num = 1
+        self.max_likelihood_repair_enabled = False
+        self.repair_delta = None
+
+        # JVM interfaces for Scavenger APIs
+        self.__svg_api = sc._jvm.ScavengerRepairApi
 
         # Internally used to check elapsed time
         self.__timer_base = None
 
         # Defines detectors to discover error cells
-        self.detectors = [
+        self.__detectors = [
             # NullErrorDetector(),
             ConstraintErrorDetector()
         ]
 
         # Temporary views used in repairing processes
-        self.meta_view_names = [
+        self.__meta_view_names = [
             "discrete_attrs",
             "gray_cells",
             "repair_base",
             "cell_domain",
             "partial_repaired",
+            "repaired",
+            "dirty",
             "weak",
             "train",
+            "flatten",
+            "dist",
+            "score",
         ]
 
     def misc(self):
-        return ScavengerRepairMisc(self.db_name, self.table_name, self.row_id, self.svg_api)
+        return ScavengerRepairMisc(self.db_name, self.table_name, self.row_id, self.__svg_api)
 
     def setConstraints(self, constraint_input_path):
         self.constraint_input_path = constraint_input_path
@@ -238,20 +245,34 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.max_attrs_to_compute_domains = max
         return self
 
+    def setMaxLikelihoodRepairEnabled(self, enabled):
+        self.max_likelihood_repair_enabled = enabled
+        return self
+
+    def setRepairDelta(self, delta):
+        self.repair_delta = delta
+        return self
+
+    def __tempName(self, prefix="temp"):
+        return "%s_%s" % (prefix, datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
+
     def __detectErrorCells(self, env):
         # Initializes defined error detectors with the given env
-        for d in self.detectors:
+        for d in self.__detectors:
             d.setup(env)
 
-        error_cells_dfs = [ d.detect() for d in self.detectors ]
+        error_cells_dfs = [ d.detect() for d in self.__detectors ]
 
         err_cells = self.__tempName("gray_cells")
         err_cells_df = functools.reduce(lambda x, y: x.union(y), error_cells_dfs)
         err_cells_df.cache().createOrReplaceTempView(err_cells)
         return err_cells
 
-    def __tempName(self, prefix):
-        return "%s_%s" % (prefix, datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
+    def __flattenDataFrame(self, df):
+        temp_view = self.__tempName()
+        df.createOrReplaceTempView(temp_view)
+        ret_as_json = json.loads(self.__svg_api.flattenTable("", temp_view, self.row_id))
+        return self.spark.table(ret_as_json["flatten"])
 
     def __startSparkJobs(self, name, desc):
         self.spark.sparkContext.setJobGroup(name, name)
@@ -270,25 +291,25 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.__clearJobGroup()
 
     def __releaseResources(self, env):
-        for t in list(filter(lambda x: x in self.meta_view_names, env.values())):
+        for t in list(filter(lambda x: x in self.__meta_view_names, env.values())):
             self.spark.sql("DROP VIEW IF EXISTS %s" % env[t])
 
     def __run(self, error_cells, detect_errors_only):
-        if self.table_name is None or self.row_id is None:
-            raise ValueError("`setTableName` and `setRowId` should be called before repairing")
-
         # Env used to repair the given table
         env = {}
         env["row_id"] = self.row_id
         env["constraint_input_path"] = self.constraint_input_path
         env["weak"] = self.__tempName("weak")
+        env["dirty"] = self.__tempName("dirty")
         env["train"] = self.__tempName("train")
+        env["dist"] = self.__tempName("dist")
+        env["score"] = self.__tempName("score")
 
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
         self.__startSparkJobs("preprocess rows",
             "Preprocessing an input table `%s` with rowId=`%s`..." % (self.table_name, self.row_id))
-        env.update(json.loads(self.svg_api.convertToDiscreteAttrs(
+        env.update(json.loads(self.__svg_api.convertToDiscreteAttrs(
             self.db_name, self.table_name, self.row_id,
             self.discrete_thres,
             self.cnt_value_discretization,
@@ -337,25 +358,25 @@ class ScavengerRepairModel(SchemaSpyBase):
         # Sets NULL at the detected gray cells
         self.outputToConsole("%s/%s suspicious cells found, then converts them into NULL cells..." % \
             (num_gray_cells, num_input_rows * num_attrs))
-        env["repair_base"] = self.svg_api.convertErrorCellsToNull(
+        env.update(json.loads(self.__svg_api.convertErrorCellsToNull(
             env["discrete_attrs"], env["gray_cells"],
-            self.row_id)
+            self.row_id)))
 
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
         self.__startSparkJobs("collect stat rows",
             "Collecting and sampling attribute stats (ratio=%s threshold=%s) before computing error domains..." % \
                 (self.attr_stats_sample_ratio, self.stat_thres_ratio))
-        env["attr_stats"] = self.svg_api.computeAttrStats(
+        env.update(json.loads(self.__svg_api.computeAttrStats(
             env["discrete_attrs"], env["gray_cells"], self.row_id,
             self.attr_stats_sample_ratio,
-            self.stat_thres_ratio)
+            self.stat_thres_ratio)))
         self.__endSparkJobs("collect %s stat rows" % \
             self.spark.table(env["attr_stats"]).count())
 
         self.__startSparkJobs("compute domains",
             "Computing error domains with posteriori probability...")
-        env.update(json.loads(self.svg_api.computeDomainInErrorCells(
+        env.update(json.loads(self.__svg_api.computeDomainInErrorCells(
             env["discrete_attrs"], env["attr_stats"], env["gray_cells"], self.row_id,
             self.max_attrs_to_compute_domains,
             self.min_corr_thres,
@@ -366,12 +387,13 @@ class ScavengerRepairModel(SchemaSpyBase):
         # Sets the high-confident inferred values to the gray cells if it can follow
         # the principle of minimality.
         weak_df = self.spark.table(env["cell_domain"]) \
-            .selectExpr(self.row_id, "attrName", "initValue", "if(initValue = domain[0].n, initValue, NULL) weakValue").cache()
-        weak_df.where("weakValue IS NOT NULL").drop("initValue").cache().createOrReplaceTempView(env["weak"])
-        env["partial_repaired"] = self.svg_api.repairAttrsFrom(env["weak"], "", env["repair_base"], self.row_id)
+            .selectExpr(self.row_id, "attrName", "initValue", "if(initValue = domain[0].n, initValue, NULL) val").cache()
+        weak_df.where("val IS NOT NULL").drop("initValue").cache().createOrReplaceTempView(env["weak"])
+        ret_as_json = self.__svg_api.repairAttrsFrom(env["weak"], "", env["repair_base"], self.row_id)
+        env["partial_repaired"] = json.loads(ret_as_json)["repaired"]
 
         # If no error cell found, ready to return a clean table
-        error_cells_df = weak_df.where("weakValue IS NULL").drop("weakValue").cache()
+        error_cells_df = weak_df.where("val IS NULL").drop("val").cache()
         num_error_cells = error_cells_df.count()
         if num_error_cells == 0:
             clean_df = self.spark.table(env["partial_repaired"])
@@ -391,12 +413,10 @@ class ScavengerRepairModel(SchemaSpyBase):
             (train_df.count(), self.training_data_sample_ratio, fixed_df.count()))
 
         # Computes domain sizes for training data
-        # TODO: Needs to Replace `saveAsTable` with `createOrReplaceTempView`
-        # train_df.createOrReplaceTempView(env["train"])
         self.__startSparkJobs("collect training data stats",
             "Collecting training data stats before building ML models...")
-        train_df.write.saveAsTable(env["train"])
-        env.update(json.loads(self.svg_api.computeDomainSizes(env["train"])))
+        train_df.createOrReplaceTempView(env["train"])
+        env.update(json.loads(self.__svg_api.computeDomainSizes(env["train"])))
         self.__endSparkJobs()
 
         # TODO: Makes this classifier pluggable
@@ -452,25 +472,36 @@ class ScavengerRepairModel(SchemaSpyBase):
         # Shares all the variables for the learnt models in a Spark cluster
         broadcasted_target_columns = self.spark.sparkContext.broadcast(target_columns)
         broadcasted_clfs = self.spark.sparkContext.broadcast(clfs)
+        broadcasted_max_likelihood_repair_enabled = \
+            self.spark.sparkContext.broadcast(self.max_likelihood_repair_enabled)
+
+        dirty_df = self.spark.table(env["partial_repaired"]).join(error_rows_df, self.row_id, "left_semi").cache()
+        dirty_df.createOrReplaceTempView(env["dirty"])
 
         # Sets a grouping key for inference
         num_parallelism = spark.sparkContext.defaultParallelism
         grouping_key = self.__tempName("__grouping_key")
-        dirty_df = self.spark.table(env["partial_repaired"]).join(error_rows_df, self.row_id, "left_semi") \
-            .withColumn(grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
+        dirty_df = dirty_df.withColumn(grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
 
         @functions.pandas_udf(dirty_df.schema, functions.PandasUDFType.GROUPED_MAP)
-        def repair(pdf):
+        def maximal_likelihood_repair(pdf):
             target_columns = broadcasted_target_columns.value
             clfs = broadcasted_clfs.value
+            max_likelihood_repair_enabled = \
+                broadcasted_max_likelihood_repair_enabled.value
             rows = []
             for index, row in pdf.iterrows():
                 for y in target_columns:
                     if row[y] is None:
                         (clf, features) = clfs[y]
                         vec = row[features].map(hash)
-                        predicted = clf.predict(vec.to_numpy().reshape(1, -1))
-                        row[y] = predicted[0]
+                        if max_likelihood_repair_enabled:
+                            predicted = clf.predict(vec.to_numpy().reshape(1, -1))
+                            row[y] = predicted[0]
+                        else:
+                            predicted = clf.predict_proba(vec.to_numpy().reshape(1, -1))
+                            dist = { "classes" : clf.classes_.tolist(), "probs" : predicted[0].tolist() }
+                            row[y] = json.dumps(dist)
 
                 rows.append(row)
 
@@ -480,17 +511,59 @@ class ScavengerRepairModel(SchemaSpyBase):
         # TODO: Might need to compare repair costs (cost of an update, c) to
         # the likelihood benefits of the updates (likelihood benefit of an update, l).
         self.__startSparkJobs("apply the ML models", "Repairing error cells...")
-        repaired_df = dirty_df.groupBy(grouping_key).apply(repair).drop(grouping_key).cache()
+        repaired_df = dirty_df.groupBy(grouping_key).apply(maximal_likelihood_repair).drop(grouping_key).cache()
         repaired_df.write.format("noop").mode("overwrite").save()
         self.__endSparkJobs()
 
-        # self.__releaseResources(env)
+        # If probability distribution given, computes scores to decide which cells should be repaired
+        # to follow the “Maximal Likelihood Repair” problem.
+        if not self.max_likelihood_repair_enabled:
+            # Format a table with probability distribution
+            self.outputToConsole("Constructing a table (`%s`) for probability distribution..." % env["dist"])
+            parse_dist_json_expr = "from_json(val, 'classes array<string>, probs array<double>') dist"
+            to_dist_expr = "arrays_zip(dist.classes, dist.probs) dist"
+            to_current_expr = "named_struct('val', initValue, 'prob', " \
+                "coalesce(dist.probs[array_position(dist.classes, initValue) - 1], 0.0)) current"
+            dist_df = self.__flattenDataFrame(repaired_df) \
+                .selectExpr(self.row_id, "attrName", parse_dist_json_expr) \
+                .join(error_cells_df, [self.row_id, "attrName"], "inner") \
+                .selectExpr(self.row_id, "attrName", to_current_expr, to_dist_expr)
+            dist_df.createOrReplaceTempView(env["dist"])
+
+            # Selects maximal likelihood candidates as correct repairs
+            @functions.pandas_udf("double", functions.PandasUDFType.SCALAR)
+            def distance(xs, ys):
+                import Levenshtein
+                dists = [float(Levenshtein.distance(x, y)) for x, y in zip(xs, ys)]
+                return pd.Series(dists)
+
+            sorted_dist_expr = "array_sort(dist, (left, right) -> if(left.`1` < right.`1`, 1, -1)) dist"
+            max_likelihood_repair_expr = "named_struct('val', dist[0].`0`, 'prob', dist[0].`1`) repaired"
+            score_expr = "ln(repaired.prob / IF(current.prob > 0.0, current.prob, 1e-6)) * (1.0 / (1.0 + distance)) score"
+            score_df = dist_df \
+                .selectExpr(self.row_id, "attrName", "current", sorted_dist_expr) \
+                .selectExpr(self.row_id, "attrName", "current", max_likelihood_repair_expr) \
+                .withColumn("distance", distance(col("current.val"), col("repaired.val"))) \
+                .selectExpr(self.row_id, "attrName", "repaired.val val", score_expr)
+
+            if self.repair_delta is not None:
+                row = score_df.selectExpr("percentile(score, %s) thres" % (float(self.repair_delta) / num_error_cells)).collect()[0]
+                score_df = score_df.where("score < %s" % row.thres)
+                self.outputToConsole("Bounded # of repairs from %s to %s" % (num_error_cells, score_df.count()))
+
+            # Finally, replaces error cells with ones in `score_df`
+            score_df.createOrReplaceTempView(env["score"])
+            env.update(json.loads(self.__svg_api.repairAttrsFrom(env["score"], "", env["dirty"], self.row_id)))
+            repaired_df = self.spark.table(env["repaired"])
 
         clean_df = fixed_df.union(repaired_df)
         # assert clean_df.count == self.spark.table(env["discrete_attrs"]).count()
         return clean_df
 
     def run(self, error_cells=None, detect_errors_only=False):
+        if self.table_name is None or self.row_id is None:
+            raise ValueError("`setTableName` and `setRowId` should be called before repairing")
+
         __start = time.time()
         df = self.__run(error_cells, detect_errors_only)
         self.outputToConsole("!!!Total processing time is %s(s)!!!" % (time.time() - __start))

@@ -17,8 +17,6 @@
 
 package org.apache.spark.api.python
 
-import scala.collection.mutable
-
 import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
 import org.apache.spark.python.ScavengerConf._
