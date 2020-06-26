@@ -58,11 +58,11 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
     logBasedOnLevel(s"detectNullCells called with: dbName=$dbName tableName=$tableName rowId=$rowId")
 
     withSparkSession { sparkSession =>
-      val (inputDf, inputName, tableAttrs) = checkInputTable(dbName, tableName, rowId)
+      val (inputDf, inputName) = checkInputTable(dbName, tableName, rowId)
 
       withTempView(inputDf, cache = true) { inputView =>
         // Detects error erroneous cells in a given table
-        val errCellDf = tableAttrs.map { attr =>
+        val errCellDf = inputDf.columns.map { attr =>
           sparkSession.sql(
             s"""
                |SELECT $rowId, '$attr' AS attribute
@@ -94,10 +94,10 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
       s"dbName=$dbName tableName=$tableName rowId=$rowId")
 
     withSparkSession { sparkSession =>
-      val (inputDf, inputName, tableAttrs) = checkInputTable(dbName, tableName, rowId)
+      val (inputDf, inputName) = checkInputTable(dbName, tableName, rowId)
 
       withTempView(inputDf, cache = true) { inputView =>
-        val constraints = loadConstraintsFromFile(constraintFilePath, tableName, tableAttrs)
+        val constraints = loadConstraintsFromFile(constraintFilePath, tableName, inputDf.columns)
         if (constraints.entries.isEmpty) {
           // Case of non-found constraints
           val rowIdType = inputDf.schema.find(_.name == rowId).get.dataType.sql

@@ -1,7 +1,7 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
-v* this work for additional information regarding copyright ownership.
+ * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
@@ -20,6 +20,7 @@ package org.apache.spark.api.python
 import org.apache.spark.SparkException
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.plans.logical.LeafNode
+import org.apache.spark.sql.types._
 import org.apache.spark.util.{Utils => SparkUtils}
 
 /** A Python API entry point for data cleaning. */
@@ -30,15 +31,15 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       s"targetAttrList=$targetAttrList, nullRatio=$nullRatio")
 
     val df = withSparkSession { _ =>
-      val (inputDf, inputName, tableAttrs) = checkInputTable(dbName, tableName)
+      val (inputDf, inputName) = checkInputTable(dbName, tableName)
       val targetAttrSet = if (targetAttrList.nonEmpty) {
         val attrSet = SparkUtils.stringToSeq(targetAttrList).toSet
-        if (!tableAttrs.exists(attrSet.contains)) {
+        if (!inputDf.columns.exists(attrSet.contains)) {
           throw new SparkException(s"No target attribute selected in $inputName")
         }
         attrSet
       } else {
-        tableAttrs.toSet
+        inputDf.columns.toSet
       }
       val exprs = inputDf.schema.map {
         case f if targetAttrSet.contains(f.name) =>
@@ -59,7 +60,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     logBasedOnLevel(s"flattenTable called with: dbName=$dbName tableName=$tableName rowId=$rowId")
 
     val df = withSparkSession { _ =>
-      val (inputDf, _, _) = checkInputTable(dbName, tableName, rowId)
+      val (inputDf, _) = checkInputTable(dbName, tableName, rowId)
       val expr = inputDf.schema.filter(_.name != rowId)
         .map { f => s"STRUCT($rowId, '${f.name}', CAST(${f.name} AS STRING))" }
         .mkString("ARRAY(", ", ", ")")
@@ -68,35 +69,35 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     Seq("flatten" -> createAndCacheTempView(df)).asJson
   }
 
-  private def distinctStatMap(inputName: String): Map[String, Long] = {
+  case class ColumnStat(distinctCount: Long, min: Option[Any], max: Option[Any])
+
+  private def getColumnStats(inputName: String): Map[String, ColumnStat] = {
     assert(SparkSession.getActiveSession.nonEmpty)
     val spark = SparkSession.getActiveSession.get
     val df = spark.table(inputName)
     val tableStats = {
-      val tableNode = df.queryExecution.analyzed.collectLeaves()
-        .head.asInstanceOf[LeafNode]
+      val tableNode = df.queryExecution.analyzed.collectLeaves().head.asInstanceOf[LeafNode]
       tableNode.computeStats()
     }
-    val statMap = tableStats.attributeStats.map {
-      kv => (kv._1.name, kv._2.distinctCount.map(_.toLong).get)
+    val statMap = tableStats.attributeStats.map { kv =>
+      val stat = kv._2
+      val distinctCount = stat.distinctCount.map(_.toLong)
+      (kv._1.name, ColumnStat(distinctCount.get, stat.min, stat.max))
     }
-    if (!df.columns.forall(statMap.contains)) {
-      throw new SparkException(s"'$inputName' should be analyzed first")
-    }
+    // assert(df.columns.toSet == statMap.keySet)
     statMap
   }
 
-  private def computeAndGetTableStats(tableIdentifier: String): Map[String, Long] = {
+  private def computeAndGetTableStats(tableIdentifier: String): Map[String, ColumnStat] = {
     assert(SparkSession.getActiveSession.isDefined)
     val spark = SparkSession.getActiveSession.get
-    // To compute the number of distinct values, runs `ANALYZE TABLE` first
     spark.sql(
       s"""
          |ANALYZE TABLE $tableIdentifier COMPUTE STATISTICS
          |FOR ALL COLUMNS
        """.stripMargin)
 
-    distinctStatMap(tableIdentifier)
+    getColumnStats(tableIdentifier)
   }
 
   def computeDomainSizes(discreteAttrView: String): String = {
@@ -104,71 +105,56 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
     withSparkSession { _ =>
       val statMap = computeAndGetTableStats(discreteAttrView)
-      Seq("distinct_stats" -> statMap.mapValues(_.toString)).asJson
+      Seq("distinct_stats" -> statMap.mapValues(_.distinctCount.toString)).asJson
     }
   }
 
-  def convertToDiscreteAttrs(
+  private def isContinousAttrType(tpe: DataType): Boolean = {
+    tpe == FloatType || tpe == DoubleType
+  }
+
+  def convertToDiscreteFeatures(
       dbName: String,
       tableName: String,
       rowId: String,
-      discreteThres: Int,
-      // TODO: Discretizes continuous values into buckets
-      cntValueDiscretization: Boolean,
-      blackAttrList: String): String = {
+      discreteThres: Int): String = {
 
-    logBasedOnLevel(s"convertToDiscreteAttrs called with: dbName=$dbName tableName=$tableName " +
-      s"rowId=$rowId discreteThres=$discreteThres " +
-      s"blackAttrList=${if (!blackAttrList.isEmpty) blackAttrList else "<none>"}")
+    logBasedOnLevel(s"convertToDiscreteFeatures called with: dbName=$dbName tableName=$tableName " +
+      s"rowId=$rowId discreteThres=$discreteThres")
+
+    require(rowId.nonEmpty, s"$rowId should be a non-empty string.")
+    require(2 <= discreteThres && discreteThres < 65536, "discreteThres should be in [2, 65536).")
 
     withSparkSession { _ =>
-      val (inputDf, inputName, tableAttrs) = checkInputTable(dbName, tableName, rowId, blackAttrList)
-
+      val (inputDf, inputName) = checkInputTable(dbName, tableName, rowId)
       val statMap = computeAndGetTableStats(inputName)
-      val attrsWithStats = tableAttrs.map { a => (a, statMap(a)) }
-      val rowCnt = statMap(rowId)
-
-      logBasedOnLevel({
-        val distinctCnts = attrsWithStats.map { case (a, c) => s"distinctCnt($a):$c" }
-        s"rowCnt:$rowCnt ${distinctCnts.mkString(" ")}"
-      })
-
-      if (attrsWithStats.collectFirst { case (a, cnt) if a == rowId => cnt }.get != rowCnt) {
-        throw new SparkException(s"Uniqueness does not hold in column '$rowId' of table '$dbName.$tableName'.")
+      val attrTypeMap = inputDf.schema.map { f => f.name -> f.dataType }.toMap
+      val rowCnt = inputDf.count()
+      if (statMap(rowId).distinctCount != rowCnt) {
+        throw new SparkException(s"Uniqueness does not hold in column '$rowId' " +
+          s"of table '$dbName.$tableName'.")
       }
-
-      def isDiscrete(v: Long) = 1 < v && v < discreteThres
-      val (discreteAttrs, nonDiscreteAttrs) = attrsWithStats.sortBy(_._2).partition { a => isDiscrete(a._2) }
-      if (nonDiscreteAttrs.size > 1) {
-        val droppedCols = nonDiscreteAttrs.filterNot(_._1 == rowId).map { case (a, c) => s"$a($c)" }
-        logWarning("Dropped the columns having non-suitable domain size: " +
-          droppedCols.mkString(", "))
-      }
-      if (discreteAttrs.size < 2) {
-        val errMsg = if (discreteAttrs.nonEmpty) {
-          s"found: ${discreteAttrs.map(_._1).mkString(",")}"
-        } else {
-          "no discrete attribute found."
+      val discreteExprs = inputDf.columns.flatMap { attr =>
+        (statMap(attr), attrTypeMap(attr)) match {
+          case (ColumnStat(_, min, max), tpe) if isContinousAttrType(tpe) =>
+            logBasedOnLevel(s"'$attr' regraded as a continuous attribute (min=${min.get}, " +
+              s"max=${max.get}, so discretizes it in [0, $discreteThres)")
+            Some(s"int(($attr - ${min.get}) / (${max.get} - ${min.get}) * $discreteThres) $attr")
+          case (ColumnStat(distinctCnt, _, _), _)
+              if attr == rowId || (1 < distinctCnt && distinctCnt < discreteThres) =>
+            Some(attr)
+          case (ColumnStat(distinctCnt, _, _), _) =>
+            logWarning(s"'$attr' dropped because of its unsuitable domain (size=$distinctCnt)")
+            None
         }
-        throw new SparkException(s"$inputName must have more than one discrete attributes, but $errMsg")
       }
-
-      // TODO: We could change this value to 64 in v3.1 (SPARK-30279) and we need to
-      // support the more number of attributes for repair.
-      val maxAttrNumToRepair = 32
-      val attrSet = (if (discreteAttrs.size >= maxAttrNumToRepair) {
-        val droppedCols = discreteAttrs.drop(maxAttrNumToRepair).map { case (a, c) => s"$a($c)" }
-        logWarning(s"Maximum number of attributes is $maxAttrNumToRepair but " +
-          s"the ${discreteAttrs.size} discrete attributes found in table '$dbName.$tableName', so " +
-          s"the ${droppedCols.size} attributes dropped: ${droppedCols.mkString(",")}")
-        discreteAttrs.take(maxAttrNumToRepair)
-      } else {
-        discreteAttrs
-      }).map(_._1).toSet
-
-      val discreteDf = inputDf.selectExpr(inputDf.columns.filter(attrSet.contains) :+ rowId: _*)
-      Seq("discrete_attrs" -> createAndCacheTempView(discreteDf, "discrete_attrs"),
-        "distinct_stats" -> statMap.mapValues(_.toString)).asJson
+      val discreteDf = inputDf.selectExpr(discreteExprs: _*)
+      val continousAttrs = attrTypeMap.filter(a => isContinousAttrType(a._2)).keys.mkString(",")
+      val distinctStats = statMap.mapValues(_.distinctCount.toString)
+      Seq("discrete_features" -> createAndCacheTempView(discreteDf, "discrete_features"),
+        "continous_attrs" -> continousAttrs,
+        "distinct_stats" -> distinctStats
+      ).asJson
     }
   }
 
@@ -180,7 +166,9 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       // `repairedCells` must have `$rowId`, `attribute`, and `repaired` columns
       checkIfColumnsExistIn(repairedCells, rowId :: "attribute" :: "val" :: Nil)
 
-      val (inputDf, inputName, tableAttrs) = checkInputTable(dbName, tableName, rowId)
+      val (inputDf, inputName) = checkInputTable(dbName, tableName, rowId)
+      val continousAttrTypeMap = inputDf.schema.filter(f => isContinousAttrType(f.dataType))
+        .map { f => f.name -> f.dataType }.toMap
       val attrsToRepair = {
         sparkSession.sql(s"SELECT collect_set(attribute) FROM $repairedCells")
           .collect.head.getSeq[String](0).toSet
@@ -200,17 +188,22 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
       val repaired = withTempView(inputDf) { inputView =>
         withTempView(repairDf) { repairView =>
-          val cleanAttrs = tableAttrs.map {
+          val cleanAttrs = inputDf.columns.map {
             case attr if attr == rowId =>
               s"$inputView.$rowId"
             case attr if attrsToRepair.contains(attr) =>
-              s"IF(ISNOTNULL(repairs['$attr']), repairs['$attr'], $attr) AS $attr"
+              val repaired = if (continousAttrTypeMap.contains(attr)) {
+                val dataType = continousAttrTypeMap(attr)
+                s"CAST(repairs['$attr'] AS ${dataType.catalogString})"
+              } else {
+                s"repairs['$attr']"
+              }
+              s"IF(ISNOTNULL(repairs['$attr']), $repaired, $attr) AS $attr"
             case cleanAttr =>
               cleanAttr
           }
           sparkSession.sql(
             s"""
-
                |SELECT ${cleanAttrs.mkString(", ")}
                |FROM $inputView
                |LEFT OUTER JOIN $repairView
@@ -320,6 +313,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       attrStatView: String,
       errCellView: String,
       rowId: String,
+      continuousAttrList: String,
       maxAttrsToComputeDomains: Int,
       minCorrThres: Double,
       domain_threshold_alpha: Double,
@@ -334,6 +328,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
     logBasedOnLevel(s"computeDomainInErrorCells called with: discreteAttrView=$discreteAttrView " +
       s"attrStatView=$attrStatView errCellView=$errCellView rowId=$rowId " +
+      s"continousAttrList=${if (!continuousAttrList.isEmpty) continuousAttrList else "<none>"} " +
       s"maxAttrsToComputeDomains=$maxAttrsToComputeDomains minCorrThres=$minCorrThres " +
       s"domain_threshold=alpha:$domain_threshold_alpha,beta=$domain_threshold_beta")
 
@@ -391,7 +386,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                  |  WHERE ${whereCaluseToFilterStat(attrKey)}
                  |  GROUP BY $attrKey
                  |)
-           """.stripMargin)
+               """.stripMargin)
 
             df.collect().map { row =>
               if (!row.isNullAt(0)) row.getDouble(0) else 0.0
@@ -401,7 +396,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       }
 
       // Uses the domain size of X as a log base for normalization
-      val domainStatMap = distinctStatMap(discreteAttrView)
+      val domainStatMap = getColumnStats(discreteAttrView).mapValues(_.distinctCount)
 
       val pairWiseStats = attrPairsToRepair.map { case attrPair @ (rvX, rvY) =>
         // The conditional entropy is 0 for strongly correlated attributes and 1 for completely independent
@@ -478,6 +473,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         rvDf.selectExpr(rowId, "attribute", "initValue", s"$domainInitValue domain")
       } else {
         withTempView(rvDf) { rvView =>
+          val continousAttrs = SparkUtils.stringToSeq(continuousAttrList).toSet
           corrAttrs.map { case (attribute, corrAttrsWithScores) =>
             // Adds an empty domain for initial state
             val initDomainDf = sparkSession.sql(
@@ -485,9 +481,10 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                  |SELECT $rowId, attribute, initValue, $domainInitValue domain $corrCols
                  |FROM $rvView
                  |WHERE attribute = '$attribute'
-             """.stripMargin)
+               """.stripMargin)
 
-            val domainDf = if (corrAttrsWithScores.nonEmpty) {
+            val domainDf = if (!continousAttrs.contains(attribute) &&
+                corrAttrsWithScores.nonEmpty) {
               val corrAttrs = corrAttrsWithScores.map(_._1)
               logBasedOnLevel(s"Computing '$attribute' domain from ${corrAttrs.size} correlated " +
                 s"attributes (${corrAttrs.mkString(",")})...")
@@ -523,7 +520,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                        |) r
                        |ON
                        |  l.$attr = r.$attr
-                   """.stripMargin)
+                     """.stripMargin)
                 }
               }
             } else {
@@ -565,7 +562,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                    |)
                    |GROUP BY
                    |  $rowId, attribute, initValue, domValue
-               """.stripMargin)
+                 """.stripMargin)
             }
 
             withTempView(domainWithScoreDf) { domainWithScoreView =>
@@ -589,7 +586,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                    |  l.$rowId = r.$rowId AND l.attribute = r.attribute
                    |GROUP BY
                    |  l.$rowId, l.attribute, initValue
-               """.stripMargin)
+                 """.stripMargin)
             }
           }
         }.reduce(_.union(_))
@@ -601,7 +598,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       // Number of rows in `cellDomainView` is the same with the number of error cells
       assert(cellDomainDf.count == sparkSession.table(errCellView).count)
       Seq("cell_domain" -> cellDomainView,
-        "pairwise_attr_stats" -> corrAttrs).asJson
+        "pairwise_attr_stats" -> corrAttrs
+      ).asJson
     }
   }
 }

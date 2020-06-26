@@ -42,7 +42,7 @@ class NullErrorDetector(ErrorDetector):
         ErrorDetector.__init__(self, 'NullErrorDetector')
 
     def detect(self):
-        jdf = self.svgApi.detectNullCells('', self.env['discrete_attrs'], self.env['row_id'])
+        jdf = self.svgApi.detectNullCells('', self.env['input_table'], self.env['row_id'])
         return DataFrame(jdf, self.spark._wrapped)
 
 class ConstraintErrorDetector(ErrorDetector):
@@ -52,6 +52,6 @@ class ConstraintErrorDetector(ErrorDetector):
 
     def detect(self):
         jdf = self.svgApi.detectErrorCellsFromConstraints(
-            self.env['constraint_input_path'], '', self.env['discrete_attrs'], self.env['row_id'])
+            self.env['constraint_input_path'], '', self.env['input_table'], self.env['row_id'])
         return DataFrame(jdf, self.spark._wrapped)
 

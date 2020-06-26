@@ -23,7 +23,6 @@ import org.apache.spark.python.ScavengerConf._
 import org.apache.spark.python._
 import org.apache.spark.sql._
 import org.apache.spark.sql.types.StructType
-import org.apache.spark.util.{Utils => SparkUtils}
 
 private[python] case class JsonEncoder(v: Seq[(String, AnyRef)]) {
 
@@ -56,25 +55,18 @@ class BaseScavengerRepairApi extends Logging {
     }
   }
 
-  protected def checkInputTable(dbName: String, tableName: String, rowId: String = "", blackAttrList: String = "")
-    : (DataFrame, String, Seq[String]) = {
+  protected def checkInputTable(dbName: String, tableName: String, rowId: String = "")
+    : (DataFrame, String) = {
     assert(SparkSession.getActiveSession.nonEmpty)
     val spark = SparkSession.getActiveSession.get
     val inputName = if (dbName.nonEmpty) s"$dbName.$tableName" else tableName
     val inputDf = spark.table(inputName)
-    val origTableAttrs = inputDf.schema.map(_.name)
-    val tableAttrs = if (blackAttrList.nonEmpty) {
-      val blackAttrSet = SparkUtils.stringToSeq(blackAttrList).toSet
-      origTableAttrs.filterNot(blackAttrSet.contains)
-    } else {
-      origTableAttrs
-    }
     // Checks if the given table has a column named `rowId`
-    if (rowId.nonEmpty && !tableAttrs.contains(rowId)) {
+    if (rowId.nonEmpty && !inputDf.columns.contains(rowId)) {
       // TODO: Implicitly adds unique row IDs if they don't exist in a given table
       throw new SparkException(s"Column '$rowId' does not exist in $inputName.")
     }
-    (inputDf, inputName, tableAttrs)
+    (inputDf, inputName)
   }
 
   protected def checkIfColumnsExistIn(tableName: String, expectedColumns: Seq[String]): Unit = {
