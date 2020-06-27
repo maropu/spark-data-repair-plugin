@@ -126,14 +126,16 @@ class ScavengerConstraints(SchemaSpyBase):
 class ScavengerRepairMisc(SchemaSpyBase):
 
     # TODO: Prohibit instantiation directly
-    def __init__(self, db_name, table_name, row_id, __svg_api):
+    def __init__(self, db_name, table_name, row_id):
         super().__init__()
         self.db_name = db_name
         self.table_name = table_name
-        self.__svg_api = __svg_api
         self.row_id = row_id
         self.target_attr_list = ""
         self.null_ratio = 0.01
+
+        # JVM interfaces for Scavenger APIs
+        self.__svg_api = sc._jvm.ScavengerMiscApi
 
     def setTableName(self, table_name):
         self.table_name = table_name
@@ -220,7 +222,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         ]
 
     def misc(self):
-        return ScavengerRepairMisc(self.db_name, self.table_name, self.row_id, self.__svg_api)
+        return ScavengerRepairMisc(self.db_name, self.table_name, self.row_id)
 
     def setConstraints(self, constraint_input_path):
         self.constraint_input_path = constraint_input_path
