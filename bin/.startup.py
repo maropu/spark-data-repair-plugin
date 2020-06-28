@@ -186,6 +186,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.training_data_sample_ratio = 1.0
         self.stat_thres_ratio = 0.0
         self.min_features_num = 1
+        self.inference_order = "domain"
         self.maximal_likelihood_repair_enabled = True
         self.repair_delta = None
 
@@ -244,6 +245,10 @@ class ScavengerRepairModel(SchemaSpyBase):
 
     def setAttrMaxNumToComputeDomains(self, max):
         self.max_attrs_to_compute_domains = max
+        return self
+
+    def setInferenceOrder(self, inference_order):
+        self.inference_order = inference_order
         return self
 
     def setMaximalLikelihoodRepairEnabled(self, enabled):
@@ -408,7 +413,10 @@ class ScavengerRepairModel(SchemaSpyBase):
             (train_df.count(), self.training_data_sample_ratio, fixed_df.count()))
         return train_df
 
-    def __compute_inference_order(self, env, train_df, error_attrs):
+    def __noop_order(self, error_attrs):
+        return error_attrs
+
+    def __domain_size_based_order(self, env, train_df, error_attrs):
         # Computes domain sizes for training data
         self.__start_spark_jobs("collect training data stats",
             "Collecting training data stats before building ML models...")
@@ -438,6 +446,16 @@ class ScavengerRepairModel(SchemaSpyBase):
             logging.info("%s: |domain|=%s #errors=%s" % (y, env["distinct_stats"][y], error_num_map[y]))
 
         return target_columns
+
+    def __entropy_based_order(self, env, train_df, error_attrs):
+        # TODO: Not implmeneted yet
+        raise NotImplementedError("`entropy` inference order not implemented yet")
+
+    def __compute_inference_order(self, env, train_df, error_attrs):
+        if self.inference_order == "domain":
+            return self.__domain_size_based_order(env, train_df, error_attrs)
+        elif self.inference_order == "entropy":
+            return self.__entropy_based_order(env, train_df, error_attrs)
 
     def __build_models(self, env, train_df, error_attrs, continous_attrs):
         # Computes a inference order based on dependencies between `error_attrs` and the others
@@ -639,6 +657,9 @@ class ScavengerRepairModel(SchemaSpyBase):
     def run(self, error_cells=None, detect_errors_only=False, return_repair_candidates=False):
         if self.table_name is None or self.row_id is None:
             raise ValueError("`setTableName` and `setRowId` should be called before repairing")
+        if self.inference_order not in ["domain", "entropy"]:
+            raise ValueError("Inference order must be `domain` or `entropy`, but `%s` found" % \
+                self.inference_order)
 
         __start = time.time()
         df = self.__run(error_cells, detect_errors_only, return_repair_candidates)
