@@ -60,7 +60,7 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
       val expr = inputDf.schema.filter(_.name != rowId)
         .map { f => s"STRUCT($rowId, '${f.name}', CAST(${f.name} AS STRING))" }
         .mkString("ARRAY(", ", ", ")")
-      inputDf.selectExpr(s"INLINE($expr) AS (tid, attribute, val)")
+      inputDf.selectExpr(s"INLINE($expr) AS (tid, attribute, value)")
     }
     Seq("flatten" -> createAndCacheTempView(df)).asJson
   }

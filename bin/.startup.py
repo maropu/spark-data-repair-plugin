@@ -320,7 +320,8 @@ class ScavengerRepairModel(SchemaSpyBase):
         else:
             # Applys error detectors to get gray cells
             self.__start_spark_jobs("detect errors",
-                "Detecting errors in a table `%s` (%s rows x %s cols)..." % (env["input_table"], env["num_input_rows"], env["num_attrs"]))
+                "Detecting errors in a table `%s` (%s rows x %s cols)..." % \
+                    (env["input_table"], env["num_input_rows"], env["num_attrs"]))
             env["gray_cells"] = self.__detect_error_cells(env)
             self.__end_spark_jobs()
 
@@ -383,11 +384,11 @@ class ScavengerRepairModel(SchemaSpyBase):
 
     def __extract_error_cells(self, env, cell_domain_df, repair_base_df):
         # Fixes cells if an inferred value is the same with an initial one
-        fix_cells_expr = "if(initValue = domain[0].n, initValue, NULL) val"
-        weak_df = cell_domain_df.selectExpr(self.row_id, "attribute", "initValue", fix_cells_expr).cache()
-        error_cells_df = weak_df.where("val IS NULL").drop("val").cache()
+        fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) value"
+        weak_df = cell_domain_df.selectExpr(self.row_id, "attribute", "current_value", fix_cells_expr).cache()
+        error_cells_df = weak_df.where("value IS NULL").drop("value").cache()
         env["weak"] = self.__temp_name("weak")
-        weak_df = weak_df.where("val IS NOT NULL").drop("initValue")
+        weak_df = weak_df.where("value IS NOT NULL").drop("current_value")
         weak_df.cache().createOrReplaceTempView(env["weak"])
         ret_as_json = self.__svg_api.repairAttrsFrom(env["weak"], "", env["repair_base"], self.row_id)
         env["partial_repaired"] = json.loads(ret_as_json)["repaired"]
@@ -412,9 +413,6 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.outputToConsole("Sampling %s training data (ratio=%s) from %s fixed rows..." % \
             (train_df.count(), self.training_data_sample_ratio, fixed_df.count()))
         return train_df
-
-    def __noop_order(self, error_attrs):
-        return error_attrs
 
     def __domain_size_based_order(self, env, train_df, error_attrs):
         # Computes domain sizes for training data
@@ -547,15 +545,15 @@ class ScavengerRepairModel(SchemaSpyBase):
         # Format a table with probability distribution
         env["dist"] = self.__temp_name("dist")
         logging.info("Constructing a table (`%s`) for probability distribution..." % env["dist"])
-        parse_dist_json_expr = "from_json(val, 'classes array<string>, probs array<double>') dist"
+        parse_dist_json_expr = "from_json(value, 'classes array<string>, probs array<double>') dist"
         is_discrete_predicate = "attribute not in (%s)" % ",".join(map(lambda c: "'%s'" % c, continous_attrs))
         to_dist_expr = "arrays_zip(dist.classes, dist.probs) dist"
-        to_current_expr = "named_struct('val', initValue, 'prob', " \
-            "coalesce(dist.probs[array_position(dist.classes, initValue) - 1], 0.0)) current"
+        to_current_expr = "named_struct('value', current_value, 'prob', " \
+            "coalesce(dist.probs[array_position(dist.classes, current_value) - 1], 0.0)) current"
         dist_df = self.__flatten(repaired_df) \
             .join(error_cells_df, [self.row_id, "attribute"], "inner") \
             .where(is_discrete_predicate) \
-            .selectExpr(self.row_id, "attribute", "initValue", parse_dist_json_expr) \
+            .selectExpr(self.row_id, "attribute", "current_value", parse_dist_json_expr) \
             .selectExpr(self.row_id, "attribute", to_current_expr, to_dist_expr)
         dist_df.createOrReplaceTempView(env["dist"])
 
@@ -567,13 +565,13 @@ class ScavengerRepairModel(SchemaSpyBase):
             return pd.Series(dists)
 
         sorted_dist_expr = "array_sort(dist, (left, right) -> if(left.`1` < right.`1`, 1, -1)) dist"
-        maximal_likelihood_repair_expr = "named_struct('val', dist[0].`0`, 'prob', dist[0].`1`) repaired"
+        maximal_likelihood_repair_expr = "named_struct('value', dist[0].`0`, 'prob', dist[0].`1`) repaired"
         score_expr = "ln(repaired.prob / IF(current.prob > 0.0, current.prob, 1e-6)) * (1.0 / (1.0 + distance)) score"
         score_df = dist_df \
             .selectExpr(self.row_id, "attribute", "current", sorted_dist_expr) \
             .selectExpr(self.row_id, "attribute", "current", maximal_likelihood_repair_expr) \
-            .withColumn("distance", distance(col("current.val"), col("repaired.val"))) \
-            .selectExpr(self.row_id, "attribute", "repaired.val val", score_expr)
+            .withColumn("distance", distance(col("current.value"), col("repaired.value"))) \
+            .selectExpr(self.row_id, "attribute", "repaired.value value", score_expr)
 
         if self.repair_delta is not None:
             row = score_df.selectExpr("percentile(score, %s) thres" % (float(self.repair_delta) / num_error_cells)).collect()[0]
@@ -643,11 +641,11 @@ class ScavengerRepairModel(SchemaSpyBase):
             repaired_df = self.__maximal_likelihood_repair(env, repaired_df, error_cells_df, continous_attrs)
 
         # If `return_repair_candidates` is True, returns repair candidates whoes
-        # value is the same with `initValue`
+        # value is the same with `current_value`
         if return_repair_candidates:
             repair_candidates_df = self.__flatten(repaired_df) \
                 .join(error_cells_df, [self.row_id, "attribute"], "inner") \
-                .selectExpr("tid", "attribute", "initValue", "val repaired")
+                .selectExpr("tid", "attribute", "current_value", "value repaired")
             return repair_candidates_df
         else:
             clean_df = fixed_df.union(repaired_df)

@@ -135,7 +135,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
     withSparkSession { sparkSession =>
       // `repairedCells` must have `$rowId`, `attribute`, and `repaired` columns
-      checkIfColumnsExistIn(repairedCells, rowId :: "attribute" :: "val" :: Nil)
+      checkIfColumnsExistIn(repairedCells, rowId :: "attribute" :: "value" :: Nil)
 
       val (inputDf, _) = checkAndGetInputTable(dbName, tableName, rowId)
       val continousAttrTypeMap = inputDf.schema.filter(f => continousTypes.contains(f.dataType))
@@ -150,7 +150,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
            |SELECT
            |  $rowId, map_from_entries(COLLECT_LIST(r)) AS repairs
            |FROM (
-           |  select $rowId, struct(attribute, val) r
+           |  select $rowId, struct(attribute, value) r
            |  FROM $repairedCells
            |)
            |GROUP BY
@@ -430,7 +430,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
            |SELECT
            |  l.$rowId,
            |  attribute,
-           |  extractField(struct(${cellExprs.mkString(", ")}), attribute) initValue
+           |  extractField(struct(${cellExprs.mkString(", ")}), attribute) current_value
            |  $corrCols
            |FROM
            |  $discreteAttrView l, $errCellView r
@@ -441,7 +441,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       val domainInitValue = "CAST(NULL AS ARRAY<STRUCT<n: STRING, cnt: DOUBLE>>)"
       val cellDomainDf = if (domain_threshold_beta >= 1.0) {
         // The case where we don't need to compute error domains
-        rvDf.selectExpr(rowId, "attribute", "initValue", s"$domainInitValue domain")
+        rvDf.selectExpr(rowId, "attribute", "current_value", s"$domainInitValue domain")
       } else {
         withTempView(rvDf) { rvView =>
           val continousAttrs = SparkUtils.stringToSeq(continuousAttrList).toSet
@@ -449,7 +449,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
             // Adds an empty domain for initial state
             val initDomainDf = sparkSession.sql(
               s"""
-                 |SELECT $rowId, attribute, initValue, $domainInitValue domain $corrCols
+                 |SELECT $rowId, attribute, current_value, $domainInitValue domain $corrCols
                  |FROM $rvView
                  |WHERE attribute = '$attribute'
                """.stripMargin)
@@ -472,7 +472,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                        |SELECT
                        |  $rowId,
                        |  attribute,
-                       |  initValue,
+                       |  current_value,
                        |  IF(ISNOTNULL(l.domain), CONCAT(l.domain, r.d), r.d) domain,
                        |  ${corrAttrSet.map(a => s"l.$a").mkString(",")}
                        |FROM
@@ -506,20 +506,20 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
               sparkSession.sql(
                 s"""
                    |SELECT
-                   |  $rowId, attribute, initValue, domValue, SUM(score) score
+                   |  $rowId, attribute, current_value, domain_value, SUM(score) score
                    |FROM (
                    |  SELECT
                    |    $rowId,
                    |    attribute,
-                   |    initValue,
-                   |    domValueWithFreq.n domValue,
-                   |    exp(ln(cnt / $rowCnt) + ln(domValueWithFreq.cnt / cnt)) score
+                   |    current_value,
+                   |    domain_value_with_freq.n domain_value,
+                   |    exp(ln(cnt / $rowCnt) + ln(domain_value_with_freq.cnt / cnt)) score
                    |  FROM (
                    |    SELECT
                    |      $rowId,
                    |      attribute,
-                   |      initValue,
-                   |      explode_outer(domain) domValueWithFreq
+                   |      current_value,
+                   |      explode_outer(domain) domain_value_with_freq
                    |    FROM
                    |      $domainView
                    |  ) d LEFT OUTER JOIN (
@@ -529,10 +529,10 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                    |    GROUP BY $attribute
                    |  ) s
                    |  ON
-                   |    d.domValueWithFreq.n = s.$attribute
+                   |    d.domain_value_with_freq.n = s.$attribute
                    |)
                    |GROUP BY
-                   |  $rowId, attribute, initValue, domValue
+                   |  $rowId, attribute, current_value, domain_value
                  """.stripMargin)
             }
 
@@ -542,8 +542,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                    |SELECT
                    |  l.$rowId,
                    |  l.attribute,
-                   |  initValue,
-                   |  filter(collect_set(named_struct('n', domValue, 'prob', score / denom)), x -> x.prob > $domain_threshold_beta) domain
+                   |  current_value,
+                   |  filter(collect_set(named_struct('n', domain_value, 'prob', score / denom)), x -> x.prob > $domain_threshold_beta) domain
                    |FROM
                    |  $domainWithScoreView l, (
                    |    SELECT
@@ -556,7 +556,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
                    |WHERE
                    |  l.$rowId = r.$rowId AND l.attribute = r.attribute
                    |GROUP BY
-                   |  l.$rowId, l.attribute, initValue
+                   |  l.$rowId, l.attribute, current_value
                  """.stripMargin)
             }
           }
