@@ -381,7 +381,9 @@ class ScavengerRepairModel(SchemaSpyBase):
         fix_cells_expr = "if(initValue = domain[0].n, initValue, NULL) val"
         weak_df = cell_domain_df.selectExpr(self.row_id, "attribute", "initValue", fix_cells_expr).cache()
         error_cells_df = weak_df.where("val IS NULL").drop("val").cache()
-        weak_df.where("val IS NOT NULL").drop("initValue").cache().createOrReplaceTempView(env["weak"])
+        env["weak"] = self.__temp_name("weak")
+        weak_df = weak_df.where("val IS NOT NULL").drop("initValue")
+        weak_df.cache().createOrReplaceTempView(env["weak"])
         ret_as_json = self.__svg_api.repairAttrsFrom(env["weak"], "", env["repair_base"], self.row_id)
         env["partial_repaired"] = json.loads(ret_as_json)["repaired"]
 
@@ -410,6 +412,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         # Computes domain sizes for training data
         self.__start_spark_jobs("collect training data stats",
             "Collecting training data stats before building ML models...")
+        env["train"] = self.__temp_name("train")
         train_df.createOrReplaceTempView(env["train"])
         env.update(json.loads(self.__svg_api.computeDomainSizes(env["train"])))
         self.__end_spark_jobs()
@@ -478,8 +481,9 @@ class ScavengerRepairModel(SchemaSpyBase):
         # Sets a grouping key for inference
         num_parallelism = spark.sparkContext.defaultParallelism
         grouping_key = self.__temp_name("__grouping_key")
+        env["dirty"] = self.__temp_name("dirty")
         dirty_df.createOrReplaceTempView(env["dirty"])
-        dirty_df = self.spark.table(env["dirty"]).withColumn(grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
+        dirty_df = dirty_df.withColumn(grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
 
         @functions.pandas_udf(dirty_df.schema, functions.PandasUDFType.GROUPED_MAP)
         def repair(pdf):
@@ -523,6 +527,7 @@ class ScavengerRepairModel(SchemaSpyBase):
 
     def __maximal_likelihood_repair(self, env, repaired_df, error_cells_df, continous_attrs):
         # Format a table with probability distribution
+        env["dist"] = self.__temp_name("dist")
         logging.info("Constructing a table (`%s`) for probability distribution..." % env["dist"])
         parse_dist_json_expr = "from_json(val, 'classes array<string>, probs array<double>') dist"
         is_discrete_predicate = "attribute not in (%s)" % ",".join(map(lambda c: "'%s'" % c, continous_attrs))
@@ -558,7 +563,9 @@ class ScavengerRepairModel(SchemaSpyBase):
             logging.info("Bounded # of repairs from %s to %s" % (num_error_cells, score_df.count()))
 
         # Finally, replaces error cells with ones in `score_df`
+        env["partial_dirty"] = self.__temp_name("partial_dirty")
         repaired_df.createOrReplaceTempView(env["partial_dirty"])
+        env["score"] = self.__temp_name("score")
         score_df.createOrReplaceTempView(env["score"])
         env.update(json.loads(self.__svg_api.repairAttrsFrom(env["score"], "", env["partial_dirty"], self.row_id)))
         return self.spark.table(env["repaired"])
@@ -568,12 +575,6 @@ class ScavengerRepairModel(SchemaSpyBase):
         env = {}
         env["row_id"] = self.row_id
         env["constraint_input_path"] = self.constraint_input_path
-        env["weak"] = self.__temp_name("weak")
-        env["dirty"] = self.__temp_name("dirty")
-        env["partial_dirty"] = self.__temp_name("partial_dirty")
-        env["train"] = self.__temp_name("train")
-        env["dist"] = self.__temp_name("dist")
-        env["score"] = self.__temp_name("score")
 
         # Checks # of input rows and attributes
         input_df, continous_attrs = self.__check_input(env)
