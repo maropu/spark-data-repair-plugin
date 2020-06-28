@@ -283,22 +283,9 @@ class ScavengerRepairModel(SchemaSpyBase):
         for t in list(filter(lambda x: x in self.__meta_view_names, env.values())):
             self.spark.sql("DROP VIEW IF EXISTS %s" % env[t])
 
-    def __preprocess(self, env):
-        # Filters out attributes having large domains and makes continous values
-        # discrete if necessary.
-        self.__start_spark_jobs("preprocess rows",
-            "Preprocessing an input table `%s` with rowId=`%s`..." % (self.table_name, self.row_id))
-        env.update(json.loads(self.__svg_api.convertToDiscreteFeatures(
-            self.db_name, self.table_name, self.row_id,
-            self.discrete_thres)))
-        self.__end_spark_jobs()
-
-        discrete_ft_df = self.spark.table(env["discrete_features"])
-        continous_attrs = env["continous_attrs"].split(",")
-        self.outputToConsole("Valid %s attributes (%s) found and %s continous attributes (%s) included in them" % \
-            (len(discrete_ft_df.columns), ",".join(discrete_ft_df.columns), len(continous_attrs), env["continous_attrs"]))
-
-        return continous_attrs
+    def __check_input(self, env):
+        env.update(json.loads(self.__svg_api.checkInputTable(self.db_name, self.table_name, self.row_id)))
+        return self.spark.table(env["input_table"]), env["continous_attrs"].split(",")
 
     def __detect_error_cells(self, env):
         # Initializes defined error detectors with the given env
@@ -328,19 +315,42 @@ class ScavengerRepairModel(SchemaSpyBase):
         else:
             # Applys error detectors to get gray cells
             self.__start_spark_jobs("detect errors",
-                "Detecting errors in a table `%s` (%s rows x %s cols)..." % (env["discrete_features"], env["num_input_rows"], env["num_attrs"]))
+                "Detecting errors in a table `%s` (%s rows x %s cols)..." % (env["input_table"], env["num_input_rows"], env["num_attrs"]))
             env["gray_cells"] = self.__detect_error_cells(env)
             self.__end_spark_jobs()
 
-    def __prepare_repair_base(self, env):
+        return self.spark.table(env["gray_cells"])
+
+    def __prepare_repair_base(self, env, gray_cells_df):
         # Sets NULL at the detected gray cells
-        self.outputToConsole("%s/%s suspicious cells found, then converts them into NULL cells..." % \
-            (env["num_gray_cells"], env["num_input_rows"] * env["num_attrs"]))
+        logging.info("%s/%s suspicious cells found, then converts them into NULL cells..." % \
+            (gray_cells_df.count(), int(env["num_input_rows"]) * int(env["num_attrs"])))
         env.update(json.loads(self.__svg_api.convertErrorCellsToNull(
             env["input_table"], env["gray_cells"],
             self.row_id)))
 
-    def __analyze_cell_domain(self, env):
+        return self.spark.table(env["repair_base"])
+
+    def __preprocess(self, env, continous_attrs):
+        # Filters out attributes having large domains and makes continous values
+        # discrete if necessary.
+        self.__start_spark_jobs("preprocess rows",
+            "Preprocessing an input table `%s` with rowId=`%s`..." % (self.table_name, self.row_id))
+        env.update(json.loads(self.__svg_api.convertToDiscreteFeatures(
+            self.db_name, self.table_name, self.row_id,
+            self.discrete_thres)))
+        self.__end_spark_jobs()
+
+        discrete_ft_df = self.spark.table(env["discrete_features"])
+        self.outputToConsole("Valid %s attributes (%s) found and %s continous attributes (%s) included in them" % \
+            (len(discrete_ft_df.columns), ",".join(discrete_ft_df.columns), len(continous_attrs), env["continous_attrs"]))
+
+        return discrete_ft_df
+
+    def __analyze_cell_domain(self, env, gray_cells_df, continous_attrs):
+        # Checks if attributes are discrete or not, and discretizes continous ones
+        discrete_ft_df = self.__preprocess(env, continous_attrs)
+
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
         self.__start_spark_jobs("collect stat rows",
@@ -366,22 +376,19 @@ class ScavengerRepairModel(SchemaSpyBase):
 
         return self.spark.table(env["cell_domain"])
 
-    def __extract_error_cells(self, env, cell_domain_df):
+    def __extract_error_cells(self, env, cell_domain_df, repair_base_df):
         # Fixes cells if an inferred value is the same with an initial one
         fix_cells_expr = "if(initValue = domain[0].n, initValue, NULL) val"
         weak_df = cell_domain_df.selectExpr(self.row_id, "attribute", "initValue", fix_cells_expr).cache()
+        error_cells_df = weak_df.where("val IS NULL").drop("val").cache()
         weak_df.where("val IS NOT NULL").drop("initValue").cache().createOrReplaceTempView(env["weak"])
         ret_as_json = self.__svg_api.repairAttrsFrom(env["weak"], "", env["repair_base"], self.row_id)
         env["partial_repaired"] = json.loads(ret_as_json)["repaired"]
 
-        # If no error cell found, ready to return a clean table
-        error_cells_df = weak_df.where("val IS NULL").drop("val").cache()
-        num_error_cells = error_cells_df.count()
-
         logging.info("%d suspicious cells fixed by the computed cell domain `%s` and %d error cells remaining" %
-            (self.spark.table(env["weak"]).count(), env["cell_domain"], num_error_cells))
+            (self.spark.table(env["weak"]).count(), env["cell_domain"], error_cells_df.count()))
 
-        return error_cells_df, num_error_cells
+        return error_cells_df
 
     def __split_clean_and_dirty_rows(self, env, error_cells_df):
         error_rows_df = error_cells_df.selectExpr(self.row_id).distinct().cache()
@@ -399,7 +406,7 @@ class ScavengerRepairModel(SchemaSpyBase):
             (train_df.count(), self.training_data_sample_ratio, fixed_df.count()))
         return train_df
 
-    def __build_models(self, env, train_df, error_attrs, continous_attrs):
+    def __compute_inference_order(self, env, train_df, error_attrs):
         # Computes domain sizes for training data
         self.__start_spark_jobs("collect training data stats",
             "Collecting training data stats before building ML models...")
@@ -410,15 +417,6 @@ class ScavengerRepairModel(SchemaSpyBase):
         error_num_map = {}
         for row in error_attrs:
             error_num_map[row.attribute] = row.cnt
-
-        # Checks if we have the enough number of features for inference
-        # TODO: In case of `num_features == 0`, we might be able to select the most accurate and
-        # predictable column as a staring feature.
-        num_features = len(train_df.columns) - len(error_attrs)
-        if num_features < self.min_features_num:
-            self.outputToConsole("At least %s features needed to repair error cells, but %s features found" %
-                (self.min_features_num, num_features))
-            return self.spark.table(env["partial_repaired"])
 
         # TODO: Needs to analyze dependencies (e.g., based on graph algorithms) between
         # a target column and the other ones for decideing a inference order.
@@ -435,6 +433,12 @@ class ScavengerRepairModel(SchemaSpyBase):
             sorted(error_attrs, key=lambda row: int(env["distinct_stats"][row.attribute]), reverse=False)))
         for y in target_columns:
             logging.info("%s: |domain|=%s #errors=%s" % (y, env["distinct_stats"][y], error_num_map[y]))
+
+        return target_columns
+
+    def __build_models(self, env, train_df, error_attrs, continous_attrs):
+        # Computes a inference order based on dependencies between `error_attrs` and the others
+        target_columns = self.__compute_inference_order(env, train_df, error_attrs)
 
         # Builds classifiers for the target columns
         self.__start_spark_jobs("build ML models",
@@ -460,6 +464,7 @@ class ScavengerRepairModel(SchemaSpyBase):
                 models[y] = (clf, features)
 
         self.__end_spark_jobs()
+
         return models, target_columns
 
     def __repair(self, env, models, target_columns, continous_attrs, dirty_df):
@@ -558,7 +563,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         env.update(json.loads(self.__svg_api.repairAttrsFrom(env["score"], "", env["partial_dirty"], self.row_id)))
         return self.spark.table(env["repaired"])
 
-    def __run(self, error_cells, detect_errors_only):
+    def __run(self, error_cells, detect_errors_only, return_repair_candidates):
         # Env used to repair the given table
         env = {}
         env["row_id"] = self.row_id
@@ -571,43 +576,46 @@ class ScavengerRepairModel(SchemaSpyBase):
         env["score"] = self.__temp_name("score")
 
         # Checks # of input rows and attributes
-        env["input_table"] = "`%s`.`%s`" % (self.db_name, self.table_name) \
-            if not self.db_name else "`%s`" % self.table_name
-        input_df = self.spark.table(env["input_table"])
-        env["num_input_rows"] = input_df.count()
-        env["num_attrs"] = len(input_df.columns)
-
-        continous_attrs = self.__preprocess(env)
-        self.__detect_errors(env, error_cells)
-
-        # If `detect_errors_only` is True, returns found error cells
-        if detect_errors_only:
-            df = self.spark.table(env["gray_cells"])
-            self.__release_resources(env)
-            return df
+        input_df, continous_attrs = self.__check_input(env)
 
         # If no error found, it just returns the given table
-        env["num_gray_cells"] = self.spark.table(env["gray_cells"]).count()
-        if env["num_gray_cells"] == 0:
+        gray_cells_df = self.__detect_errors(env, error_cells)
+        if gray_cells_df.count() == 0:
             self.outputToConsole("Any error cells not found, so returns the input as clean cells")
             self.__release_resources(env)
             return input_df
 
-        self.__prepare_repair_base(env)
+        # Sets NULL to suspicious cells
+        repair_base_df = self.__prepare_repair_base(env, gray_cells_df)
 
         # Selects error cells based on the result of domain analysis
-        cell_domain_df = self.__analyze_cell_domain(env)
-        error_cells_df, num_error_cells = self.__extract_error_cells(env, cell_domain_df)
+        cell_domain_df = self.__analyze_cell_domain(env, gray_cells_df, continous_attrs)
 
         # If no error cell found, ready to return a clean table
-        if num_error_cells == 0:
-            clean_df = self.spark.table(env["partial_repaired"])
-            assert clean_df.count() == self.spark.table(env["discrete_features"]).count()
+        error_cells_df = self.__extract_error_cells(env, cell_domain_df, repair_base_df)
+        if error_cells_df.count() == 0:
+            self.__release_resources(env)
             return input_df
+
+        # If `detect_errors_only` is True, returns found error cells
+        if detect_errors_only:
+            self.__release_resources(env)
+            return error_cells_df
 
         # Selects rows for training, build models, and repair cells
         fixed_df, dirty_df, error_attrs = self.__split_clean_and_dirty_rows(env, error_cells_df)
-        models, target_columns = self.__build_models(env, self.__select_training_rows(fixed_df), error_attrs, continous_attrs)
+        train_df = self.__select_training_rows(fixed_df)
+
+        # Checks if we have the enough number of features for inference
+        # TODO: In case of `num_features == 0`, we might be able to select the most accurate and
+        # predictable column as a staring feature.
+        num_features = len(train_df.columns) - len(error_attrs)
+        if num_features < self.min_features_num:
+            self.outputToConsole("At least %s features needed to repair error cells, but %s features found" %
+                (self.min_features_num, num_features))
+            return input_df
+
+        models, target_columns = self.__build_models(env, train_df, error_attrs, continous_attrs)
         repaired_df = self.__repair(env, models, target_columns, continous_attrs, dirty_df)
 
         # If any discrete target columns and its probability distribution given, computes scores
@@ -616,15 +624,15 @@ class ScavengerRepairModel(SchemaSpyBase):
             repaired_df = self.__maximal_likelihood_repair(env, repaired_df, error_cells_df, continous_attrs)
 
         clean_df = fixed_df.union(repaired_df)
-        # assert clean_df.count == self.spark.table(env["discrete_features"]).count()
+        assert clean_df.count() == input_df.count()
         return clean_df
 
-    def run(self, error_cells=None, detect_errors_only=False):
+    def run(self, error_cells=None, detect_errors_only=False, return_repair_candidates=False):
         if self.table_name is None or self.row_id is None:
             raise ValueError("`setTableName` and `setRowId` should be called before repairing")
 
         __start = time.time()
-        df = self.__run(error_cells, detect_errors_only)
+        df = self.__run(error_cells, detect_errors_only, return_repair_candidates)
         self.outputToConsole("!!!Total processing time is %s(s)!!!" % (time.time() - __start))
         return df
 

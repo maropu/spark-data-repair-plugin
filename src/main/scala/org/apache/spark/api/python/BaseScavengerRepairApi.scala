@@ -55,7 +55,7 @@ class BaseScavengerRepairApi extends Logging {
     }
   }
 
-  protected def checkInputTable(dbName: String, tableName: String, rowId: String = "")
+  protected def checkAndGetInputTable(dbName: String, tableName: String, rowId: String = "")
     : (DataFrame, String) = {
     assert(SparkSession.getActiveSession.nonEmpty)
     val spark = SparkSession.getActiveSession.get

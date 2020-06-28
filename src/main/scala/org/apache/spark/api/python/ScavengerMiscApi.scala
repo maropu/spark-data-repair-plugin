@@ -27,11 +27,11 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
       s"targetAttrList=$targetAttrList, nullRatio=$nullRatio")
 
     val df = withSparkSession { _ =>
-      val (inputDf, inputName) = checkInputTable(dbName, tableName)
+      val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName)
       val targetAttrSet = if (targetAttrList.nonEmpty) {
         val attrSet = SparkUtils.stringToSeq(targetAttrList).toSet
         if (!inputDf.columns.exists(attrSet.contains)) {
-          throw new SparkException(s"No target attribute selected in $inputName")
+          throw new SparkException(s"No target attribute selected in $qualifiedName")
         }
         attrSet
       } else {
@@ -56,7 +56,7 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
     logBasedOnLevel(s"flattenTable called with: dbName=$dbName tableName=$tableName rowId=$rowId")
 
     val df = withSparkSession { _ =>
-      val (inputDf, _) = checkInputTable(dbName, tableName, rowId)
+      val (inputDf, _) = checkAndGetInputTable(dbName, tableName, rowId)
       val expr = inputDf.schema.filter(_.name != rowId)
         .map { f => s"STRUCT($rowId, '${f.name}', CAST(${f.name} AS STRING))" }
         .mkString("ARRAY(", ", ", ")")

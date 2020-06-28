@@ -58,7 +58,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
     logBasedOnLevel(s"detectNullCells called with: dbName=$dbName tableName=$tableName rowId=$rowId")
 
     withSparkSession { sparkSession =>
-      val (inputDf, inputName) = checkInputTable(dbName, tableName, rowId)
+      val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
 
       withTempView(inputDf, cache = true) { inputView =>
         // Detects error erroneous cells in a given table
@@ -77,7 +77,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
             sparkSession.sql(s"SELECT collect_set(attribute) FROM $errCellView")
               .collect.head.getSeq[String](0)
           }
-          loggingErrorStats("NULL error detector", inputName, errCellView, attrsToRepair)
+          loggingErrorStats("NULL error detector", qualifiedName, errCellView, attrsToRepair)
         }
         errCellDf
       }
@@ -94,7 +94,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
       s"dbName=$dbName tableName=$tableName rowId=$rowId")
 
     withSparkSession { sparkSession =>
-      val (inputDf, inputName) = checkInputTable(dbName, tableName, rowId)
+      val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
 
       withTempView(inputDf, cache = true) { inputView =>
         val constraints = loadConstraintsFromFile(constraintFilePath, tableName, inputDf.columns)
@@ -140,7 +140,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
           }.reduce(_.union(_)).distinct().cache()
 
           val errCellView = createAndCacheTempView(errCellDf, "err_cells_from_constraints")
-          loggingErrorStats("Constraint error detector", inputName, errCellView, constraints.attrNames)
+          loggingErrorStats("Constraint error detector", qualifiedName, errCellView, constraints.attrNames)
           errCellDf
         }
       }

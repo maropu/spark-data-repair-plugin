@@ -26,7 +26,27 @@ import org.apache.spark.util.{Utils => SparkUtils}
 /** A Python API entry point for data cleaning. */
 object ScavengerRepairApi extends BaseScavengerRepairApi {
 
-  case class ColumnStat(distinctCount: Long, min: Option[Any], max: Option[Any])
+  private val continousTypes: Set[DataType] = Set(FloatType, DoubleType)
+  private val supportedType: Set[DataType] = Set(StringType) ++ continousTypes
+
+  def checkInputTable(dbName: String, tableName: String, rowId: String): String = {
+    val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
+    val unsupportedTypes = inputDf.schema.map(_.dataType).filterNot(supportedType.contains)
+    if (unsupportedTypes.nonEmpty) {
+      throw new SparkException(
+        s"Supported types are ${supportedType.map(_.catalogString).mkString(",")}, but " +
+          s"unsupported ones found: ${unsupportedTypes.map(_.catalogString).mkString(",")}")
+    }
+    val continousAttrs = inputDf.schema
+      .filter(f => continousTypes.contains(f.dataType)).map(_.name).mkString(",")
+    Seq("input_table" -> qualifiedName,
+      "num_input_rows" -> s"${inputDf.count}",
+      "num_attrs" -> s"${inputDf.columns.length}",
+      "continous_attrs" -> continousAttrs
+    ).asJson
+  }
+
+  private case class ColumnStat(distinctCount: Long, min: Option[Any], max: Option[Any])
 
   private def getColumnStats(inputName: String): Map[String, ColumnStat] = {
     assert(SparkSession.getActiveSession.nonEmpty)
@@ -66,10 +86,6 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     }
   }
 
-  private def isContinousAttrType(tpe: DataType): Boolean = {
-    tpe == FloatType || tpe == DoubleType
-  }
-
   def convertToDiscreteFeatures(
       dbName: String,
       tableName: String,
@@ -83,8 +99,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     require(2 <= discreteThres && discreteThres < 65536, "discreteThres should be in [2, 65536).")
 
     withSparkSession { _ =>
-      val (inputDf, inputName) = checkInputTable(dbName, tableName, rowId)
-      val statMap = computeAndGetTableStats(inputName)
+      val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
+      val statMap = computeAndGetTableStats(qualifiedName)
       val attrTypeMap = inputDf.schema.map { f => f.name -> f.dataType }.toMap
       val rowCnt = inputDf.count()
       if (statMap(rowId).distinctCount != rowCnt) {
@@ -93,7 +109,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       }
       val discreteExprs = inputDf.columns.flatMap { attr =>
         (statMap(attr), attrTypeMap(attr)) match {
-          case (ColumnStat(_, min, max), tpe) if isContinousAttrType(tpe) =>
+          case (ColumnStat(_, min, max), tpe) if continousTypes.contains(tpe) =>
             logBasedOnLevel(s"'$attr' regraded as a continuous attribute (min=${min.get}, " +
               s"max=${max.get}, so discretizes it in [0, $discreteThres)")
             Some(s"int(($attr - ${min.get}) / (${max.get} - ${min.get}) * $discreteThres) $attr")
@@ -106,10 +122,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         }
       }
       val discreteDf = inputDf.selectExpr(discreteExprs: _*)
-      val continousAttrs = attrTypeMap.filter(a => isContinousAttrType(a._2)).keys.mkString(",")
       val distinctStats = statMap.mapValues(_.distinctCount.toString)
       Seq("discrete_features" -> createAndCacheTempView(discreteDf, "discrete_features"),
-        "continous_attrs" -> continousAttrs,
         "distinct_stats" -> distinctStats
       ).asJson
     }
@@ -123,8 +137,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       // `repairedCells` must have `$rowId`, `attribute`, and `repaired` columns
       checkIfColumnsExistIn(repairedCells, rowId :: "attribute" :: "val" :: Nil)
 
-      val (inputDf, inputName) = checkInputTable(dbName, tableName, rowId)
-      val continousAttrTypeMap = inputDf.schema.filter(f => isContinousAttrType(f.dataType))
+      val (inputDf, _) = checkAndGetInputTable(dbName, tableName, rowId)
+      val continousAttrTypeMap = inputDf.schema.filter(f => continousTypes.contains(f.dataType))
         .map { f => f.name -> f.dataType }.toMap
       val attrsToRepair = {
         sparkSession.sql(s"SELECT collect_set(attribute) FROM $repairedCells")
