@@ -340,7 +340,7 @@ class ScavengerRepairModel(SchemaSpyBase):
             env["input_table"], env["gray_cells"],
             self.row_id)))
 
-    def __analyze_domain(self, env):
+    def __analyze_cell_domain(self, env):
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
         self.__start_spark_jobs("collect stat rows",
@@ -364,11 +364,12 @@ class ScavengerRepairModel(SchemaSpyBase):
             self.domain_threshold_beta)))
         self.__end_spark_jobs()
 
-    def __repair_partially(self, env):
-        # Sets the high-confident inferred values to the gray cells if it can follow
-        # the principle of minimality.
-        weak_df = self.spark.table(env["cell_domain"]) \
-            .selectExpr(self.row_id, "attribute", "initValue", "if(initValue = domain[0].n, initValue, NULL) val").cache()
+        return self.spark.table(env["cell_domain"])
+
+    def __extract_error_cells(self, env, cell_domain_df):
+        # Fixes cells if an inferred value is the same with an initial one
+        fix_cells_expr = "if(initValue = domain[0].n, initValue, NULL) val"
+        weak_df = cell_domain_df.selectExpr(self.row_id, "attribute", "initValue", fix_cells_expr).cache()
         weak_df.where("val IS NOT NULL").drop("initValue").cache().createOrReplaceTempView(env["weak"])
         ret_as_json = self.__svg_api.repairAttrsFrom(env["weak"], "", env["repair_base"], self.row_id)
         env["partial_repaired"] = json.loads(ret_as_json)["repaired"]
@@ -377,7 +378,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         error_cells_df = weak_df.where("val IS NULL").drop("val").cache()
         num_error_cells = error_cells_df.count()
 
-        logging.info("%d suspicious cells fixed by the computed domain `%s` and %d error cells remaining" %
+        logging.info("%d suspicious cells fixed by the computed cell domain `%s` and %d error cells remaining" %
             (self.spark.table(env["weak"]).count(), env["cell_domain"], num_error_cells))
 
         return error_cells_df, num_error_cells
@@ -593,16 +594,16 @@ class ScavengerRepairModel(SchemaSpyBase):
             return input_df
 
         self.__prepare_repair_base(env)
-        self.__analyze_domain(env)
 
-        # Repairs cells based on the result of domain analysis
-        error_cells_df, num_error_cells = self.__repair_partially(env)
+        # Selects error cells based on the result of domain analysis
+        cell_domain_df = self.__analyze_cell_domain(env)
+        error_cells_df, num_error_cells = self.__extract_error_cells(env, cell_domain_df)
 
         # If no error cell found, ready to return a clean table
         if num_error_cells == 0:
             clean_df = self.spark.table(env["partial_repaired"])
             assert clean_df.count() == self.spark.table(env["discrete_features"]).count()
-            return clean_df
+            return input_df
 
         # Selects rows for training, build models, and repair cells
         fixed_df, dirty_df, error_attrs = self.__split_clean_and_dirty_rows(env, error_cells_df)
