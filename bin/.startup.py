@@ -623,9 +623,17 @@ class ScavengerRepairModel(SchemaSpyBase):
         if self.maximal_likelihood_repair_enabled and len(target_columns) > len(continous_attrs):
             repaired_df = self.__maximal_likelihood_repair(env, repaired_df, error_cells_df, continous_attrs)
 
-        clean_df = fixed_df.union(repaired_df)
-        assert clean_df.count() == input_df.count()
-        return clean_df
+        # If `return_repair_candidates` is True, returns repair candidates whoes
+        # value is the same with `initValue`
+        if return_repair_candidates:
+            repair_candidates_df = self.__flatten(repaired_df) \
+                .join(error_cells_df, [self.row_id, "attribute"], "inner") \
+                .selectExpr("tid", "attribute", "initValue", "val repaired")
+            return repair_candidates_df
+        else:
+            clean_df = fixed_df.union(repaired_df)
+            assert clean_df.count() == input_df.count()
+            return clean_df
 
     def run(self, error_cells=None, detect_errors_only=False, return_repair_candidates=False):
         if self.table_name is None or self.row_id is None:
