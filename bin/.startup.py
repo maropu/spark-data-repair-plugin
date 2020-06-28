@@ -609,9 +609,9 @@ class ScavengerRepairModel(SchemaSpyBase):
         models, target_columns = self.__build_models(env, self.__select_training_rows(fixed_df), error_attrs, continous_attrs)
         repaired_df = self.__repair(env, models, target_columns, continous_attrs, dirty_df)
 
-        # If probability distribution given, computes scores to decide which cells should be repaired
-        # to follow the “Maximal Likelihood Repair” problem.
-        if self.maximal_likelihood_repair_enabled:
+        # If any discrete target columns and its probability distribution given, computes scores
+        # to decide which cells should be repaired to follow the “Maximal Likelihood Repair” problem.
+        if self.maximal_likelihood_repair_enabled and len(target_columns) > len(continous_attrs):
             repaired_df = self.__maximal_likelihood_repair(env, repaired_df, error_cells_df, continous_attrs)
 
         clean_df = fixed_df.union(repaired_df)
