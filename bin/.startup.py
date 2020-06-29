@@ -484,7 +484,8 @@ class ScavengerRepairModel(SchemaSpyBase):
 
         self.__end_spark_jobs()
 
-        return models, target_columns
+        continous_target_columns = [ c for c in target_columns if c in continous_attrs ]
+        return models, target_columns, continous_target_columns
 
     def __repair(self, env, models, target_columns, continous_attrs, dirty_df):
         # Shares all the variables for the learnt models in a Spark cluster
@@ -632,13 +633,13 @@ class ScavengerRepairModel(SchemaSpyBase):
                 (self.min_features_num, num_features))
             return input_df
 
-        models, target_columns = self.__build_models(env, train_df, error_attrs, continous_attrs)
-        repaired_df = self.__repair(env, models, target_columns, continous_attrs, dirty_df)
+        models, target_columns, continous_target_columns = self.__build_models(env, train_df, error_attrs, continous_attrs)
+        repaired_df = self.__repair(env, models, target_columns, continous_target_columns, dirty_df)
 
         # If any discrete target columns and its probability distribution given, computes scores
         # to decide which cells should be repaired to follow the “Maximal Likelihood Repair” problem.
-        if self.maximal_likelihood_repair_enabled and len(target_columns) > len(continous_attrs):
-            repaired_df = self.__maximal_likelihood_repair(env, repaired_df, error_cells_df, continous_attrs)
+        if self.maximal_likelihood_repair_enabled and len(target_columns) > len(continous_target_columns):
+            repaired_df = self.__maximal_likelihood_repair(env, repaired_df, error_cells_df, continous_target_columns)
 
         # If `return_repair_candidates` is True, returns repair candidates whoes
         # value is the same with `current_value`

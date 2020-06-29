@@ -47,14 +47,14 @@ scavenger.repair() \
 #  - Precision: the fraction of correct repairs, i.e., repairs that match
 #    the ground truth, over the total number of repairs performed
 #  - Recall: correct repairs over the total number of errors
-discrete_predicate = "attribute NOT IN ('CRIM', 'LSTAT')"
+is_discrete = "attribute NOT IN ('CRIM', 'LSTAT')"
 pdf = spark.table("boston_repaired") \
-  .where(discrete_predicate) \
+  .where(is_discrete) \
   .join(spark.table("boston_clean"), ["tid", "attribute"], "inner")
 ground_truth_df = spark.table("error_cells_ground_truth") \
-  .where(discrete_predicate)
+  .where(is_discrete)
 rdf = spark.table("boston_repaired") \
-  .where(discrete_predicate) \
+  .where(is_discrete) \
   .join(ground_truth_df, ["tid", "attribute"], "right_outer")
 
 precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
@@ -64,10 +64,10 @@ f1 = (2.0 * precision * recall) / (precision + recall)
 print("Precision=%s Recall=%s F1=%s" % (precision, recall, f1))
 
 # Computes performance numbers for continous attributes (RMSE)
-continous_predicate = "NOT(%s)" % discrete_predicate
+is_continous = "NOT(%s)" % is_discrete
 n = spark.table("boston_repaired").count()
 rmse = spark.table("boston_repaired") \
-  .where(continous_predicate) \
+  .where(is_continous) \
   .join(spark.table("boston_clean"), ["tid", "attribute"], "inner") \
   .selectExpr("sqrt(sum(pow(correct_val - repaired, 2.0)) / %s) rmse" % n) \
   .collect()[0] \

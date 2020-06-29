@@ -68,6 +68,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
   private def computeAndGetTableStats(tableIdentifier: String): Map[String, ColumnStat] = {
     assert(SparkSession.getActiveSession.isDefined)
     val spark = SparkSession.getActiveSession.get
+    // For safe guards, just cache it for `ANALYZE TABLE`
+    spark.table(tableIdentifier).cache()
     spark.sql(
       s"""
          |ANALYZE TABLE $tableIdentifier COMPUTE STATISTICS
@@ -111,7 +113,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         (statMap(attr), attrTypeMap(attr)) match {
           case (ColumnStat(_, min, max), tpe) if continousTypes.contains(tpe) =>
             logBasedOnLevel(s"'$attr' regraded as a continuous attribute (min=${min.get}, " +
-              s"max=${max.get}, so discretizes it in [0, $discreteThres)")
+              s"max=${max.get}), so discretized into [0, $discreteThres)")
             Some(s"int(($attr - ${min.get}) / (${max.get} - ${min.get}) * $discreteThres) $attr")
           case (ColumnStat(distinctCnt, _, _), _)
               if attr == rowId || (1 < distinctCnt && distinctCnt < discreteThres) =>
@@ -369,7 +371,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       }
 
       // Uses the domain size of X as a log base for normalization
-      val domainStatMap = getColumnStats(discreteAttrView).mapValues(_.distinctCount)
+      val domainStatMap = computeAndGetTableStats(discreteAttrView).mapValues(_.distinctCount)
 
       val pairWiseStats = attrPairsToRepair.map { case attrPair @ (rvX, rvY) =>
         // The conditional entropy is 0 for strongly correlated attributes and 1 for completely independent
