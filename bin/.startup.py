@@ -187,7 +187,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.stat_thres_ratio = 0.0
         self.min_features_num = 1
         self.inference_order = "domain"
-        self.maximal_likelihood_repair_enabled = True
+        self.maximal_likelihood_repair_enabled = False
         self.repair_delta = None
 
         # JVM interfaces for Scavenger APIs

@@ -1,0 +1,110 @@
+$./bin/python --master=local[*] --conf spark.driver.memory=8g -v
+conda virtual env 'scavenger-plugin-20be9b88548eef44e21479edce7953129a94c30d' created.
+
+=== Launching pyspark on conda virtual env 'scavenger-plugin-20be9b88548eef44e21479edce7953129a94c30d' ===
+Python 3.6.8 |Anaconda, Inc.| (default, Dec 29 2018, 19:04:46) 
+
+Using Spark's default log4j profile: org/apache/spark/log4j-defaults.properties
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /__ / .__/\_,_/_/ /_/\_\   version 3.0.0
+      /_/
+
+Using Python version 3.6.8 (default, Dec 29 2018 19:04:46)
+SparkSession available as 'spark'.
+Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
+>>> # Loads a target data then defines tables for it
+... spark.read \
+...   .option("header", True) \
+...   .csv("./testdata/hospital.csv") \
+...   .write \
+...   .saveAsTable("hospital")
+>>> 
+>>> scavenger.repair().misc() \
+...   .setDbName("default") \
+...   .setTableName("hospital") \
+...   .setRowId("tid") \
+...   .flatten() \
+...   .write \
+...   .saveAsTable("hospital_flatten")
+>>> 
+>>> spark.table("hospital").show(1)
++---+--------------+--------------------+--------------------+--------+--------+----------+-----+-------+----------+-----------+--------------------+--------------------+----------------+--------------------+-----------+--------------------+-----+------+--------------+
+|tid|ProviderNumber|        HospitalName|            Address1|Address2|Address3|      City|State|ZipCode|CountyName|PhoneNumber|        HospitalType|       HospitalOwner|EmergencyService|           Condition|MeasureCode|         MeasureName|Score|Sample|      Stateavg|
++---+--------------+--------------------+--------------------+--------+--------+----------+-----+-------+----------+-----------+--------------------+--------------------+----------------+--------------------+-----------+--------------------+-----+------+--------------+
+|  0|         10018|callahan eye foun...|1720 university blvd|    null|    null|birmingham|   al|  35233| jefferson| 2053258100|acute care hospitals|voluntary non-pro...|             yes|surgical infectio...|scip-card-2|surgery patients ...| null|  null|al_scip-card-2|
++---+--------------+--------------------+--------------------+--------+--------+----------+-----+-------+----------+-----------+--------------------+--------------------+----------------+--------------------+-----------+--------------------+-----+------+--------------+
+only showing top 1 row
+
+>>> spark.table("hospital_flatten").show(1)
++---+--------------+-----+
+|tid|     attribute|value|
++---+--------------+-----+
+|  0|ProviderNumber|10018|
++---+--------------+-----+
+only showing top 1 row
+
+>>> 
+>>> # Loads a ground truth data then defines tables for it
+... spark.read \
+...   .option("header", True) \
+...   .csv("./testdata/hospital_clean.csv") \
+...   .write \
+...   .saveAsTable("hospital_clean")
+>>> 
+>>> spark.table("hospital_flatten") \
+...   .join(spark.table("hospital_clean"), ["tid", "attribute"], "inner") \
+...   .where("not(value <=> correct_val)") \
+...   .write \
+...   .saveAsTable("error_cells_ground_truth")
+>>> 
+>>> spark.table("hospital_clean").show(1)
++---+--------------+-----------+
+|tid|     attribute|correct_val|
++---+--------------+-----------+
+|  0|ProviderNumber|      10018|
++---+--------------+-----------+
+only showing top 1 row
+
+>>> spark.table("error_cells_ground_truth").show(1)
++---+-----------+--------------------+--------------------+
+|tid|  attribute|               value|         correct_val|
++---+-----------+--------------------+--------------------+
+|  0|MeasureName|surgery patients ...|surgery patients ...|
++---+-----------+--------------------+--------------------+
+only showing top 1 row
+
+>>> 
+>>> # Detects error cells then repairs them
+... scavenger.repair() \
+...   .setDbName("default") \
+...   .setTableName("hospital") \
+...   .setRowId("tid") \
+...   .setConstraints("./testdata/hospital_constraints.txt") \
+...   .run(return_repair_candidates=True) \
+...   .write \
+...   .saveAsTable("hospital_repaired")
+Detecting errors in a table `default.hospital` (1000 rows x 20 cols)...
+...
+
+>>> 
+>>> # Computes performance numbers (precision & recall)
+... #  - Precision: the fraction of correct repairs, i.e., repairs that match
+... #    the ground truth, over the total number of repairs performed
+... #  - Recall: correct repairs over the total number of errors
+... pdf = spark.table("hospital_repaired") \
+...   .join(spark.table("hospital_clean"), ["tid", "attribute"], "inner")
+>>> rdf = spark.table("hospital_repaired") \
+...   .join(spark.table("error_cells_ground_truth"), ["tid", "attribute"], "right_outer")
+>>> 
+>>> precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
+>>> recall = rdf.where("repaired <=> correct_val").count() / rdf.count()        
+>>> f1 = (2.0 * precision * recall) / (precision + recall)
+>>> 
+>>> print("Precision=%s Recall=%s F1=%s" % (precision, recall, f1))
+Precision=0.8814432989690721 Recall=0.33595284872298625 F1=0.48648648648648646
+

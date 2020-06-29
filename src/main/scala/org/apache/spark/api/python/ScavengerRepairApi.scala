@@ -186,58 +186,6 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     }
   }
 
-  def computeAttrStats(
-      discreteAttrView: String,
-      errCellView: String,
-      rowId: String,
-      sampleRatio: Double,
-      statThresRatio: Double): String = {
-
-    logBasedOnLevel(s"computeAttrStats called with: discreteAttrView=$discreteAttrView " +
-      s"errCellView=$errCellView rowId=$rowId sampleRatio=$sampleRatio statThresRatio=$statThresRatio")
-
-    withSparkSession { sparkSession =>
-      // Computes numbers for single and pair-wise statistics in the input table
-      val tableAttrs = sparkSession.table(discreteAttrView).schema.map(_.name)
-      val attrsToRepair = {
-        sparkSession.sql(s"SELECT collect_set(attribute) FROM $errCellView")
-          .collect.head.getSeq[String](0)
-      }
-      val attrPairsToRepair = attrsToRepair.flatMap { attrToRepair =>
-        tableAttrs.filter(attrToRepair != _).map(a => (attrToRepair, a))
-      }
-
-      val statDf = {
-        val pairSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
-        val inputDf = if (sampleRatio < 1.0) {
-          sparkSession.table(discreteAttrView).sample(sampleRatio)
-        } else {
-          sparkSession.table(discreteAttrView)
-        }
-        withTempView(inputDf) { inputView =>
-          val filterClauseOption = if (statThresRatio > 0.0) {
-            val cond = s"HAVING cnt > ${(inputDf.count * statThresRatio).toInt}"
-            logBasedOnLevel(s"Attributes stats filter enabled: $cond")
-            cond
-          } else {
-            ""
-          }
-          sparkSession.sql(
-            s"""
-               |SELECT ${tableAttrs.mkString(", ")}, COUNT(1) cnt
-               |FROM $inputView
-               |GROUP BY GROUPING SETS (
-               |  ${tableAttrs.map(a => s"($a)").mkString(", ")},
-               |  ${pairSets.map(_.toSeq).map { case Seq(a1, a2) => s"($a1,$a2)" }.mkString(", ")}
-               |)
-               |$filterClauseOption
-             """.stripMargin)
-        }
-      }
-      Seq("attr_stats" -> createAndCacheTempView(statDf, "attr_stats")).asJson
-    }
-  }
-
   def convertErrorCellsToNull(discreteAttrView: String, errCellView: String, rowId: String): String = {
     logBasedOnLevel(s"convertErrorCellsToNull called with: discreteAttrView=$discreteAttrView " +
       s"errCellView=$errCellView rowId=$rowId")
@@ -279,6 +227,59 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     }
   }
 
+  def computeAttrStats(
+      discreteAttrView: String,
+      errCellView: String,
+      rowId: String,
+      sampleRatio: Double,
+      statThresRatio: Double): String = {
+
+    logBasedOnLevel(s"computeAttrStats called with: discreteAttrView=$discreteAttrView " +
+      s"errCellView=$errCellView rowId=$rowId sampleRatio=$sampleRatio statThresRatio=$statThresRatio")
+
+    withSparkSession { sparkSession =>
+      // Computes numbers for single and pair-wise statistics in the input table
+      val discreteAttrs = sparkSession.table(discreteAttrView).schema.map(_.name).filter(_ != rowId)
+      val attrsToRepair = {
+        val attrs = sparkSession.sql(s"SELECT collect_set(attribute) FROM $errCellView")
+          .collect.head.getSeq[String](0)
+        attrs.filter(discreteAttrs.contains)
+      }
+      val attrPairsToRepair = attrsToRepair.flatMap { attrToRepair =>
+        discreteAttrs.filter(attrToRepair != _).map(a => (attrToRepair, a))
+      }
+
+      val statDf = {
+        val pairSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
+        val inputDf = if (sampleRatio < 1.0) {
+          sparkSession.table(discreteAttrView).sample(sampleRatio)
+        } else {
+          sparkSession.table(discreteAttrView)
+        }
+        withTempView(inputDf) { inputView =>
+          val filterClauseOption = if (statThresRatio > 0.0) {
+            val cond = s"HAVING cnt > ${(inputDf.count * statThresRatio).toInt}"
+            logBasedOnLevel(s"Attributes stats filter enabled: $cond")
+            cond
+          } else {
+            ""
+          }
+          sparkSession.sql(
+            s"""
+               |SELECT ${discreteAttrs.mkString(", ")}, COUNT(1) cnt
+               |FROM $inputView
+               |GROUP BY GROUPING SETS (
+               |  ${discreteAttrs.map(a => s"($a)").mkString(", ")},
+               |  ${pairSets.map(_.toSeq).map { case Seq(a1, a2) => s"($a1,$a2)" }.mkString(", ")}
+               |)
+               |$filterClauseOption
+             """.stripMargin)
+        }
+      }
+      Seq("attr_stats" -> createAndCacheTempView(statDf, "attr_stats")).asJson
+    }
+  }
+
   def computeDomainInErrorCells(
       discreteAttrView: String,
       attrStatView: String,
@@ -308,8 +309,9 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       val rowCnt = sparkSession.table(discreteAttrView).count()
 
       val attrsToRepair = {
-        sparkSession.sql(s"SELECT collect_set(attribute) FROM $errCellView")
+        val attrs = sparkSession.sql(s"SELECT collect_set(attribute) FROM $errCellView")
           .collect.head.getSeq[String](0)
+        attrs.filter(discreteAttrs.contains)
       }
       val attrPairsToRepair = attrsToRepair.flatMap { attrToRepair =>
         discreteAttrs.filter(attrToRepair != _).map(a => (attrToRepair, a))
@@ -567,7 +569,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         createAndCacheTempView(cellDomainDf, "cell_domain")
       }
       // Number of rows in `cellDomainView` is the same with the number of error cells
-      assert(cellDomainDf.count == sparkSession.table(errCellView).count)
+      // assert(cellDomainDf.count == sparkSession.table(errCellView).count)
       Seq("cell_domain" -> cellDomainView,
         "pairwise_attr_stats" -> corrAttrs
       ).asJson
