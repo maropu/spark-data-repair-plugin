@@ -95,53 +95,60 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
 
     withSparkSession { sparkSession =>
       val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
+      lazy val emptyTable = {
+        val rowIdType = inputDf.schema.find(_.name == rowId).get.dataType.sql
+        createEmptyTable(s"$rowId $rowIdType, attribute STRING")
+      }
 
-      withTempView(inputDf, cache = true) { inputView =>
-        val constraints = loadConstraintsFromFile(constraintFilePath, tableName, inputDf.columns)
-        if (constraints.entries.isEmpty) {
-          // Case of non-found constraints
-          val rowIdType = inputDf.schema.find(_.name == rowId).get.dataType.sql
-          createEmptyTable(s"$rowId $rowIdType, attribute STRING")
-        } else {
-          logBasedOnLevel({
-            val constraintLists = constraints.entries.zipWithIndex.map { case (preds, i) =>
-              preds.map(_.toString("t1", "t2")).mkString(s" [$i] ", ",", "")
-            }
-            s"""
-               |Loads constraints from '$constraintFilePath':
-               |${constraintLists.mkString("\n")}
-             """.stripMargin
-          })
-
-          // Detects error erroneous cells in a given table
-          val errCellDf = constraints.entries.flatMap { preds =>
-            val queryToValidateConstraint =
+      // If `constraintFilePath` not given, just returns an empty table
+      if (constraintFilePath == null || constraintFilePath.trim.isEmpty) {
+        emptyTable
+      } else {
+        withTempView(inputDf, cache = true) { inputView =>
+          val constraints = loadConstraintsFromFile(constraintFilePath, tableName, inputDf.columns)
+          if (constraints.entries.isEmpty) {
+            emptyTable
+          } else {
+            logBasedOnLevel({
+              val constraintLists = constraints.entries.zipWithIndex.map { case (preds, i) =>
+                preds.map(_.toString("t1", "t2")).mkString(s" [$i] ", ",", "")
+              }
               s"""
-                 |SELECT t1.$rowId
-                 |FROM $inputView AS t1
-                 |WHERE EXISTS (
-                 |  SELECT t2.$rowId
-                 |  FROM $inputView AS t2
-                 |  WHERE ${DenialConstraints.toWhereCondition(preds, "t1", "t2")}
-                 |)
+                 |Loads constraints from '$constraintFilePath':
+                 |${constraintLists.mkString("\n")}
                """.stripMargin
+            })
 
-            val df = sparkSession.sql(queryToValidateConstraint)
-            logBasedOnLevel(
-              s"""
-                 |Number of violate tuples: ${df.count}
-                 |Query to validate constraints:
-                 |$queryToValidateConstraint
-               """.stripMargin)
+            // Detects error erroneous cells in a given table
+            val errCellDf = constraints.entries.flatMap { preds =>
+              val queryToValidateConstraint =
+                s"""
+                   |SELECT t1.$rowId
+                   |FROM $inputView AS t1
+                   |WHERE EXISTS (
+                   |  SELECT t2.$rowId
+                   |  FROM $inputView AS t2
+                   |  WHERE ${DenialConstraints.toWhereCondition(preds, "t1", "t2")}
+                   |)
+                 """.stripMargin
 
-            preds.flatMap { p => p.leftAttr :: p.rightAttr :: Nil }.map { attr =>
-              df.selectExpr(rowId, s"'$attr' AS attribute")
-            }
-          }.reduce(_.union(_)).distinct().cache()
+              val df = sparkSession.sql(queryToValidateConstraint)
+              logBasedOnLevel(
+                s"""
+                   |Number of violate tuples: ${df.count}
+                   |Query to validate constraints:
+                   |$queryToValidateConstraint
+                 """.stripMargin)
 
-          val errCellView = createAndCacheTempView(errCellDf, "err_cells_from_constraints")
-          loggingErrorStats("Constraint error detector", qualifiedName, errCellView, constraints.attrNames)
-          errCellDf
+              preds.flatMap { p => p.leftAttr :: p.rightAttr :: Nil }.map { attr =>
+                df.selectExpr(rowId, s"'$attr' AS attribute")
+              }
+            }.reduce(_.union(_)).distinct().cache()
+
+            val errCellView = createAndCacheTempView(errCellDf, "err_cells_from_constraints")
+            loggingErrorStats("Constraint error detector", qualifiedName, errCellView, constraints.attrNames)
+            errCellDf
+          }
         }
       }
     }

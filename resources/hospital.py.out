@@ -1,7 +1,3 @@
-$./bin/python --master=local[*] --conf spark.driver.memory=8g -v
-conda virtual env 'scavenger-plugin-20be9b88548eef44e21479edce7953129a94c30d' created.
-
-=== Launching pyspark on conda virtual env 'scavenger-plugin-20be9b88548eef44e21479edce7953129a94c30d' ===
 Python 3.6.8 |Anaconda, Inc.| (default, Dec 29 2018, 19:04:46) 
 
 Using Spark's default log4j profile: org/apache/spark/log4j-defaults.properties

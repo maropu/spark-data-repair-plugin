@@ -103,7 +103,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       val statMap = computeAndGetTableStats(qualifiedName)
       val attrTypeMap = inputDf.schema.map { f => f.name -> f.dataType }.toMap
       val rowCnt = inputDf.count()
-      if (statMap(rowId).distinctCount != rowCnt) {
+      if (inputDf.selectExpr(rowId).distinct().count() != rowCnt) {
         throw new SparkException(s"Uniqueness does not hold in column '$rowId' " +
           s"of table '$dbName.$tableName'.")
       }

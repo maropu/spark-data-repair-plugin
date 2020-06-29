@@ -18,15 +18,16 @@
 package org.apache.spark.api.python
 
 import org.apache.spark.SparkException
+import org.apache.spark.sql.DataFrame
 import org.apache.spark.util.{Utils => SparkUtils}
 
 object ScavengerMiscApi extends BaseScavengerRepairApi {
 
-  def injectNullAt(dbName: String, tableName: String, targetAttrList: String, nullRatio: Double): String = {
+  def injectNullAt(dbName: String, tableName: String, targetAttrList: String, nullRatio: Double): DataFrame = {
     logBasedOnLevel(s"injectNullAt called with: dbName=$dbName tableName=$tableName " +
       s"targetAttrList=$targetAttrList, nullRatio=$nullRatio")
 
-    val df = withSparkSession { _ =>
+    withSparkSession { _ =>
       val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName)
       val targetAttrSet = if (targetAttrList.nonEmpty) {
         val attrSet = SparkUtils.stringToSeq(targetAttrList).toSet
@@ -45,7 +46,6 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
       }
       inputDf.selectExpr(exprs: _*)
     }
-    Seq("injected" -> createAndCacheTempView(df)).asJson
   }
 
   /**
