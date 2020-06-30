@@ -39,6 +39,7 @@ scavenger.repair() \
   .setDbName("default") \
   .setTableName("boston") \
   .setRowId("tid") \
+  .setDiscreteThreshold(1000) \
   .run(return_repair_candidates=True) \
   .write \
   .saveAsTable("boston_repaired")
@@ -48,14 +49,10 @@ scavenger.repair() \
 #    the ground truth, over the total number of repairs performed
 #  - Recall: correct repairs over the total number of errors
 is_discrete = "attribute NOT IN ('CRIM', 'LSTAT')"
-pdf = spark.table("boston_repaired") \
-  .where(is_discrete) \
-  .join(spark.table("boston_clean"), ["tid", "attribute"], "inner")
-ground_truth_df = spark.table("error_cells_ground_truth") \
-  .where(is_discrete)
-rdf = spark.table("boston_repaired") \
-  .where(is_discrete) \
-  .join(ground_truth_df, ["tid", "attribute"], "right_outer")
+discrete_df = spark.table("boston_repaired").where(is_discrete)
+pdf = discrete_df.join(spark.table("boston_clean"), ["tid", "attribute"], "inner")
+ground_truth_df = spark.table("error_cells_ground_truth").where(is_discrete)
+rdf = discrete_df.join(ground_truth_df, ["tid", "attribute"], "right_outer")
 
 precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
 recall = rdf.where("repaired <=> correct_val").count() / rdf.count()

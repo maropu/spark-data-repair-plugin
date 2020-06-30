@@ -238,6 +238,10 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.black_attr_list = black_attr_list
         return self
 
+    def setDiscreteThreshold(self, thres):
+        self.discrete_thres = thres
+        return self
+
     def setDomainThresholds(self, alpha, beta):
         self.domain_threshold_alpha = alpha
         self.domain_threshold_beta = beta
@@ -463,24 +467,37 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.__start_spark_jobs("build ML models",
             "Building %s ML models to repair the error cells..." % len(target_columns))
         import lightgbm as lgb
+        import category_encoders as ce
         models = {}
         train_pdf = train_df.toPandas()
-        # TODO: Needs to think more about this category encoding
-        X = train_pdf.applymap(hash)
         excluded_columns = copy.deepcopy(target_columns)
         for index, y in enumerate(target_columns):
-            features = [c for c in X.columns if c not in excluded_columns]
+            # All the available features
+            features = [c for c in train_pdf.columns if c not in excluded_columns]
             excluded_columns.remove(y)
+
+            # Transforms discrete attributes into one-hot encoding froms
+            discrete_columns = [ c for c in features if c not in continous_attrs ]
+            if len(discrete_columns) > 0:
+                ohe = ce.OneHotEncoder(cols=discrete_columns, handle_unknown='impute')
+                # TODO: Needs to include `dirty_df` in this transformation
+                X = ohe.fit_transform(train_pdf[features])
+            else:
+                ohe = None
+                X = train_pdf[features]
+
             if y in continous_attrs:
                 reg = lgb.LGBMRegressor()
-                reg.fit(X[features], train_pdf[y])
-                logging.info("LGBMRegressor[%d]: y(%s)<=X(%s)" % (index, y, ",".join(features)))
-                models[y] = (reg, features)
+                reg.fit(X, train_pdf[y])
+                logging.info("LGBMRegressor[%d]: y(%s)<=X(%s),#features=%s" % \
+                    (index, y, ",".join(features), len(X.columns)))
+                models[y] = (reg, features, ohe)
             else:
                 clf = lgb.LGBMClassifier()
-                clf.fit(X[features], train_pdf[y])
-                logging.info("LGBMClassifier[%d]: y(%s)<=X(%s)" % (index, y, ",".join(features)))
-                models[y] = (clf, features)
+                clf.fit(X, train_pdf[y])
+                logging.info("LGBMClassifier[%d]: y(%s)<=X(%s),#features=%s" % \
+                    (index, y, ",".join(features), len(X.columns)))
+                models[y] = (clf, features, ohe)
 
         self.__end_spark_jobs()
 
@@ -512,21 +529,28 @@ class ScavengerRepairModel(SchemaSpyBase):
             rows = []
             for index, row in pdf.iterrows():
                 for y in target_columns:
-                    (model, features) = models[y]
-                    vec = row[features].map(hash)
+                    (model, features, ohe) = models[y]
+
+                    # Preprocesses the input row for prediction
+                    pdf = pd.DataFrame(row[features]).T
+                    for c in [ f for f in features if f in continous_attrs ]:
+                        pdf[c] = pdf[c].astype("float64")
+
+                    # Transforms an input row to a feature
+                    X = ohe.transform(pdf) if ohe is not None else pdf
 
                     if y in continous_attrs:
                         if np.isnan(row[y]):
-                            predicted = model.predict(vec.to_numpy().reshape(1, -1))
+                            predicted = model.predict(X)
                             row[y] = float(predicted[0])
                     else:
                         if row[y] is None:
                             if maximal_likelihood_repair_enabled:
-                                predicted = model.predict_proba(vec.to_numpy().reshape(1, -1))
+                                predicted = model.predict_proba(X)
                                 dist = { "classes" : model.classes_.tolist(), "probs" : predicted[0].tolist() }
                                 row[y] = json.dumps(dist)
                             else:
-                                predicted = model.predict(vec.to_numpy().reshape(1, -1))
+                                predicted = model.predict(X)
                                 row[y] = predicted[0]
 
                 rows.append(row)
@@ -634,7 +658,7 @@ class ScavengerRepairModel(SchemaSpyBase):
             return input_df
 
         models, target_columns, continous_target_columns = self.__build_models(env, train_df, error_attrs, continous_attrs)
-        repaired_df = self.__repair(env, models, target_columns, continous_target_columns, dirty_df)
+        repaired_df = self.__repair(env, models, target_columns, continous_attrs, dirty_df)
 
         # If any discrete target columns and its probability distribution given, computes scores
         # to decide which cells should be repaired to follow the “Maximal Likelihood Repair” problem.
