@@ -40,7 +40,8 @@ repaired_df = scavenger.repair() \
   .setTableName("boston") \
   .setRowId("tid") \
   .setDiscreteThreshold(1000) \
-  .setMaxTrainingColumnNum(8) \
+  .setMaxTrainingColumnNum(14) \
+  .setInferenceOrder("domain") \
   .run(return_repair_candidates=True)
 
 # Computes performance numbers for discrete attributes (precision & recall)

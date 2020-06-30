@@ -24,6 +24,7 @@ A Scavenger API Set for Data Profiling & Cleaning
 import copy
 import datetime
 import functools
+import heapq
 import json
 import logging
 import numpy as np
@@ -185,7 +186,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.max_training_column_num = None
         self.stat_thres_ratio = 0.0
         self.min_features_num = 1
-        self.inference_order = "domain"
+        self.inference_order = "entropy"
         self.maximal_likelihood_repair_enabled = False
         self.repair_delta = None
 
@@ -423,6 +424,19 @@ class ScavengerRepairModel(SchemaSpyBase):
             (train_df.count(), self.training_data_sample_ratio, fixed_df.count()))
         return train_df
 
+    def __error_num_based_order(self, error_attrs):
+        # Sorts target columns by the number of errors
+        error_num_map = {}
+        for row in error_attrs:
+            error_num_map[row.attribute] = row.cnt
+
+        target_columns = list(map(lambda row: row.attribute, \
+            sorted(error_attrs, key=lambda row: row.cnt, reverse=False)))
+        for y in target_columns:
+            logging.info("%s: #errors=%s" % (y, error_num_map[y]))
+
+        return target_columns
+
     def __domain_size_based_order(self, env, train_df, error_attrs):
         # Computes domain sizes for training data
         self.__start_spark_jobs("collect training data stats",
@@ -432,34 +446,44 @@ class ScavengerRepairModel(SchemaSpyBase):
         env.update(json.loads(self.__svg_api.computeDomainSizes(env["train"])))
         self.__end_spark_jobs()
 
-        error_num_map = {}
-        for row in error_attrs:
-            error_num_map[row.attribute] = row.cnt
-
-        # TODO: Needs to analyze dependencies (e.g., based on graph algorithms) between
-        # a target column and the other ones for decideing a inference order.
-        #
-        # for row in error_attrs:
-        #     logging.warning("%s: %s" % (row.attribute, ", ".join(list(map(lambda x: str(x), env["pairwise_attr_stats"][row.attribute])))))
-        #     for f, corr in list(map(lambda x: tuple(x), env["pairwise_attr_stats"][row.attribute])):
-        #         // Process `f` and `float(corr)` here
-
-        # Sorts target columns by the domain sizes of training data
-        # TODO: Needs to think more about feature selection, the order in which models
-        # are applied, and corelation of features.
+        # Sorts target columns by domain size
         target_columns = list(map(lambda row: row.attribute, \
             sorted(error_attrs, key=lambda row: int(env["distinct_stats"][row.attribute]), reverse=False)))
         for y in target_columns:
-            logging.info("%s: |domain|=%s #errors=%s" % (y, env["distinct_stats"][y], error_num_map[y]))
+            logging.info("%s: |domain|=%s" % (y, env["distinct_stats"][y]))
 
         return target_columns
 
     def __entropy_based_order(self, env, train_df, error_attrs):
-        # TODO: Not implmeneted yet
-        raise NotImplementedError("`entropy` inference order not implemented yet")
+        # Sorts target columns by correlations
+        #
+        # TODO: Needs to analyze dependencies (e.g., based on graph algorithms) between
+        # a target column and the other ones for decideing a inference order.
+        target_columns = []
+        error_attrs = list(map(lambda row: row.attribute, error_attrs))
+
+        for index in range(len(error_attrs)):
+            features = [ c for c in train_df.columns if c not in error_attrs ]
+            targets = []
+            for c in error_attrs:
+                total_corr = 0.0
+                for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][c]):
+                    if f in features:
+                        total_corr += float(corr)
+
+                heapq.heappush(targets, (-total_corr, c))
+
+            t = heapq.heappop(targets)
+            target_columns.append(t[1])
+            logging.info("corr=%s, y(%s)<=X(%s)" % (-t[0], t[1], ",".join(features)))
+            error_attrs.remove(t[1])
+
+        return target_columns
 
     def __compute_inference_order(self, env, train_df, error_attrs):
-        if self.inference_order == "domain":
+        if self.inference_order == "error":
+            return self.__error_num_based_order(error_attrs)
+        elif self.inference_order == "domain":
             return self.__domain_size_based_order(env, train_df, error_attrs)
         elif self.inference_order == "entropy":
             return self.__entropy_based_order(env, train_df, error_attrs)
@@ -473,7 +497,6 @@ class ScavengerRepairModel(SchemaSpyBase):
             "Building %s ML models to repair the error cells..." % len(target_columns))
         import lightgbm as lgb
         import category_encoders as ce
-        import heapq
         models = {}
         train_pdf = train_df.toPandas()
         excluded_columns = copy.deepcopy(target_columns)
@@ -515,8 +538,8 @@ class ScavengerRepairModel(SchemaSpyBase):
             else:
                 clf = lgb.LGBMClassifier()
                 clf.fit(X, train_pdf[y])
-                logging.info("LGBMClassifier[%d]: y(%s)<=X(%s),#features=%s" % \
-                    (index, y, ",".join(features), len(X.columns)))
+                logging.info("LGBMClassifier[%d]: #features=%s, y(%s)<=X(%s)" % \
+                    (index, len(X.columns), y, ",".join(features)))
                 models[y] = (clf, features, ohe)
 
         self.__end_spark_jobs()
@@ -700,8 +723,8 @@ class ScavengerRepairModel(SchemaSpyBase):
     def run(self, error_cells=None, detect_errors_only=False, return_repair_candidates=False):
         if self.table_name is None or self.row_id is None:
             raise ValueError("`setTableName` and `setRowId` should be called before repairing")
-        if self.inference_order not in ["domain", "entropy"]:
-            raise ValueError("Inference order must be `domain` or `entropy`, but `%s` found" % \
+        if self.inference_order not in ["error", "domain", "entropy"]:
+            raise ValueError("Inference order must be `error`, `domain`, or `entropy`, but `%s` found" % \
                 self.inference_order)
 
         __start = time.time()
@@ -758,15 +781,17 @@ if not sc._jvm.SparkSession.getActiveSession().isDefined():
 # Suppress warinig messages in PySpark
 warnings.simplefilter('ignore')
 
-# Sets `INFO` to the logging level for debugging
-logging.basicConfig(level=logging.INFO)
-# logging.basicConfig(level=logging.WARN)
-
 # Supresses `WARN` messages in JVM
 spark.sparkContext.setLogLevel("ERROR")
 
+# For debugging
+spark.sql("SET spark.scavenger.logLevel=ERROR")
+logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.WARN)
+
 # Since 3.0, `spark.sql.crossJoin.enabled` is set to true by default
 spark.sql("SET spark.sql.crossJoin.enabled=true")
+spark.sql("SET spark.sql.cbo.enabled=true")
 spark.sql("SET spark.sql.cbo.enabled=true")
 
 # Tunes # shuffle partitions
