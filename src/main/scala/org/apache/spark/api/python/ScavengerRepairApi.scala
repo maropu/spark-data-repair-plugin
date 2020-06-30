@@ -27,7 +27,8 @@ import org.apache.spark.util.{Utils => SparkUtils}
 object ScavengerRepairApi extends BaseScavengerRepairApi {
 
   private val continousTypes: Set[DataType] = Set(FloatType, DoubleType)
-  private val supportedType: Set[DataType] = Set(StringType) ++ continousTypes
+  private val supportedType: Set[DataType] = Set(StringType, BooleanType, ByteType, ShortType,
+    IntegerType, LongType, DateType, TimestampType) ++ continousTypes
 
   def checkInputTable(dbName: String, tableName: String, rowId: String): String = {
     val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
