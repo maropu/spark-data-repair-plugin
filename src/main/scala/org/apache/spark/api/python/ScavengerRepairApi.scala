@@ -62,7 +62,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       val distinctCount = stat.distinctCount.map(_.toLong)
       (kv._1.name, ColumnStat(distinctCount.get, stat.min, stat.max))
     }
-    // assert(df.columns.toSet == statMap.keySet)
+    assert(df.columns.forall(statMap.contains))
     statMap
   }
 

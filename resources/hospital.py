@@ -33,23 +33,21 @@ spark.table("hospital_clean").show(1)
 spark.table("error_cells_ground_truth").show(1)
 
 # Detects error cells then repairs them
-scavenger.repair() \
+repaired_df = scavenger.repair() \
   .setDbName("default") \
   .setTableName("hospital") \
   .setRowId("tid") \
   .setConstraints("./testdata/hospital_constraints.txt") \
-  .run(return_repair_candidates=True) \
-  .write \
-  .saveAsTable("hospital_repaired")
+  .setDiscreteThreshold(100) \
+  .setInferenceOrder("domain") \
+  .run(return_repair_candidates=True)
 
 # Computes performance numbers (precision & recall)
 #  - Precision: the fraction of correct repairs, i.e., repairs that match
 #    the ground truth, over the total number of repairs performed
 #  - Recall: correct repairs over the total number of errors
-pdf = spark.table("hospital_repaired") \
-  .join(spark.table("hospital_clean"), ["tid", "attribute"], "inner")
-rdf = spark.table("hospital_repaired") \
-  .join(spark.table("error_cells_ground_truth"), ["tid", "attribute"], "right_outer")
+pdf = repaired_df.join(spark.table("hospital_clean"), ["tid", "attribute"], "inner")
+rdf = repaired_df.join(spark.table("error_cells_ground_truth"), ["tid", "attribute"], "right_outer")
 
 precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
 recall = rdf.where("repaired <=> correct_val").count() / rdf.count()

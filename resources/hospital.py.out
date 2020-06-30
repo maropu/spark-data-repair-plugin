@@ -102,5 +102,5 @@ Detecting errors in a table `default.hospital` (1000 rows x 20 cols)...
 >>> f1 = (2.0 * precision * recall) / (precision + recall)
 >>> 
 >>> print("Precision=%s Recall=%s F1=%s" % (precision, recall, f1))
-Precision=0.8814432989690721 Recall=0.33595284872298625 F1=0.48648648648648646
+Precision=0.6052631578947368 Recall=0.5422396856581533 F1=0.572020725388601
 
