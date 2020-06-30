@@ -35,21 +35,20 @@ spark.table("boston_clean").show(1)
 spark.table("error_cells_ground_truth").show(1)
 
 # Detects error cells then repairs them
-scavenger.repair() \
+repaired_df = scavenger.repair() \
   .setDbName("default") \
   .setTableName("boston") \
   .setRowId("tid") \
   .setDiscreteThreshold(1000) \
-  .run(return_repair_candidates=True) \
-  .write \
-  .saveAsTable("boston_repaired")
+  .setMaxTrainingColumnNum(8) \
+  .run(return_repair_candidates=True)
 
 # Computes performance numbers for discrete attributes (precision & recall)
 #  - Precision: the fraction of correct repairs, i.e., repairs that match
 #    the ground truth, over the total number of repairs performed
 #  - Recall: correct repairs over the total number of errors
 is_discrete = "attribute NOT IN ('CRIM', 'LSTAT')"
-discrete_df = spark.table("boston_repaired").where(is_discrete)
+discrete_df = repaired_df.where(is_discrete)
 pdf = discrete_df.join(spark.table("boston_clean"), ["tid", "attribute"], "inner")
 ground_truth_df = spark.table("error_cells_ground_truth").where(is_discrete)
 rdf = discrete_df.join(ground_truth_df, ["tid", "attribute"], "right_outer")
@@ -62,8 +61,8 @@ print("Precision=%s Recall=%s F1=%s" % (precision, recall, f1))
 
 # Computes performance numbers for continous attributes (RMSE)
 is_continous = "NOT(%s)" % is_discrete
-n = spark.table("boston_repaired").count()
-rmse = spark.table("boston_repaired") \
+n = repaired_df.count()
+rmse = repaired_df \
   .where(is_continous) \
   .join(spark.table("boston_clean"), ["tid", "attribute"], "inner") \
   .selectExpr("sqrt(sum(pow(correct_val - repaired, 2.0)) / %s) rmse" % n) \

@@ -573,7 +573,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       // Number of rows in `cellDomainView` is the same with the number of error cells
       // assert(cellDomainDf.count == sparkSession.table(errCellView).count)
       Seq("cell_domain" -> cellDomainView,
-        "pairwise_attr_stats" -> corrAttrs
+        "pairwise_attr_stats" -> pairWiseStatMap.mapValues(seqToJson)
       ).asJson
     }
   }

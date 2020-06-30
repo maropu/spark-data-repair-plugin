@@ -28,19 +28,20 @@ private[python] case class JsonEncoder(v: Seq[(String, AnyRef)]) {
 
   def asJson: String = v.map {
     case (k, v: String) => s""""$k":"$v""""
-    case (k, map: Map[String, String]) =>
-      s""""$k":${map.map(kv => s""""${kv._1}": "${kv._2}"""").mkString("{", ",", "}")}"""
-    case (k, map: Map[String, Seq[(String, Double)]]) =>
-      def toValueString(values: Seq[(String, Double)]) =
-        values.map(v => s"""["${v._1}","${v._2}"]""").mkString("[", ",", "]")
-      s""""$k":${map.map(kv => s""""${kv._1}": ${toValueString(kv._2)}""")
-        .mkString("{", ",", "}")}"""
+    case (k, map: Map[AnyRef, AnyRef]) =>
+      // TODO: We cannot wrap values with `"` because of non-string cases
+      s""""$k":${map.map(kv => s""""${kv._1}": ${kv._2}""").mkString("{", ",", "}")}"""
   }.mkString("{", ",", "}")
 }
 
 class BaseScavengerRepairApi extends Logging {
 
   protected implicit def seqToJsonEncoder(ar: Seq[(String, AnyRef)]) = JsonEncoder(ar)
+
+  // TODO: We need a smarter way to convert Scala data to a json string
+  protected def seqToJson(seq: Seq[(Any, Any)]): String = {
+    seq.map(v => s"""["${v._1}","${v._2}"]""").mkString("[", ",", "]")
+  }
 
   protected def logBasedOnLevel(msg: => String): Unit = {
     // This method should be called inside `withSparkSession`

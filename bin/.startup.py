@@ -175,15 +175,14 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.db_name = db_name
         self.table_name = None
         self.row_id = None
-        self.black_attr_list = ""
         self.discrete_thres = 80
-        self.cnt_value_discretization = False
         self.min_corr_thres = 0.70
         self.domain_threshold_alpha = 0.0
         self.domain_threshold_beta = 0.70
         self.max_attrs_to_compute_domains = 4
         self.attr_stats_sample_ratio = 1.0
         self.training_data_sample_ratio = 1.0
+        self.max_training_column_num = None
         self.stat_thres_ratio = 0.0
         self.min_features_num = 1
         self.inference_order = "domain"
@@ -234,10 +233,6 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.row_id = row_id
         return self
 
-    def setBlackAttrList(self, black_attr_list):
-        self.black_attr_list = black_attr_list
-        return self
-
     def setDiscreteThreshold(self, thres):
         self.discrete_thres = thres
         return self
@@ -249,6 +244,10 @@ class ScavengerRepairModel(SchemaSpyBase):
 
     def setAttrMaxNumToComputeDomains(self, max):
         self.max_attrs_to_compute_domains = max
+        return self
+
+    def setMaxTrainingColumnNum(self, n):
+        self.max_training_column_num = n
         return self
 
     def setInferenceOrder(self, inference_order):
@@ -352,8 +351,14 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.__end_spark_jobs()
 
         discrete_ft_df = self.spark.table(env["discrete_features"])
-        self.outputToConsole("Valid %s attributes (%s) found and %s continous attributes (%s) included in them" % \
-            (len(discrete_ft_df.columns), ",".join(discrete_ft_df.columns), len(continous_attrs), env["continous_attrs"]))
+        logging.info("Valid %s attributes (%s) found in the %s input attributes (%s) and " \
+            "%s continous attributes (%s) included in them" % ( \
+                len(discrete_ft_df.columns), \
+                ",".join(discrete_ft_df.columns), \
+                len(self.spark.table(env["input_table"]).columns), \
+                ",".join(self.spark.table(env["input_table"]).columns), \
+                len(continous_attrs), \
+                ",".join(continous_attrs)))
 
         return discrete_ft_df
 
@@ -468,6 +473,7 @@ class ScavengerRepairModel(SchemaSpyBase):
             "Building %s ML models to repair the error cells..." % len(target_columns))
         import lightgbm as lgb
         import category_encoders as ce
+        import heapq
         models = {}
         train_pdf = train_df.toPandas()
         excluded_columns = copy.deepcopy(target_columns)
@@ -475,6 +481,20 @@ class ScavengerRepairModel(SchemaSpyBase):
             # All the available features
             features = [c for c in train_pdf.columns if c not in excluded_columns]
             excluded_columns.remove(y)
+
+            # Selects features if necessary
+            if self.max_training_column_num is not None and \
+                    int(self.max_training_column_num) < len(features):
+                fts = []
+                for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][y]):
+                    if f in features:
+                       # Converts to a negative value for extracting higher values
+                       heapq.heappush(fts, (-float(corr), f))
+
+                fts = [ heapq.heappop(fts)[1] for i in range(int(self.max_training_column_num)) ]
+                logging.info("Select %s relevant features (%s) from available ones (%s)" % \
+                    (len(fts), ",".join(fts), ",".join(features)))
+                features = fts
 
             # Transforms discrete attributes into one-hot encoding froms
             discrete_columns = [ c for c in features if c not in continous_attrs ]
