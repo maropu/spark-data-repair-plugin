@@ -159,6 +159,14 @@ class ScavengerRepairMisc(SchemaSpyBase):
         df = DataFrame(jdf, self.spark._wrapped)
         return df
 
+    def toErrorMap(self, error_cells):
+        if self.table_name is None or self.row_id is None:
+            raise ValueError("`setTableName` and `setRowId` should be called before flattening")
+
+        jdf = self.__svg_api.toErrorMap(error_cells, self.db_name, self.table_name, self.row_id)
+        df = DataFrame(jdf, self.spark._wrapped)
+        return df
+
     def flatten(self):
         if self.table_name is None or self.row_id is None:
             raise ValueError("`setTableName` and `setRowId` should be called before flattening")

@@ -64,4 +64,50 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
     }
     Seq("flatten" -> createAndCacheTempView(df)).asJson
   }
+
+  def toErrorMap(errCellView: String, dbName: String, tableName: String, rowId: String): DataFrame = {
+    logBasedOnLevel(s"toErrorBitmap called with: errCellView=$errCellView " +
+      s"dbName=$dbName tableName=$tableName rowId=$rowId")
+
+    withSparkSession { sparkSession =>
+      // `errCellView` must have `$rowId` and `attribute` columns
+      checkIfColumnsExistIn(errCellView, rowId :: "attribute" :: Nil)
+
+      val (inputDf, _) = checkAndGetInputTable(dbName, tableName, rowId)
+      val attrsToRepair = {
+        sparkSession.sql(s"SELECT collect_set(attribute) FROM $errCellView")
+          .collect.head.getSeq[String](0).toSet
+      }
+
+      val errorDf = sparkSession.sql(
+        s"""
+           |SELECT
+           |  $rowId, map_from_entries(COLLECT_LIST(r)) AS errors
+           |FROM (
+           |  select $rowId, struct(attribute, value) r
+           |  FROM $errCellView
+           |)
+           |GROUP BY
+           |  $rowId
+         """.stripMargin)
+
+      withTempView(inputDf) { inputView =>
+        withTempView(errorDf) { repairView =>
+          val errorBitmapExprs = inputDf.columns.map {
+            case attr if attrsToRepair.contains(attr) =>
+              s"IF(ISNOTNULL(errors['$attr']), '*', '-')"
+            case _ =>
+              "'-'"
+          }
+          sparkSession.sql(
+            s"""
+               |SELECT ${errorBitmapExprs.mkString(" || ")} AS error_map
+               |FROM $inputView
+               |LEFT OUTER JOIN $repairView
+               |ON $inputView.$rowId = $repairView.$rowId
+             """.stripMargin)
+        }
+      }
+    }
+  }
 }

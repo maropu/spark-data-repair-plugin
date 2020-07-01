@@ -133,7 +133,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
   }
 
   def repairAttrsFrom(repairedCells: String, dbName: String, tableName: String, rowId: String): String = {
-    logBasedOnLevel(s"repairAttrsFrom called with: repairedCellTable=$repairedCells " +
+    logBasedOnLevel(s"repairAttrsFrom called with: repairedCells=$repairedCells " +
       s"dbName=$dbName tableName=$tableName rowId=$rowId")
 
     withSparkSession { sparkSession =>
