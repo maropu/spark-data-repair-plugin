@@ -614,7 +614,8 @@ class ScavengerRepairModel(SchemaSpyBase):
         env["dist"] = self.__temp_name("dist")
         logging.info("Constructing a table (`%s`) for probability distribution..." % env["dist"])
         parse_dist_json_expr = "from_json(value, 'classes array<string>, probs array<double>') dist"
-        is_discrete_predicate = "attribute not in (%s)" % ",".join(map(lambda c: "'%s'" % c, continous_attrs))
+        is_discrete_predicate = "attribute not in (%s)" % ",".join(map(lambda c: "'%s'" % c, continous_attrs)) \
+            if len(continous_attrs) > 0 else "TRUE"
         to_dist_expr = "arrays_zip(dist.classes, dist.probs) dist"
         to_current_expr = "named_struct('value', current_value, 'prob', " \
             "coalesce(dist.probs[array_position(dist.classes, current_value) - 1], 0.0)) current"
