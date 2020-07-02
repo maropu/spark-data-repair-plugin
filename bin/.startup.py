@@ -192,6 +192,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.attr_stats_sample_ratio = 1.0
         self.training_data_sample_ratio = 1.0
         self.max_training_column_num = None
+        self.small_domain_threshold = 0
         self.stat_thres_ratio = 0.0
         self.min_features_num = 1
         self.inference_order = "entropy"
@@ -534,31 +535,44 @@ class ScavengerRepairModel(SchemaSpyBase):
                     (len(fts), ",".join(fts), ",".join(features)))
                 features = fts
 
-            # Transforms discrete attributes into one-hot encoding froms
+            # Base features for training
+            X = train_pdf[features]
+
+            # Transforms discrete attributes with some categorical encoders if necessary
             discrete_columns = [ c for c in features if c not in continous_attrs ]
-            if len(discrete_columns) > 0:
+            if len(discrete_columns) == 0:
+                transformers = None
+            else:
+                transformers = []
                 # TODO: Needs to reconsider feature transformation in this part, e.g.,
                 # we can use `ce.OrdinalEncoder` for small domain features.
                 # For the other category encoders, see https://github.com/scikit-learn-contrib/category_encoders
-                ohe = ce.OneHotEncoder(cols=discrete_columns, handle_unknown='impute')
+                small_domain_columns = [ c for c in discrete_columns \
+                    if int(env["distinct_stats"][c]) < self.small_domain_threshold ]
+                discrete_columns = [ c for c in discrete_columns \
+                    if c not in small_domain_columns ]
+                if len(small_domain_columns) > 0:
+                    transformers.append(ce.OneHotEncoder(cols=small_domain_columns, handle_unknown='impute'))
+                if len(discrete_columns) > 0:
+                    transformers.append(ce.OrdinalEncoder(cols=discrete_columns, handle_unknown='impute'))
                 # TODO: Needs to include `dirty_df` in this transformation
-                X = ohe.fit_transform(train_pdf[features])
-            else:
-                ohe = None
-                X = train_pdf[features]
+                for transformer in transformers:
+                    X = transformer.fit_transform(X)
+                logging.info("%s encoders transform (%s) => (%s)" % \
+                    (len(transformers), ",".join(features), ",".join(X.columns)))
 
             if y in continous_attrs:
                 reg = lgb.LGBMRegressor()
                 reg.fit(X, train_pdf[y])
                 logging.info("LGBMRegressor[%d]: y(%s)<=X(%s),#features=%s" % \
                     (index, y, ",".join(features), len(X.columns)))
-                models[y] = (reg, features, ohe)
+                models[y] = (reg, features, transformers)
             else:
                 clf = lgb.LGBMClassifier()
                 clf.fit(X, train_pdf[y])
                 logging.info("LGBMClassifier[%d]: #features=%s, y(%s)<=X(%s)" % \
                     (index, len(X.columns), y, ",".join(features)))
-                models[y] = (clf, features, ohe)
+                models[y] = (clf, features, transformers)
 
         self.__end_spark_jobs()
 
@@ -590,15 +604,17 @@ class ScavengerRepairModel(SchemaSpyBase):
             rows = []
             for index, row in pdf.iterrows():
                 for y in target_columns:
-                    (model, features, ohe) = models[y]
+                    (model, features, transformers) = models[y]
 
                     # Preprocesses the input row for prediction
-                    pdf = pd.DataFrame(row[features]).T
+                    X = pd.DataFrame(row[features]).T
                     for c in [ f for f in features if f in continous_attrs ]:
-                        pdf[c] = pdf[c].astype("float64")
+                        X[c] = X[c].astype("float64")
 
                     # Transforms an input row to a feature
-                    X = ohe.transform(pdf) if ohe is not None else pdf
+                    if transformers is not None:
+                        for transformer in transformers:
+                            X = transformer.transform(X)
 
                     if y in continous_attrs:
                         if np.isnan(row[y]):
