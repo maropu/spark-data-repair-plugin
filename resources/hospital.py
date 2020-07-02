@@ -46,8 +46,8 @@ repaired_df = scavenger.repair() \
 #  - Precision: the fraction of correct repairs, i.e., repairs that match
 #    the ground truth, over the total number of repairs performed
 #  - Recall: correct repairs over the total number of errors
-pdf = repaired_df.join(spark.table("hospital_clean"), ["tid", "attribute"], "inner")
-rdf = repaired_df.join(spark.table("error_cells_ground_truth"), ["tid", "attribute"], "right_outer")
+pdf = repaired_df.join(spark.table("hospital_clean").where("attribute != 'Score'"), ["tid", "attribute"], "inner")
+rdf = repaired_df.join(spark.table("error_cells_ground_truth").where("attribute != 'Score'"), ["tid", "attribute"], "right_outer")
 
 precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
 recall = rdf.where("repaired <=> correct_val").count() / rdf.count()
