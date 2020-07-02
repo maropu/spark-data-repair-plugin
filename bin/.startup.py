@@ -192,7 +192,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.attr_stats_sample_ratio = 1.0
         self.training_data_sample_ratio = 1.0
         self.max_training_column_num = None
-        self.small_domain_threshold = 0
+        self.small_domain_threshold = 8
         self.stat_thres_ratio = 0.0
         self.min_features_num = 1
         self.inference_order = "entropy"
@@ -497,12 +497,69 @@ class ScavengerRepairModel(SchemaSpyBase):
         #
         # [1] Mohamed Yakout, et. al., Don't be SCAREd: use SCalable Automatic REpairing with
         #     maximal likelihood and bounded changes", Proceedings of SIGMOD, 2013.
-        if self.inference_order == "error":
-            return self.__error_num_based_order(error_attrs)
+        if self.inference_order == "entropy":
+            return self.__entropy_based_order(env, train_df, error_attrs)
         elif self.inference_order == "domain":
             return self.__domain_size_based_order(env, train_df, error_attrs)
-        elif self.inference_order == "entropy":
-            return self.__entropy_based_order(env, train_df, error_attrs)
+        elif self.inference_order == "error":
+            return self.__error_num_based_order(error_attrs)
+
+    def __select_features(self, env, input_columns, y, excluded_columns):
+        # All the available features
+        features = [c for c in input_columns if c not in excluded_columns]
+        excluded_columns.remove(y)
+
+        # Selects features if necessary
+        if self.max_training_column_num is not None and \
+                int(self.max_training_column_num) < len(features):
+            fts = []
+            for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][y]):
+                if f in features:
+                   # Converts to a negative value for extracting higher values
+                   heapq.heappush(fts, (-float(corr), f))
+
+            fts = [ heapq.heappop(fts)[1] for i in range(int(self.max_training_column_num)) ]
+            logging.info("Select %s relevant features (%s) from available ones (%s)" % \
+                (len(fts), ",".join(fts), ",".join(features)))
+            features = fts
+
+        return features
+
+    def __transform_features(self, env, X, features, continous_attrs):
+        # Transforms discrete attributes with some categorical encoders if necessary
+        import category_encoders as ce
+        discrete_columns = [ c for c in features if c not in continous_attrs ]
+        if len(discrete_columns) == 0:
+            transformers = None
+        else:
+            transformers = []
+            # TODO: Needs to reconsider feature transformation in this part, e.g.,
+            # we can use `ce.OrdinalEncoder` for small domain features.
+            # For the other category encoders, see https://github.com/scikit-learn-contrib/category_encoders
+            small_domain_columns = [ c for c in discrete_columns \
+                if int(env["distinct_stats"][c]) < self.small_domain_threshold ]
+            discrete_columns = [ c for c in discrete_columns \
+                if c not in small_domain_columns ]
+            if len(small_domain_columns) > 0:
+                transformers.append(ce.OneHotEncoder(cols=small_domain_columns, handle_unknown='impute'))
+            if len(discrete_columns) > 0:
+                transformers.append(ce.OrdinalEncoder(cols=discrete_columns, handle_unknown='impute'))
+            # TODO: Needs to include `dirty_df` in this transformation
+            for transformer in transformers:
+                X = transformer.fit_transform(X)
+            logging.info("%s encoders transform (%s)=>(%s)" % \
+                (len(transformers), ",".join(features), ",".join(X.columns)))
+
+        return X, transformers
+
+    def __build_model(self, X, y, is_discrete):
+        import lightgbm as lgb
+        if is_discrete:
+            clf = lgb.LGBMClassifier()
+            return clf.fit(X, y)
+        else:
+            reg = lgb.LGBMRegressor()
+            return reg.fit(X, y)
 
     def __build_models(self, env, train_df, error_attrs, continous_attrs):
         # Computes a inference order based on dependencies between `error_attrs` and the others
@@ -511,69 +568,17 @@ class ScavengerRepairModel(SchemaSpyBase):
         # Builds classifiers for the target columns
         self.__start_spark_jobs("build ML models",
             "Building %s ML models to repair the error cells..." % len(target_columns))
-        import lightgbm as lgb
-        import category_encoders as ce
         models = {}
         train_pdf = train_df.toPandas()
         excluded_columns = copy.deepcopy(target_columns)
         for index, y in enumerate(target_columns):
-            # All the available features
-            features = [c for c in train_pdf.columns if c not in excluded_columns]
-            excluded_columns.remove(y)
-
-            # Selects features if necessary
-            if self.max_training_column_num is not None and \
-                    int(self.max_training_column_num) < len(features):
-                fts = []
-                for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][y]):
-                    if f in features:
-                       # Converts to a negative value for extracting higher values
-                       heapq.heappush(fts, (-float(corr), f))
-
-                fts = [ heapq.heappop(fts)[1] for i in range(int(self.max_training_column_num)) ]
-                logging.info("Select %s relevant features (%s) from available ones (%s)" % \
-                    (len(fts), ",".join(fts), ",".join(features)))
-                features = fts
-
-            # Base features for training
-            X = train_pdf[features]
-
-            # Transforms discrete attributes with some categorical encoders if necessary
-            discrete_columns = [ c for c in features if c not in continous_attrs ]
-            if len(discrete_columns) == 0:
-                transformers = None
-            else:
-                transformers = []
-                # TODO: Needs to reconsider feature transformation in this part, e.g.,
-                # we can use `ce.OrdinalEncoder` for small domain features.
-                # For the other category encoders, see https://github.com/scikit-learn-contrib/category_encoders
-                small_domain_columns = [ c for c in discrete_columns \
-                    if int(env["distinct_stats"][c]) < self.small_domain_threshold ]
-                discrete_columns = [ c for c in discrete_columns \
-                    if c not in small_domain_columns ]
-                if len(small_domain_columns) > 0:
-                    transformers.append(ce.OneHotEncoder(cols=small_domain_columns, handle_unknown='impute'))
-                if len(discrete_columns) > 0:
-                    transformers.append(ce.OrdinalEncoder(cols=discrete_columns, handle_unknown='impute'))
-                # TODO: Needs to include `dirty_df` in this transformation
-                for transformer in transformers:
-                    X = transformer.fit_transform(X)
-                logging.info("%s encoders transform (%s) => (%s)" % \
-                    (len(transformers), ",".join(features), ",".join(X.columns)))
-
-            if y in continous_attrs:
-                reg = lgb.LGBMRegressor()
-                reg.fit(X, train_pdf[y])
-                logging.info("LGBMRegressor[%d]: y(%s)<=X(%s),#features=%s" % \
-                    (index, y, ",".join(features), len(X.columns)))
-                models[y] = (reg, features, transformers)
-            else:
-                clf = lgb.LGBMClassifier()
-                clf.fit(X, train_pdf[y])
-                logging.info("LGBMClassifier[%d]: #features=%s, y(%s)<=X(%s)" % \
-                    (index, len(X.columns), y, ",".join(features)))
-                models[y] = (clf, features, transformers)
-
+            features = self.__select_features(env, train_pdf.columns, y, excluded_columns)
+            X, transformers = self.__transform_features(env, train_pdf[features], features, continous_attrs)
+            is_discrete = y not in continous_attrs
+            models[y] = (self.__build_model(X, train_pdf[y], is_discrete), features, transformers)
+            logging.info("%s[%d]: #features=%s, y(%s)<=X(%s)" % ( \
+                "Classifier" if is_discrete else "Regressor", index, len(X.columns), y,
+                ",".join(features)))
         self.__end_spark_jobs()
 
         continous_target_columns = [ c for c in target_columns if c in continous_attrs ]
