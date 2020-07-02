@@ -108,7 +108,7 @@ Detecting errors in a table `default.boston` (506 rows x 14 cols)...
 >>> f1 = (2.0 * precision * recall) / (precision + recall)
 >>> 
 >>> print("Precision=%s Recall=%s F1=%s" % (precision, recall, f1))
-Precision=0.6758893280632411 Recall=0.6758893280632411 F1=0.6758893280632411
+Precision=0.8733333333333333 Recall=0.5177865612648221 F1=0.6501240694789083
 >>> 
 >>> # Computes performance numbers for continous attributes (RMSE)
 ... is_continous = "NOT(%s)" % is_discrete
