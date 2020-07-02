@@ -464,9 +464,6 @@ class ScavengerRepairModel(SchemaSpyBase):
 
     def __entropy_based_order(self, env, train_df, error_attrs):
         # Sorts target columns by correlations
-        #
-        # TODO: Needs to analyze dependencies (e.g., based on graph algorithms) between
-        # a target column and the other ones for decideing a inference order.
         target_columns = []
         error_attrs = list(map(lambda row: row.attribute, error_attrs))
 
@@ -489,6 +486,16 @@ class ScavengerRepairModel(SchemaSpyBase):
         return target_columns
 
     def __compute_inference_order(self, env, train_df, error_attrs):
+        # Defines a inference order based on `train_df`.
+        #
+        # TODO: Needs to analyze more dependencies (e.g., based on graph algorithms) between
+        # target columns and the other ones for decideing a inference order.
+        # For example, the SCARE paper [1] builds a dependency graph (a variant of graphical models)
+        # to analyze the correlatioin of input data. But, the analysis is compute-intensive, so
+        # we just use a naive approache to define the order now.
+        #
+        # [1] Mohamed Yakout, et. al., Don't be SCAREd: use SCalable Automatic REpairing with
+        #     maximal likelihood and bounded changes", Proceedings of SIGMOD, 2013.
         if self.inference_order == "error":
             return self.__error_num_based_order(error_attrs)
         elif self.inference_order == "domain":
@@ -530,6 +537,9 @@ class ScavengerRepairModel(SchemaSpyBase):
             # Transforms discrete attributes into one-hot encoding froms
             discrete_columns = [ c for c in features if c not in continous_attrs ]
             if len(discrete_columns) > 0:
+                # TODO: Needs to reconsider feature transformation in this part, e.g.,
+                # we can use `ce.OrdinalEncoder` for small domain features.
+                # For the other category encoders, see https://github.com/scikit-learn-contrib/category_encoders
                 ohe = ce.OneHotEncoder(cols=discrete_columns, handle_unknown='impute')
                 # TODO: Needs to include `dirty_df` in this transformation
                 X = ohe.fit_transform(train_pdf[features])
