@@ -51,7 +51,7 @@ class SchemaSpyBase():
 
     def __init__(self):
         self.output = ""
-        self.db_name = ""
+        self.db_name = "default"
 
         self.spark = SparkSession.builder.getOrCreate()
 
