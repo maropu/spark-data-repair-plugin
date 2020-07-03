@@ -84,16 +84,16 @@ class BaseScavengerRepairApi extends Logging {
     // Loads all the denial constraints from a given file path
     val allConstraints = DenialConstraints.parse(constraintFilePath)
     // Checks if all the attributes contained in `constraintFilePath` exist in `table`
-    val attrsInConstraints = allConstraints.attrNames
+    val attrsInConstraints = allConstraints.references
     val tableAttrSet = tableAttrs.toSet
     val absentAttrs = attrsInConstraints.filterNot(tableAttrSet.contains)
     if (absentAttrs.nonEmpty) {
       logWarning(s"Non-existent constraint attributes found in $inputName: ${absentAttrs.mkString(", ")}")
-      val newPredEntries = allConstraints.entries.filter { _.forall { p =>
+      val newPredEntries = allConstraints.predicates.filter { _.forall { p =>
         tableAttrSet.contains(p.leftAttr) && tableAttrSet.contains(p.rightAttr)
       }}
       if (newPredEntries.nonEmpty) {
-        allConstraints.copy(entries = newPredEntries)
+        allConstraints.copy(predicates = newPredEntries)
       } else {
         DenialConstraints.emptyConstraints
       }

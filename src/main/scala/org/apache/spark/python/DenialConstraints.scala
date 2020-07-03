@@ -21,18 +21,55 @@ import java.net.URI
 
 import scala.collection.mutable
 import scala.io.Source
-import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
 
-case class Predicate(cmp: String, leftAttr: String, rightAttr: String) {
-  // TODO: Currently, comparisons on the same attributes are supported only
-  assert(leftAttr == rightAttr)
+case class Predicate(
+    cmp: String,
+    leftTable: Option[String],
+    leftAttr: String,
+    rightTable: Option[String],
+    rightAttr: String) {
 
-  def toString(left: String, right: String): String =
-    s"$left.$leftAttr $cmp $right.$rightAttr"
+  def references: Seq[String] = {
+    val left = if (leftTable.isDefined) leftAttr :: Nil else Nil
+    val right = if (rightTable.isDefined) rightAttr :: Nil else Nil
+    left ++ right
+  }
+
+  override def toString(): String = {
+    val left = leftTable.map(t => s"$t.$leftAttr").getOrElse(leftAttr)
+    val right = rightTable.map(t => s"$t.$rightTable").getOrElse(rightAttr)
+    s"$left $cmp $right"
+  }
 }
 
-case class DenialConstraints(entries: Seq[Seq[Predicate]], attrNames: Seq[String])
+object Predicate {
+
+  def apply(c: String, lt: String, la: String, rt: String, ra: String): Predicate = {
+    new Predicate(c, Some(lt), la, Some(rt), ra)
+  }
+
+  def apply(c: String, lt: String, la: String, constant: String): Predicate = {
+    new Predicate(c, Some(lt), la, None, constant)
+  }
+}
+
+case class DenialConstraints(predicates: Seq[Seq[Predicate]], references: Seq[String]) {
+
+  lazy val leftTable: String = {
+    predicates.flatten.flatMap(_.leftTable).distinct.ensuring(_.size < 2)
+      .headOption.getOrElse("__auto_generated_1")
+  }
+
+  lazy val rightTable: String = {
+    predicates.flatten.flatMap(_.rightTable).distinct.ensuring(_.size < 2)
+      .headOption.getOrElse("__auto_generated_2")
+  }
+
+  def toWhereCondition(predicates: Seq[Predicate]): String = {
+    predicates.map(_.toString).mkString(" AND ")
+  }
+}
 
 object DenialConstraints extends Logging {
 
@@ -43,28 +80,38 @@ object DenialConstraints extends Logging {
   private val signMap: Map[String, String] =
     Map("EQ" -> "=", "IQ" -> "!=", "LT" -> "<", "GT" -> ">")
 
-  def toWhereCondition(predicates: Seq[Predicate], left: String, right: String): String = {
-    predicates.map(_.toString(left, right)).mkString(" AND ")
-  }
-
   // The format like this: "t1&t2&EQ(t1.fk1,t2.fk1)&IQ(t1.v4,t2.v4)"
   def parse(path: String): DenialConstraints = {
     var file: Source = null
     try {
       file = Source.fromFile(new URI(path).getPath)
+      val isIdentifier = (s: String) => s.matches("[a-zA-Z0-9]+")
       val predicates = mutable.ArrayBuffer[Seq[Predicate]]()
-      file.getLines().foreach { dcStr => dcStr.split("&").toSeq match {
-          case t1 +: t2 +: constraints =>
+      file.getLines().foreach { dcStr => dcStr.split("&").map(_.trim).toSeq match {
+          case t1 +: t2 +: constraints if isIdentifier(t1) && isIdentifier(t2) =>
             val predicate = s"""(${opSigns.mkString("|")})\\($t1\\.(.*),$t2\\.(.*)\\)""".r
             val es = constraints.flatMap {
               case predicate(cmp, leftAttr, rightAttr) =>
-                Some(Predicate(signMap(cmp), leftAttr, rightAttr))
+                Some(Predicate(signMap(cmp), Some(t1), leftAttr, Some(t2), rightAttr))
               case s =>
                 logWarning(s"Illegal predicate format found: $s")
                 None
             }
             if (es.nonEmpty) {
-              logDebug(s"$dcStr => ${toWhereCondition(es, t1, t2)}")
+              logDebug(s"$dcStr => ${es.mkString(" AND ")}")
+              predicates.append(es)
+            }
+          case t1 +: constraints if isIdentifier(t1) =>
+            val predicate = s"""(${opSigns.mkString("|")})\\($t1\\.(.*),(.*)\\)""".r
+            val es = constraints.flatMap {
+              case predicate(cmp, leftAttr, constant) =>
+                Some(Predicate(signMap(cmp), Some(t1), leftAttr, None, constant))
+              case s =>
+                logWarning(s"Illegal predicate format found: $s")
+                None
+            }
+            if (es.nonEmpty) {
+              logDebug(s"$dcStr => ${es.mkString(",")}")
               predicates.append(es)
             }
           case Nil => // Just ignores this case
@@ -74,8 +121,8 @@ object DenialConstraints extends Logging {
       }
 
       if (predicates.nonEmpty) {
-        val attrNames = predicates.flatMap { _.flatMap { p => p.leftAttr :: p.rightAttr :: Nil }}.distinct
-        DenialConstraints(predicates, attrNames)
+        val references = predicates.flatMap { _.flatMap(_.references) }.distinct
+        DenialConstraints(predicates, references)
       } else {
         logWarning(s"Valid predicate entries not found in `$path`")
         emptyConstraints

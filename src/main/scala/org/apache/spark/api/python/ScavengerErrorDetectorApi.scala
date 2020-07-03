@@ -17,7 +17,6 @@
 
 package org.apache.spark.api.python
 
-import org.apache.spark.python._
 import org.apache.spark.sql._
 
 object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
@@ -106,12 +105,12 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
       } else {
         withTempView(inputDf, cache = true) { inputView =>
           val constraints = loadConstraintsFromFile(constraintFilePath, tableName, inputDf.columns)
-          if (constraints.entries.isEmpty) {
+          if (constraints.predicates.isEmpty) {
             emptyTable
           } else {
             logBasedOnLevel({
-              val constraintLists = constraints.entries.zipWithIndex.map { case (preds, i) =>
-                preds.map(_.toString("t1", "t2")).mkString(s" [$i] ", ",", "")
+              val constraintLists = constraints.predicates.zipWithIndex.map { case (preds, i) =>
+                preds.map(_.toString).mkString(s" [$i] ", ",", "")
               }
               s"""
                  |Loads constraints from '$constraintFilePath':
@@ -120,15 +119,15 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
             })
 
             // Detects error erroneous cells in a given table
-            val errCellDf = constraints.entries.flatMap { preds =>
+            val errCellDf = constraints.predicates.flatMap { preds =>
               val queryToValidateConstraint =
                 s"""
                    |SELECT t1.$rowId
-                   |FROM $inputView AS t1
+                   |FROM $inputView AS ${constraints.leftTable}
                    |WHERE EXISTS (
-                   |  SELECT t2.$rowId
-                   |  FROM $inputView AS t2
-                   |  WHERE ${DenialConstraints.toWhereCondition(preds, "t1", "t2")}
+                   |  SELECT $rowId
+                   |  FROM $inputView AS ${constraints.rightTable}
+                   |  WHERE ${preds.mkString(" AND ")}
                    |)
                  """.stripMargin
 
@@ -140,13 +139,13 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
                    |$queryToValidateConstraint
                  """.stripMargin)
 
-              preds.flatMap { p => p.leftAttr :: p.rightAttr :: Nil }.map { attr =>
+              preds.flatMap(_.references).map { attr =>
                 df.selectExpr(rowId, s"'$attr' AS attribute")
               }
             }.reduce(_.union(_)).distinct().cache()
 
             val errCellView = createAndCacheTempView(errCellDf, "err_cells_from_constraints")
-            loggingErrorStats("Constraint error detector", qualifiedName, errCellView, constraints.attrNames)
+            loggingErrorStats("Constraint error detector", qualifiedName, errCellView, constraints.references)
             errCellDf
           }
         }
