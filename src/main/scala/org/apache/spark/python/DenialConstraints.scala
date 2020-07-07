@@ -38,7 +38,7 @@ case class Predicate(
 
   override def toString(): String = {
     val left = leftTable.map(t => s"$t.$leftAttr").getOrElse(leftAttr)
-    val right = rightTable.map(t => s"$t.$rightTable").getOrElse(rightAttr)
+    val right = rightTable.map(t => s"$t.$rightAttr").getOrElse(rightAttr)
     s"$left $cmp $right"
   }
 }
