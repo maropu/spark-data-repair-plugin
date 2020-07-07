@@ -530,6 +530,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         import category_encoders as ce
         discrete_columns = [ c for c in features if c not in continous_attrs ]
         if len(discrete_columns) == 0:
+            # TODO: Needs to normalize continous values
             transformers = None
         else:
             transformers = []
