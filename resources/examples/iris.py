@@ -25,14 +25,7 @@ spark.read \
   .write \
   .saveAsTable("iris_clean")
 
-spark.table("iris_flatten") \
-  .join(spark.table("iris_clean"), ["tid", "attribute"], "inner") \
-  .where("not(value <=> correct_val)") \
-  .write \
-  .saveAsTable("error_cells_ground_truth")
-
 spark.table("iris_clean").show(1)
-spark.table("error_cells_ground_truth").show(1)
 
 # Detects error cells then repairs them
 repaired_df = scavenger.repair() \
