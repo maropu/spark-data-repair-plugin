@@ -196,6 +196,8 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.stat_thres_ratio = 0.0
         self.min_features_num = 1
         self.inference_order = "entropy"
+        self.lgb_num_leaves = 31
+        self.lgb_max_depth = -1
         self.maximal_likelihood_repair_enabled = False
         self.repair_delta = None
 
@@ -556,10 +558,26 @@ class ScavengerRepairModel(SchemaSpyBase):
     def __build_model(self, X, y, is_discrete):
         import lightgbm as lgb
         if is_discrete:
-            clf = lgb.LGBMClassifier()
+            clf = lgb.LGBMClassifier(
+                boosting_type="gbdt",
+                # objective="multiclass",
+                learning_rate=0.1,
+                n_estimators=100,
+                num_leaves=self.lgb_num_leaves,
+                max_depth=self.lgb_max_depth,
+                class_weight="balanced"
+            )
             return clf.fit(X, y)
         else:
-            reg = lgb.LGBMRegressor()
+            reg = lgb.LGBMRegressor(
+                boosting_type="gbdt",
+                objective="regression",
+                learning_rate=0.1,
+                n_estimators=100,
+                num_leaves=self.lgb_num_leaves,
+                max_depth=self.lgb_max_depth,
+                class_weight="balanced"
+            )
             return reg.fit(X, y)
 
     def __build_models(self, env, train_df, error_attrs, continous_attrs):
