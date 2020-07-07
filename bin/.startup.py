@@ -192,7 +192,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.attr_stats_sample_ratio = 1.0
         self.training_data_sample_ratio = 1.0
         self.max_training_column_num = None
-        self.small_domain_threshold = 8
+        self.small_domain_threshold = 12
         self.stat_thres_ratio = 0.0
         self.min_features_num = 1
         self.inference_order = "entropy"
@@ -544,7 +544,7 @@ class ScavengerRepairModel(SchemaSpyBase):
             discrete_columns = [ c for c in discrete_columns \
                 if c not in small_domain_columns ]
             if len(small_domain_columns) > 0:
-                transformers.append(ce.OneHotEncoder(cols=small_domain_columns, handle_unknown='impute'))
+                transformers.append(ce.SumEncoder(cols=small_domain_columns, handle_unknown='impute'))
             if len(discrete_columns) > 0:
                 transformers.append(ce.OrdinalEncoder(cols=discrete_columns, handle_unknown='impute'))
             # TODO: Needs to include `dirty_df` in this transformation
@@ -844,7 +844,7 @@ warnings.simplefilter('ignore')
 spark.sparkContext.setLogLevel("ERROR")
 
 # For debugging
-spark.sql("SET spark.scavenger.logLevel=ERROR")
+spark.sql("SET spark.scavenger.logLevel=TRACE")
 # logging.basicConfig(level=logging.INFO)
 logging.basicConfig(level=logging.WARN)
 
