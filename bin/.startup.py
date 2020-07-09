@@ -208,6 +208,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.__timer_base = None
 
         # Defines detectors to discover error cells
+        # TODO: Needs to support outlier-baesd  detectors
         self.__detectors = [
             NullErrorDetector(),
             ConstraintErrorDetector()
