@@ -35,6 +35,7 @@ from pyspark.sql import DataFrame, SparkSession, functions
 from pyspark.sql.functions import col
 
 from repair.detectors import *
+from repair.distances import *
 
 class SchemaSpyResult():
     """A result container class for SchemaSpy"""
@@ -213,6 +214,18 @@ class ScavengerRepairModel(SchemaSpyBase):
             ConstraintErrorDetector(),
             OutlierErrorDetector()
         ]
+
+        # Defines a class to compute cost of updates.
+        #
+        # TODO: Needs a sophisticated way to compute distances between a current value and a repair candidate.
+        # For example, the HoloDetect paper [1] proposes a noisy channel model for the data augmentation methodology
+        # of training data. This model consists of transformation rules and and data augmentation policies
+        # (i.e., distribution over those data transformation). This model can be re-used to compute this cost.
+        # For more details, see the section 5, 'DATA AUGMENTATION LEARNING', in the [1] paper.
+        #
+        # [1] Heidari, Alireza et al., HoloDetect: Few-Shot Learning for Error Detection,
+        # Proceedings of SIGMOD, 2019.
+        self.__distance = Levenshtein()
 
         # Temporary views used in repairing processes
         self.__meta_view_names = [
@@ -686,10 +699,12 @@ class ScavengerRepairModel(SchemaSpyBase):
         dist_df.createOrReplaceTempView(env["dist"])
 
         # Selects maximal likelihood candidates as correct repairs
+        broadcasted_distance = self.spark.sparkContext.broadcast(self.__distance)
+
         @functions.pandas_udf("double", functions.PandasUDFType.SCALAR)
         def distance(xs, ys):
-            import Levenshtein
-            dists = [float(Levenshtein.distance(x, y)) for x, y in zip(xs, ys)]
+            distance = broadcasted_distance
+            dists = [distance.compute(x, y) for x, y in zip(xs, ys)]
             return pd.Series(dists)
 
         sorted_dist_expr = "array_sort(dist, (left, right) -> if(left.`1` < right.`1`, 1, -1)) dist"
