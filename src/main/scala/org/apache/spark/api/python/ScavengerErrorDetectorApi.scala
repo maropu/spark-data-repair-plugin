@@ -198,6 +198,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
 
         val errCellDf = continousAttrs.zipWithIndex.map { case (attr, i) =>
           // Detects outliers simply based on a Box-and-Whisker plot
+          // TODO: Needs to support more sophisticated ways to detect outliers
           val Seq(q1, q3) = percentileRow.getSeq[Double](i)
           val (lower, upper) = (q1 - 1.5 * (q3 - q1), q3 + 1.5 * (q3 - q1))
           logBasedOnLevel(s"Non-outlier values in $attr should be in [$lower, $upper]")
