@@ -22,6 +22,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.python.ScavengerConf._
 import org.apache.spark.python._
 import org.apache.spark.sql._
+import org.apache.spark.sql.types._
 import org.apache.spark.sql.types.StructType
 
 private[python] case class JsonEncoder(v: Seq[(String, AnyRef)]) {
@@ -35,6 +36,10 @@ private[python] case class JsonEncoder(v: Seq[(String, AnyRef)]) {
 }
 
 class BaseScavengerRepairApi extends Logging {
+
+  protected val continousTypes: Set[DataType] = Set(FloatType, DoubleType)
+  protected val supportedType: Set[DataType] = Set(StringType, BooleanType, ByteType, ShortType,
+    IntegerType, LongType, DateType, TimestampType) ++ continousTypes
 
   protected implicit def seqToJsonEncoder(ar: Seq[(String, AnyRef)]) = JsonEncoder(ar)
 

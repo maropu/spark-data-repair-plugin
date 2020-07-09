@@ -55,3 +55,13 @@ class ConstraintErrorDetector(ErrorDetector):
             self.env['constraint_input_path'], '', self.env['input_table'], self.env['row_id'])
         return DataFrame(jdf, self.spark._wrapped)
 
+class OutlierErrorDetector(ErrorDetector):
+
+    def __init__(self):
+        ErrorDetector.__init__(self, 'OutlierErrorDetector')
+
+    def detect(self):
+        jdf = self.svgApi.detectErrorCellsFromOutliers(
+            '', self.env['input_table'], self.env['row_id'], False)
+        return DataFrame(jdf, self.spark._wrapped)
+

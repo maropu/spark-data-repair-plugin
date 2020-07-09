@@ -76,7 +76,11 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
             sparkSession.sql(s"SELECT collect_set(attribute) FROM $errCellView")
               .collect.head.getSeq[String](0)
           }
-          loggingErrorStats("NULL error detector", qualifiedName, errCellView, attrsToRepair)
+          loggingErrorStats(
+            "NULL-based error detector",
+            qualifiedName,
+            errCellView,
+            attrsToRepair)
         }
         errCellDf
       }
@@ -145,10 +149,74 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
             }.reduce(_.union(_)).distinct().cache()
 
             val errCellView = createAndCacheTempView(errCellDf, "err_cells_from_constraints")
-            loggingErrorStats("Constraint error detector", qualifiedName, errCellView, constraints.references)
+            loggingErrorStats(
+              "Constraint-based error detector",
+              qualifiedName,
+              errCellView,
+              constraints.references
+            )
             errCellDf
           }
         }
+      }
+    }
+  }
+
+  def detectErrorCellsFromOutliers(
+      dbName: String,
+      tableName: String,
+      rowId: String,
+      approxEnabled: Boolean): DataFrame = {
+
+    logBasedOnLevel(s"detectErrorCellsFromOutliers called with: dbName=$dbName tableName=$tableName " +
+      s"rowId=$rowId approxEnabled=$approxEnabled")
+
+    withSparkSession { sparkSession =>
+      val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
+      lazy val emptyTable = {
+        val rowIdType = inputDf.schema.find(_.name == rowId).get.dataType.sql
+        createEmptyTable(s"$rowId $rowIdType, attribute STRING")
+      }
+
+      val continousAttrs = inputDf.schema
+        .filter(f => continousTypes.contains(f.dataType)).map(_.name)
+      if (continousAttrs.isEmpty) {
+        emptyTable
+      } else {
+        val percentileExprs = continousAttrs.map { attr =>
+          if (approxEnabled) {
+            s"percentile_approx($attr, array(0.25, 0.75), 1000)"
+          } else {
+            s"percentile($attr, array(0.25, 0.75))"
+          }
+        }
+        val percentileRow = sparkSession.sql(
+          s"""
+             |SELECT ${percentileExprs.mkString(", ")}
+             |FROM $qualifiedName
+           """.stripMargin).collect.head
+
+        val errCellDf = continousAttrs.zipWithIndex.map { case (attr, i) =>
+          // Detects outliers simply based on a Box-and-Whisker plot
+          val Seq(q1, q3) = percentileRow.getSeq[Double](i)
+          val (lower, upper) = (q1 - 1.5 * (q3 - q1), q3 + 1.5 * (q3 - q1))
+          logBasedOnLevel(s"Non-outlier values in $attr should be in [$lower, $upper]")
+          sparkSession.sql(
+            s"""
+               |SELECT $rowId, '$attr' attribute
+               |FROM $qualifiedName
+               |WHERE $attr < $lower OR $attr > $upper
+             """.stripMargin)
+        }.reduce(_.union(_)).cache()
+
+        val errCellView = createAndCacheTempView(errCellDf, "err_cells_from_outliers")
+        loggingErrorStats(
+          "Outlier-based error detector",
+          qualifiedName,
+          errCellView,
+          continousAttrs
+        )
+        errCellDf
       }
     }
   }

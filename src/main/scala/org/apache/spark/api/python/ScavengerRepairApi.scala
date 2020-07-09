@@ -20,15 +20,10 @@ package org.apache.spark.api.python
 import org.apache.spark.SparkException
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.plans.logical.LeafNode
-import org.apache.spark.sql.types._
 import org.apache.spark.util.{Utils => SparkUtils}
 
 /** A Python API entry point for data cleaning. */
 object ScavengerRepairApi extends BaseScavengerRepairApi {
-
-  private val continousTypes: Set[DataType] = Set(FloatType, DoubleType)
-  private val supportedType: Set[DataType] = Set(StringType, BooleanType, ByteType, ShortType,
-    IntegerType, LongType, DateType, TimestampType) ++ continousTypes
 
   def checkInputTable(dbName: String, tableName: String, rowId: String): String = {
     val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
