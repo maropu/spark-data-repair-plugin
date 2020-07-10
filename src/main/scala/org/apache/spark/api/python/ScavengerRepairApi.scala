@@ -229,11 +229,12 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       discreteAttrView: String,
       errCellView: String,
       rowId: String,
-      sampleRatio: Double,
-      statThresRatio: Double): String = {
+      statSampleRatio: Double,
+      statThreshold: Double): String = {
 
     logBasedOnLevel(s"computeAttrStats called with: discreteAttrView=$discreteAttrView " +
-      s"errCellView=$errCellView rowId=$rowId sampleRatio=$sampleRatio statThresRatio=$statThresRatio")
+      s"errCellView=$errCellView rowId=$rowId statSampleRatio=$statSampleRatio " +
+      s"statThreshold=$statThreshold")
 
     withSparkSession { sparkSession =>
       // Computes numbers for single and pair-wise statistics in the input table
@@ -249,14 +250,14 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
       val statDf = {
         val pairSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
-        val inputDf = if (sampleRatio < 1.0) {
-          sparkSession.table(discreteAttrView).sample(sampleRatio)
+        val inputDf = if (statSampleRatio < 1.0) {
+          sparkSession.table(discreteAttrView).sample(statSampleRatio)
         } else {
           sparkSession.table(discreteAttrView)
         }
         withTempView(inputDf) { inputView =>
-          val filterClauseOption = if (statThresRatio > 0.0) {
-            val cond = s"HAVING cnt > ${(inputDf.count * statThresRatio).toInt}"
+          val filterClauseOption = if (statThreshold > 0.0) {
+            val cond = s"HAVING cnt > ${(inputDf.count * statThreshold).toInt}"
             logBasedOnLevel(s"Attributes stats filter enabled: $cond")
             cond
           } else {

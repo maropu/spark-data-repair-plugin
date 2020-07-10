@@ -181,24 +181,31 @@ class ScavengerRepairModel(SchemaSpyBase):
     def __init__(self, output, db_name):
         super().__init__()
 
+        # Basic parameters
         self.constraint_input_path = None
         self.db_name = db_name
         self.table_name = None
         self.row_id = None
+
+        # Parameters for error detection
+        self.error_cells = None
         self.discrete_thres = 80
         self.min_corr_thres = 0.70
         self.domain_threshold_alpha = 0.0
         self.domain_threshold_beta = 0.70
         self.max_attrs_to_compute_domains = 4
-        self.attr_stats_sample_ratio = 1.0
+        self.attr_stat_sample_ratio = 1.0
+        self.attr_stat_threshold = 0.0
+
+        # Parameters for repair model training
         self.training_data_sample_ratio = 1.0
         self.max_training_column_num = None
         self.small_domain_threshold = 12
-        self.stat_thres_ratio = 0.0
-        self.min_features_num = 1
         self.inference_order = "entropy"
         self.lgb_num_leaves = 31
         self.lgb_max_depth = -1
+
+        # Parameters for repairing
         self.maximal_likelihood_repair_enabled = False
         self.repair_delta = None
 
@@ -212,7 +219,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.__detectors = [
             NullErrorDetector(),
             ConstraintErrorDetector(),
-            OutlierErrorDetector()
+            # OutlierErrorDetector()
         ]
 
         # Defines a class to compute cost of updates.
@@ -221,10 +228,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         # For example, the HoloDetect paper [1] proposes a noisy channel model for the data augmentation methodology
         # of training data. This model consists of transformation rules and and data augmentation policies
         # (i.e., distribution over those data transformation). This model can be re-used to compute this cost.
-        # For more details, see the section 5, 'DATA AUGMENTATION LEARNING', in the [1] paper.
-        #
-        # [1] Heidari, Alireza et al., HoloDetect: Few-Shot Learning for Error Detection,
-        # Proceedings of SIGMOD, 2019.
+        # For more details, see the section 5, 'DATA AUGMENTATION LEARNING', in the paper.
         self.__distance = Levenshtein()
 
         # Temporary views used in repairing processes
@@ -258,8 +262,16 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.row_id = row_id
         return self
 
+    def setErrorCells(self, error_cells):
+        self.error_cells = error_cells
+        return self
+
     def setDiscreteThreshold(self, thres):
         self.discrete_thres = thres
+        return self
+
+    def setMinCorrThreshold(self, thres):
+        self.min_corr_thres = thres
         return self
 
     def setDomainThresholds(self, alpha, beta):
@@ -271,12 +283,36 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.max_attrs_to_compute_domains = max
         return self
 
+    def setAttrStatSampleRatio(self, ratio):
+        self.attr_stat_sample_ratio = ratio
+        return self
+
+    def setAttrStatThreshold(self, ratio):
+        self.attr_stat_threshold = ratio
+        return self
+
+    def setTrainingDataSampleRatio(self, ratio):
+        self.training_data_sample_ratio = ratio
+        return self
+
     def setMaxTrainingColumnNum(self, n):
         self.max_training_column_num = n
         return self
 
+    def setSmallDomainThreshold(self, thres):
+        self.small_domain_threshold = thres
+        return self
+
     def setInferenceOrder(self, inference_order):
         self.inference_order = inference_order
+        return self
+
+    def setLGBNumLeaves(self, n):
+        self.lgb_num_leaves = n
+        return self
+
+    def setLGBMaxDepth(self, n):
+        self.lgb_max_depth = n
         return self
 
     def setMaximalLikelihoodRepairEnabled(self, enabled):
@@ -307,9 +343,8 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.spark.sparkContext.setLocalProperty("spark.job.description", None)
         self.spark.sparkContext.setLocalProperty("spark.job.interruptOnCancel", None)
 
-    def __end_spark_jobs(self, msg=None):
-        id = msg if msg is not None else self.spark.sparkContext.getLocalProperty("spark.jobGroup.id")
-        self.outputToConsole("Time to %s is %s(s)" % (id, time.time() - self.__timer_base))
+    def __end_spark_jobs(self):
+        self.outputToConsole("Elapsed time is %s(s)" % (time.time() - self.__timer_base))
         self.__clear_job_group()
 
     def __release_resources(self, env):
@@ -332,23 +367,23 @@ class ScavengerRepairModel(SchemaSpyBase):
         err_cells_df.cache().createOrReplaceTempView(err_cells)
         return err_cells
 
-    def __detect_errors(self, env, error_cells):
-        # If `error_cells` provided, just uses it
-        if error_cells is not None:
-            df = self.spark.table(str(error_cells))
+    def __detect_errors(self, env):
+        # If `self.error_cells` provided, just uses it
+        if self.error_cells is not None:
+            df = self.spark.table(str(self.error_cells))
             if not all(c in df.columns for c in (self.row_id, "attribute")):
                 raise ValueError("`%s` must have `%s` and `attribute` in columns" % \
-                    (str(error_cells), self.row_id))
+                    (str(self.error_cells), self.row_id))
 
-            self.outputToConsole("Error cells provided by `%s`" % str(error_cells))
-            env["gray_cells"] = str(error_cells)
+            self.outputToConsole("Error cells provided by `%s`" % str(self.error_cells))
+            env["gray_cells"] = str(self.error_cells)
             # We assume that the given error cells are true, so we skip computing error domains
             # with probability because the computational cost is much high.
             self.domain_threshold_beta = 1.0
         else:
             # Applys error detectors to get gray cells
-            self.__start_spark_jobs("detect errors",
-                "Detecting errors in a table `%s` (%s rows x %s cols)..." % \
+            self.__start_spark_jobs("error detection",
+                "[Error Detection Phase 1] Detecting errors in a table `%s` (%s rows x %s cols)..." % \
                     (env["input_table"], env["num_input_rows"], env["num_attrs"]))
             env["gray_cells"] = self.__detect_error_cells(env)
             self.__end_spark_jobs()
@@ -368,12 +403,9 @@ class ScavengerRepairModel(SchemaSpyBase):
     def __preprocess(self, env, continous_attrs):
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
-        self.__start_spark_jobs("preprocess rows",
-            "Preprocessing an input table `%s` with rowId=`%s`..." % (self.table_name, self.row_id))
         env.update(json.loads(self.__svg_api.convertToDiscreteFeatures(
             self.db_name, self.table_name, self.row_id,
             self.discrete_thres)))
-        self.__end_spark_jobs()
 
         discrete_ft_df = self.spark.table(env["discrete_features"])
         logging.info("Valid %s attributes (%s) found in the %s input attributes (%s) and " \
@@ -387,24 +419,22 @@ class ScavengerRepairModel(SchemaSpyBase):
 
         return discrete_ft_df
 
-    def __analyze_cell_domain(self, env, gray_cells_df, continous_attrs):
+    def __analyze_error_cell_domain(self, env, gray_cells_df, continous_attrs):
         # Checks if attributes are discrete or not, and discretizes continous ones
         discrete_ft_df = self.__preprocess(env, continous_attrs)
 
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
-        self.__start_spark_jobs("collect stat rows",
-            "Collecting and sampling attribute stats (ratio=%s threshold=%s) before computing error domains..." % \
-                (self.attr_stats_sample_ratio, self.stat_thres_ratio))
+        logging.info("Collecting and sampling attribute stats (ratio=%s threshold=%s) " \
+                "before computing error domains..." % \
+                (self.attr_stat_sample_ratio, self.attr_stat_threshold))
         env.update(json.loads(self.__svg_api.computeAttrStats(
             env["discrete_features"], env["gray_cells"], self.row_id,
-            self.attr_stats_sample_ratio,
-            self.stat_thres_ratio)))
-        self.__end_spark_jobs("collect %s stat rows" % \
-            self.spark.table(env["attr_stats"]).count())
+            self.attr_stat_sample_ratio,
+            self.attr_stat_threshold)))
 
-        self.__start_spark_jobs("compute domains",
-            "Computing error domains with posteriori probability...")
+        self.__start_spark_jobs("cell domains analysis",
+            "[Error Detection Phase 2] Analyzing cell domains to fix error cells...")
         env.update(json.loads(self.__svg_api.computeDomainInErrorCells(
             env["discrete_features"], env["attr_stats"], env["gray_cells"], env["row_id"],
             env["continous_attrs"],
@@ -444,7 +474,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         # Prepares training data to repair the remaining error cells
         # TODO: Needs more smart sampling, e.g., down-sampling
         train_df = fixed_df.sample(self.training_data_sample_ratio).drop(self.row_id).cache()
-        self.outputToConsole("Sampling %s training data (ratio=%s) from %s fixed rows..." % \
+        logging.info("Sampling %s training data (ratio=%s) from %s fixed rows..." % \
             (train_df.count(), self.training_data_sample_ratio, fixed_df.count()))
         return train_df
 
@@ -463,8 +493,8 @@ class ScavengerRepairModel(SchemaSpyBase):
 
     def __domain_size_based_order(self, env, train_df, error_attrs):
         # Computes domain sizes for training data
-        self.__start_spark_jobs("collect training data stats",
-            "Collecting training data stats before building ML models...")
+        self.__start_spark_jobs("training data stat analysis",
+            "[Repair Model Training Phase] Collecting training data stats before building ML models...")
         env["train"] = self.__temp_name("train")
         train_df.createOrReplaceTempView(env["train"])
         env.update(json.loads(self.__svg_api.computeDomainSizes(env["train"])))
@@ -506,12 +536,9 @@ class ScavengerRepairModel(SchemaSpyBase):
         #
         # TODO: Needs to analyze more dependencies (e.g., based on graph algorithms) between
         # target columns and the other ones for decideing a inference order.
-        # For example, the SCARE paper [1] builds a dependency graph (a variant of graphical models)
+        # For example, the SCARE paper [2] builds a dependency graph (a variant of graphical models)
         # to analyze the correlatioin of input data. But, the analysis is compute-intensive, so
         # we just use a naive approache to define the order now.
-        #
-        # [1] Mohamed Yakout, et. al., Don't be SCAREd: use SCalable Automatic REpairing with
-        #     maximal likelihood and bounded changes", Proceedings of SIGMOD, 2013.
         if self.inference_order == "entropy":
             return self.__entropy_based_order(env, train_df, error_attrs)
         elif self.inference_order == "domain":
@@ -593,13 +620,26 @@ class ScavengerRepairModel(SchemaSpyBase):
             )
             return reg.fit(X, y)
 
-    def __build_models(self, env, train_df, error_attrs, continous_attrs):
+    def __build_repair_models(self, env, train_df, error_attrs, continous_attrs):
+        # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
+        # on Apache Spark. Given a database tuple t = ce (c: correct attribute values, e: error attribute values),
+        # the conditional probability of each combination of the error attribute values c can be
+        # computed the product rule:
+        #
+        #  P(e\|c)=P(e[E_{1}]\|c)\prod_{i=2}^{K}P(e[E_{i}]\|c,e[E_{1}...E_{i-1}])
+        #
+        # where K is the number of error attributes, `len(error_attrs)`, and {E_[1], ..., E_[K]} is
+        # a particular dependency order in error attributes. More sophisticated repair models have been
+        # proposed recently, e.g., a Markov logic network based model in HoloClean [4].
+        # Therefore, we might be able to improve our model more baesd on
+        # the-state-of-the-art approaches.
+
         # Computes a inference order based on dependencies between `error_attrs` and the others
         target_columns = self.__compute_inference_order(env, train_df, error_attrs)
 
-        # Builds classifiers for the target columns
-        self.__start_spark_jobs("build ML models",
-            "Building %s ML models to repair the error cells..." % len(target_columns))
+        # Builds multiple ML models to repair error cells
+        self.__start_spark_jobs("repair model training",
+            "[Repair Model Training Phase] Building %s ML models to repair the error cells..." % len(target_columns))
         models = {}
         train_pdf = train_df.toPandas()
         excluded_columns = copy.deepcopy(target_columns)
@@ -663,8 +703,8 @@ class ScavengerRepairModel(SchemaSpyBase):
                         if row[y] is None:
                             if return_repair_prob or maximal_likelihood_repair_enabled:
                                 predicted = model.predict_proba(X)
-                                dist = { "classes" : model.classes_.tolist(), "probs" : predicted[0].tolist() }
-                                row[y] = json.dumps(dist)
+                                pmf = { "classes" : model.classes_.tolist(), "probs" : predicted[0].tolist() }
+                                row[y] = json.dumps(pmf)
                             else:
                                 predicted = model.predict(X)
                                 row[y] = predicted[0]
@@ -676,32 +716,37 @@ class ScavengerRepairModel(SchemaSpyBase):
         # Predicts the remaining error cells based on the trained models.
         # TODO: Might need to compare repair costs (cost of an update, c) to
         # the likelihood benefits of the updates (likelihood benefit of an update, l).
-        self.__start_spark_jobs("apply the ML models", "Repairing error cells...")
+        self.__start_spark_jobs("repairing", "[Repairing Phase] Repairing error cells...")
         repaired_df = dirty_df.groupBy(grouping_key).apply(repair).drop(grouping_key).cache()
         repaired_df.write.format("noop").mode("overwrite").save()
         self.__end_spark_jobs()
         return repaired_df
 
     def __compute_repair_pmf(self, repaired_df, error_cells_df, continous_attrs):
-        parse_dist_json_expr = "from_json(value, 'classes array<string>, probs array<double>') dist"
+        parse_pmf_json_expr = "from_json(value, 'classes array<string>, probs array<double>') pmf"
         is_discrete_predicate = "attribute not in (%s)" % ",".join(map(lambda c: "'%s'" % c, continous_attrs)) \
             if len(continous_attrs) > 0 else "TRUE"
-        to_dist_expr = "arrays_zip(dist.classes, dist.probs) dist"
+        to_pmf_expr = "arrays_zip(pmf.classes, pmf.probs) pmf"
         to_current_expr = "named_struct('value', current_value, 'prob', " \
-            "coalesce(dist.probs[array_position(dist.classes, current_value) - 1], 0.0)) current"
-        sorted_dist_expr = "array_sort(dist, " \
-            "(left, right) -> if(left.`1` < right.`1`, 1, -1)) dist"
+            "coalesce(pmf.probs[array_position(pmf.classes, current_value) - 1], 0.0)) current"
+        sorted_pmf_expr = "array_sort(pmf, " \
+            "(left, right) -> if(left.`1` < right.`1`, 1, -1)) pmf"
         pmf_df = self.__flatten(repaired_df) \
             .join(error_cells_df, [self.row_id, "attribute"], "inner") \
             .where(is_discrete_predicate) \
-            .selectExpr(self.row_id, "attribute", "current_value", parse_dist_json_expr) \
-            .selectExpr(self.row_id, "attribute", to_current_expr, to_dist_expr) \
-            .selectExpr(self.row_id, "attribute", "current", sorted_dist_expr)
+            .selectExpr(self.row_id, "attribute", "current_value", parse_pmf_json_expr) \
+            .selectExpr(self.row_id, "attribute", to_current_expr, to_pmf_expr) \
+            .selectExpr(self.row_id, "attribute", "current", sorted_pmf_expr)
 
         return pmf_df
 
     def __maximal_likelihood_repair(self, env, pmf_df, repaired_df):
-        # Selects maximal likelihood candidates as correct repairs
+        # A “Maximal Likelihood Repair” problem defined in the SCARE [2] paper is as follows;
+        # Given a scalar \delta and a database D = D_{e} \cup D_{c}, the problem is to
+        # find another database instance D' = D'_{e} \cup D_{c} such that L(D'_{e} \| D_{c})
+        # is maximum subject to the constraint Dist(D, D') <= \delta.
+        # L is a likelihood function and Dist is an arbitrary distance function
+        # (e.g., edit distances) between the two database instances D and D'.
         broadcasted_distance = self.spark.sparkContext.broadcast(self.__distance)
 
         @functions.pandas_udf("double", functions.PandasUDFType.SCALAR)
@@ -710,7 +755,7 @@ class ScavengerRepairModel(SchemaSpyBase):
             dists = [distance.compute(x, y) for x, y in zip(xs, ys)]
             return pd.Series(dists)
 
-        maximal_likelihood_repair_expr = "named_struct('value', dist[0].`0`, 'prob', dist[0].`1`) repaired"
+        maximal_likelihood_repair_expr = "named_struct('value', pmf[0].`0`, 'prob', pmf[0].`1`) repaired"
         score_expr = "ln(repaired.prob / IF(current.prob > 0.0, current.prob, 1e-6)) * (1.0 / (1.0 + distance)) score"
         score_df = pmf_df \
             .selectExpr(self.row_id, "attribute", "current", maximal_likelihood_repair_expr) \
@@ -730,7 +775,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         env.update(json.loads(self.__svg_api.repairAttrsFrom(env["score"], "", env["partial_dirty"], self.row_id)))
         return self.spark.table(env["repaired"])
 
-    def __run(self, error_cells, detect_errors_only, return_repair_prob, return_repair_candidates):
+    def __run(self, detect_errors_only, return_repair_prob, return_repair_candidates):
         # Env used to repair the given table
         env = {}
         env["row_id"] = self.row_id
@@ -739,8 +784,12 @@ class ScavengerRepairModel(SchemaSpyBase):
         # Checks # of input rows and attributes
         input_df, continous_attrs = self.__check_input(env)
 
+        #################################################################################
+        # 1. Error Detection Phase
+        #################################################################################
+
         # If no error found, it just returns the given table
-        gray_cells_df = self.__detect_errors(env, error_cells)
+        gray_cells_df = self.__detect_errors(env)
         if gray_cells_df.count() == 0:
             self.outputToConsole("Any error cells not found, so returns the input as clean cells")
             self.__release_resources(env)
@@ -750,7 +799,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         repair_base_df = self.__prepare_repair_base(env, gray_cells_df)
 
         # Selects error cells based on the result of domain analysis
-        cell_domain_df = self.__analyze_cell_domain(env, gray_cells_df, continous_attrs)
+        cell_domain_df = self.__analyze_error_cell_domain(env, gray_cells_df, continous_attrs)
 
         # If no error cell found, ready to return a clean table
         error_cells_df = self.__extract_error_cells(env, cell_domain_df, repair_base_df)
@@ -763,6 +812,10 @@ class ScavengerRepairModel(SchemaSpyBase):
             self.__release_resources(env)
             return error_cells_df
 
+        #################################################################################
+        # 2. Repair Model Training Phase
+        #################################################################################
+
         # Selects rows for training, build models, and repair cells
         fixed_df, dirty_df, error_attrs = self.__split_clean_and_dirty_rows(env, error_cells_df)
         train_df = self.__select_training_rows(fixed_df)
@@ -771,12 +824,18 @@ class ScavengerRepairModel(SchemaSpyBase):
         # TODO: In case of `num_features == 0`, we might be able to select the most accurate and
         # predictable column as a staring feature.
         num_features = len(train_df.columns) - len(error_attrs)
-        if num_features < self.min_features_num:
-            self.outputToConsole("At least %s features needed to repair error cells, but %s features found" %
-                (self.min_features_num, num_features))
+        if num_features == 0:
+            self.outputToConsole("At least %s features needed to repair error cells, " \
+                "but %s features found" % num_features)
             return input_df
 
-        models, target_columns, continous_target_columns = self.__build_models(env, train_df, error_attrs, continous_attrs)
+        models, target_columns, continous_target_columns = \
+            self.__build_repair_models(env, train_df, error_attrs, continous_attrs)
+
+        #################################################################################
+        # 3. Repair Phase
+        #################################################################################
+
         repaired_df = self.__repair(env, models, target_columns, continous_attrs, dirty_df, return_repair_prob)
 
         # If `return_repair_prob` is True, returns probability mass function for repair candidates
@@ -804,7 +863,7 @@ class ScavengerRepairModel(SchemaSpyBase):
             assert clean_df.count() == input_df.count()
             return clean_df
 
-    def run(self, error_cells=None, detect_errors_only=False, return_repair_prob=False, return_repair_candidates=False):
+    def run(self, detect_errors_only=False, return_repair_prob=False, return_repair_candidates=False):
         if self.table_name is None or self.row_id is None:
             raise ValueError("`setTableName` and `setRowId` should be called before repairing")
         if self.inference_order not in ["error", "domain", "entropy"]:
@@ -812,7 +871,7 @@ class ScavengerRepairModel(SchemaSpyBase):
                 self.inference_order)
 
         __start = time.time()
-        df = self.__run(error_cells, detect_errors_only, return_repair_prob, return_repair_candidates)
+        df = self.__run(detect_errors_only, return_repair_prob, return_repair_candidates)
         self.outputToConsole("!!!Total processing time is %s(s)!!!" % (time.time() - __start))
         return df
 
