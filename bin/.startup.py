@@ -240,7 +240,6 @@ class ScavengerRepairModel(SchemaSpyBase):
             "weak",
             "train",
             "flatten",
-            "dist",
             "score"
         ]
 
@@ -617,11 +616,12 @@ class ScavengerRepairModel(SchemaSpyBase):
         continous_target_columns = [ c for c in target_columns if c in continous_attrs ]
         return models, target_columns, continous_target_columns
 
-    def __repair(self, env, models, target_columns, continous_attrs, dirty_df):
+    def __repair(self, env, models, target_columns, continous_attrs, dirty_df, return_repair_prob):
         # Shares all the variables for the learnt models in a Spark cluster
         broadcasted_target_columns = self.spark.sparkContext.broadcast(target_columns)
         broadcasted_continous_attrs = self.spark.sparkContext.broadcast(continous_attrs)
         broadcasted_models = self.spark.sparkContext.broadcast(models)
+        broadcasted_return_repair_prob = self.spark.sparkContext.broadcast(return_repair_prob)
         broadcasted_maximal_likelihood_repair_enabled = \
             self.spark.sparkContext.broadcast(self.maximal_likelihood_repair_enabled)
 
@@ -637,6 +637,7 @@ class ScavengerRepairModel(SchemaSpyBase):
             target_columns = broadcasted_target_columns.value
             continous_attrs = broadcasted_continous_attrs.value
             models = broadcasted_models.value
+            return_repair_prob = broadcasted_return_repair_prob.value
             maximal_likelihood_repair_enabled = \
                 broadcasted_maximal_likelihood_repair_enabled.value
             rows = []
@@ -660,7 +661,7 @@ class ScavengerRepairModel(SchemaSpyBase):
                             row[y] = float(predicted[0])
                     else:
                         if row[y] is None:
-                            if maximal_likelihood_repair_enabled:
+                            if return_repair_prob or maximal_likelihood_repair_enabled:
                                 predicted = model.predict_proba(X)
                                 dist = { "classes" : model.classes_.tolist(), "probs" : predicted[0].tolist() }
                                 row[y] = json.dumps(dist)
@@ -681,23 +682,25 @@ class ScavengerRepairModel(SchemaSpyBase):
         self.__end_spark_jobs()
         return repaired_df
 
-    def __maximal_likelihood_repair(self, env, repaired_df, error_cells_df, continous_attrs):
-        # Format a table with probability distribution
-        env["dist"] = self.__temp_name("dist")
-        logging.info("Constructing a table (`%s`) for probability distribution..." % env["dist"])
+    def __compute_repair_pmf(self, repaired_df, error_cells_df, continous_attrs):
         parse_dist_json_expr = "from_json(value, 'classes array<string>, probs array<double>') dist"
         is_discrete_predicate = "attribute not in (%s)" % ",".join(map(lambda c: "'%s'" % c, continous_attrs)) \
             if len(continous_attrs) > 0 else "TRUE"
         to_dist_expr = "arrays_zip(dist.classes, dist.probs) dist"
         to_current_expr = "named_struct('value', current_value, 'prob', " \
             "coalesce(dist.probs[array_position(dist.classes, current_value) - 1], 0.0)) current"
-        dist_df = self.__flatten(repaired_df) \
+        sorted_dist_expr = "array_sort(dist, " \
+            "(left, right) -> if(left.`1` < right.`1`, 1, -1)) dist"
+        pmf_df = self.__flatten(repaired_df) \
             .join(error_cells_df, [self.row_id, "attribute"], "inner") \
             .where(is_discrete_predicate) \
             .selectExpr(self.row_id, "attribute", "current_value", parse_dist_json_expr) \
-            .selectExpr(self.row_id, "attribute", to_current_expr, to_dist_expr)
-        dist_df.createOrReplaceTempView(env["dist"])
+            .selectExpr(self.row_id, "attribute", to_current_expr, to_dist_expr) \
+            .selectExpr(self.row_id, "attribute", "current", sorted_dist_expr)
 
+        return pmf_df
+
+    def __maximal_likelihood_repair(self, env, pmf_df, repaired_df):
         # Selects maximal likelihood candidates as correct repairs
         broadcasted_distance = self.spark.sparkContext.broadcast(self.__distance)
 
@@ -707,11 +710,9 @@ class ScavengerRepairModel(SchemaSpyBase):
             dists = [distance.compute(x, y) for x, y in zip(xs, ys)]
             return pd.Series(dists)
 
-        sorted_dist_expr = "array_sort(dist, (left, right) -> if(left.`1` < right.`1`, 1, -1)) dist"
         maximal_likelihood_repair_expr = "named_struct('value', dist[0].`0`, 'prob', dist[0].`1`) repaired"
         score_expr = "ln(repaired.prob / IF(current.prob > 0.0, current.prob, 1e-6)) * (1.0 / (1.0 + distance)) score"
-        score_df = dist_df \
-            .selectExpr(self.row_id, "attribute", "current", sorted_dist_expr) \
+        score_df = pmf_df \
             .selectExpr(self.row_id, "attribute", "current", maximal_likelihood_repair_expr) \
             .withColumn("distance", distance(col("current.value"), col("repaired.value"))) \
             .selectExpr(self.row_id, "attribute", "repaired.value value", score_expr)
@@ -729,7 +730,7 @@ class ScavengerRepairModel(SchemaSpyBase):
         env.update(json.loads(self.__svg_api.repairAttrsFrom(env["score"], "", env["partial_dirty"], self.row_id)))
         return self.spark.table(env["repaired"])
 
-    def __run(self, error_cells, detect_errors_only, return_repair_candidates):
+    def __run(self, error_cells, detect_errors_only, return_repair_prob, return_repair_candidates):
         # Env used to repair the given table
         env = {}
         env["row_id"] = self.row_id
@@ -776,15 +777,23 @@ class ScavengerRepairModel(SchemaSpyBase):
             return input_df
 
         models, target_columns, continous_target_columns = self.__build_models(env, train_df, error_attrs, continous_attrs)
-        repaired_df = self.__repair(env, models, target_columns, continous_attrs, dirty_df)
+        repaired_df = self.__repair(env, models, target_columns, continous_attrs, dirty_df, return_repair_prob)
+
+        # If `return_repair_prob` is True, returns probability mass function for repair candidates
+        if return_repair_prob:
+             pmf_df = self.__compute_repair_pmf(repaired_df, error_cells_df, continous_attrs)
+             if len(target_columns) <= len(continous_target_columns):
+                 self.outputToConsole("No discrete column found, so returns an empty table")
+             return pmf_df
 
         # If any discrete target columns and its probability distribution given, computes scores
         # to decide which cells should be repaired to follow the “Maximal Likelihood Repair” problem.
         if self.maximal_likelihood_repair_enabled and len(target_columns) > len(continous_target_columns):
-            repaired_df = self.__maximal_likelihood_repair(env, repaired_df, error_cells_df, continous_target_columns)
+            pmf_df = self.__compute_repair_pmf(repaired_df, error_cells_df, continous_attrs)
+            repaired_df = self.__maximal_likelihood_repair(env, pmf_df, repaired_df)
 
         # If `return_repair_candidates` is True, returns repair candidates whoes
-        # value is the same with `current_value`
+        # value is the same with `current_value`.
         if return_repair_candidates:
             repair_candidates_df = self.__flatten(repaired_df) \
                 .join(error_cells_df, [self.row_id, "attribute"], "inner") \
@@ -795,7 +804,7 @@ class ScavengerRepairModel(SchemaSpyBase):
             assert clean_df.count() == input_df.count()
             return clean_df
 
-    def run(self, error_cells=None, detect_errors_only=False, return_repair_candidates=False):
+    def run(self, error_cells=None, detect_errors_only=False, return_repair_prob=False, return_repair_candidates=False):
         if self.table_name is None or self.row_id is None:
             raise ValueError("`setTableName` and `setRowId` should be called before repairing")
         if self.inference_order not in ["error", "domain", "entropy"]:
@@ -803,7 +812,7 @@ class ScavengerRepairModel(SchemaSpyBase):
                 self.inference_order)
 
         __start = time.time()
-        df = self.__run(error_cells, detect_errors_only, return_repair_candidates)
+        df = self.__run(error_cells, detect_errors_only, return_repair_prob, return_repair_candidates)
         self.outputToConsole("!!!Total processing time is %s(s)!!!" % (time.time() - __start))
         return df
 
