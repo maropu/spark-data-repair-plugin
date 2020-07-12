@@ -244,8 +244,8 @@ class ScavengerRepairModel(ApiBase):
         else:
             # Applys error detectors to get gray cells
             self.__start_spark_jobs("error detection",
-                "[Error Detection Phase 1] Detecting errors in a table `%s` (%s rows x %s cols)..." % \
-                    (env["input_table"], env["num_input_rows"], env["num_attrs"]))
+                "[Error Detection Phase 1] Detecting errors in a table `%s` (%s cols x %s rows)..." % \
+                    (env["input_table"], env["num_attrs"], env["num_input_rows"]))
             env["gray_cells"] = self.__detect_error_cells(env)
             self.__end_spark_jobs()
 
@@ -335,7 +335,7 @@ class ScavengerRepairModel(ApiBase):
         # Prepares training data to repair the remaining error cells
         # TODO: Needs more smart sampling, e.g., down-sampling
         train_df = fixed_df.sample(self.training_data_sample_ratio).drop(self.row_id).cache()
-        logging.info("Sampling %s training data (ratio=%s) from %s fixed rows..." % \
+        self.outputToConsole("[Repair Model Training Phase] Sampling %s training data (ratio=%s) from %s clean rows..." % \
             (train_df.count(), self.training_data_sample_ratio, fixed_df.count()))
         return train_df
 
