@@ -5,7 +5,7 @@ Clean and consistent data can have a positive impact on downstream anaysis;
 clean data make reporting and machine learning more accurate and
 consistent data with constraints (e.g., functional dependency) are important for efficient query plans.
 Therefore, data repairing is a first step in an anaysis pipeline and
-this package intends to implement a scalable repair algorithm on Apache Spark.
+this plugin intends to implement a scalable repair algorithm on Apache Spark.
 
 ## How to Repair Error Cells
 

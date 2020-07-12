@@ -681,15 +681,16 @@ class ScavengerRepairModel(ApiBase):
         # Selects rows for training, build models, and repair cells
         fixed_df, dirty_df, error_attrs = self.__split_clean_and_dirty_rows(env, error_cells_df)
         train_df = self.__select_training_rows(fixed_df)
+        if train_df.count() <= float(env["num_input_rows"]) * 0.10:
+            raise ValueError("Number of clean training rows must be greater than the 10% number of input rows")
 
         # Checks if we have the enough number of features for inference
         # TODO: In case of `num_features == 0`, we might be able to select the most accurate and
         # predictable column as a staring feature.
         num_features = len(train_df.columns) - len(error_attrs)
         if num_features == 0:
-            self.outputToConsole("At least %s features needed to repair error cells, " \
+            raise ValueError("At least %s features needed to repair error cells, " \
                 "but %s features found" % num_features)
-            return input_df
 
         models, target_columns, continous_target_columns = \
             self.__build_repair_models(env, train_df, error_attrs, continous_attrs)
