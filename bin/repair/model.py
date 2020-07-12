@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 import time
 
-from pyspark.sql import DataFrame, SparkSession, functions
+from pyspark.sql import DataFrame, functions
 from pyspark.sql.functions import col
 
 from repair.base import *
@@ -517,7 +517,7 @@ class ScavengerRepairModel(ApiBase):
         continous_target_columns = [ c for c in target_columns if c in continous_attrs ]
         return models, target_columns, continous_target_columns
 
-    def __repair(self, env, models, target_columns, continous_attrs, dirty_df, return_repair_prob):
+    def __repair(self, env, models, target_columns, continous_attrs, dirty_df, error_cells_df, return_repair_prob):
         # Shares all the variables for the learnt models in a Spark cluster
         broadcasted_target_columns = self.spark.sparkContext.broadcast(target_columns)
         broadcasted_continous_attrs = self.spark.sparkContext.broadcast(continous_attrs)
@@ -577,7 +577,8 @@ class ScavengerRepairModel(ApiBase):
         # Predicts the remaining error cells based on the trained models.
         # TODO: Might need to compare repair costs (cost of an update, c) to
         # the likelihood benefits of the updates (likelihood benefit of an update, l).
-        self.__start_spark_jobs("repairing", "[Repairing Phase] Repairing error cells...")
+        self.__start_spark_jobs("repairing", "[Repairing Phase] Repairing %s error cells in %s rows..." % \
+            (error_cells_df.count(), dirty_df.count()))
         repaired_df = dirty_df.groupBy(grouping_key).apply(repair).drop(grouping_key).cache()
         repaired_df.write.format("noop").mode("overwrite").save()
         self.__end_spark_jobs()
@@ -697,7 +698,7 @@ class ScavengerRepairModel(ApiBase):
         # 3. Repair Phase
         #################################################################################
 
-        repaired_df = self.__repair(env, models, target_columns, continous_attrs, dirty_df, return_repair_prob)
+        repaired_df = self.__repair(env, models, target_columns, continous_attrs, dirty_df, error_cells_df, return_repair_prob)
 
         # If `return_repair_prob` is True, returns probability mass function for repair candidates
         if return_repair_prob:
