@@ -1,6 +1,11 @@
 [![License](http://img.shields.io/:license-Apache_v2-blue.svg)](https://github.com/maropu/scavenger/blob/master/LICENSE)
 
 This is an experimental prototype to provide data repair functinalites for Spark catalog tables.
+Clean and consistent data can have a positive impact on downstream anaysis;
+clean data make reporting and machine learning more accurate and
+consistent data with constraints (e.g., functional dependency) are important for efficient query plans.
+Therefore, data repairing is a first step in an anaysis pipeline and
+this package intends to implement a scalable repair algorithm on Apache Spark.
 
 ## How to Repair Error Cells
 
@@ -124,8 +129,8 @@ t1&EQ(t1.Sex,"Male")&EQ(t1.Relationship,"Wife")
 +---+------------+-------------+-----------+
 ```
 
-If you set `True` to `detect_errors_only`, a process will return error cells
-detected in pre-processing as follows;
+If you want to know detected error cells, you can set `True` to `detect_errors_only`
+for getting them in pre-processing as follows;
 
 ```
 # Runs jobs to detect error cells
