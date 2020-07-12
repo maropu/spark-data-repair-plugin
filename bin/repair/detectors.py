@@ -27,7 +27,9 @@ class ErrorDetector:
     def __init__(self, name):
         self.env = None
         self.spark = SparkSession.builder.getOrCreate()
-        self.svgApi = self.spark.sparkContext._active_spark_context._jvm.ScavengerErrorDetectorApi
+
+        # JVM interfaces for Scavenger APIs
+        self.api = self.spark.sparkContext._active_spark_context._jvm.ScavengerErrorDetectorApi
 
     def setup(self, env):
         self.env = env
@@ -42,7 +44,7 @@ class NullErrorDetector(ErrorDetector):
         ErrorDetector.__init__(self, 'NullErrorDetector')
 
     def detect(self):
-        jdf = self.svgApi.detectNullCells('', self.env['input_table'], self.env['row_id'])
+        jdf = self.api.detectNullCells('', self.env['input_table'], self.env['row_id'])
         return DataFrame(jdf, self.spark._wrapped)
 
 class ConstraintErrorDetector(ErrorDetector):
@@ -51,7 +53,7 @@ class ConstraintErrorDetector(ErrorDetector):
         ErrorDetector.__init__(self, 'ConstraintErrorDetector')
 
     def detect(self):
-        jdf = self.svgApi.detectErrorCellsFromConstraints(
+        jdf = self.api.detectErrorCellsFromConstraints(
             self.env['constraint_input_path'], '', self.env['input_table'], self.env['row_id'])
         return DataFrame(jdf, self.spark._wrapped)
 
@@ -61,7 +63,7 @@ class OutlierErrorDetector(ErrorDetector):
         ErrorDetector.__init__(self, 'OutlierErrorDetector')
 
     def detect(self):
-        jdf = self.svgApi.detectErrorCellsFromOutliers(
+        jdf = self.api.detectErrorCellsFromOutliers(
             '', self.env['input_table'], self.env['row_id'], False)
         return DataFrame(jdf, self.spark._wrapped)
 
