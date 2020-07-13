@@ -133,7 +133,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
     withSparkSession { sparkSession =>
       // `repairedCells` must have `$rowId`, `attribute`, and `repaired` columns
-      checkIfColumnsExistIn(repairedCells, rowId :: "attribute" :: "value" :: Nil)
+      checkIfColumnsExistIn(repairedCells, rowId :: "attribute" :: "repaired" :: Nil)
 
       val (inputDf, _) = checkAndGetInputTable(dbName, tableName, rowId)
       val continousAttrTypeMap = inputDf.schema.filter(f => continousTypes.contains(f.dataType))
@@ -146,9 +146,9 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       val repairDf = sparkSession.sql(
         s"""
            |SELECT
-           |  $rowId, map_from_entries(COLLECT_LIST(r)) AS repairs
+           |  $rowId, map_from_entries(collect_list(r)) AS repairs
            |FROM (
-           |  select $rowId, struct(attribute, value) r
+           |  select $rowId, struct(attribute, repaired) r
            |  FROM $repairedCells
            |)
            |GROUP BY
@@ -167,7 +167,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
               } else {
                 s"repairs['$attr']"
               }
-              s"IF(ISNOTNULL(repairs['$attr']), $repaired, $attr) AS $attr"
+              s"if(array_contains(map_keys(repairs), '$attr'), $repaired, $attr) AS $attr"
             case cleanAttr =>
               cleanAttr
           }

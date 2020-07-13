@@ -5,7 +5,7 @@ Clean and consistent data can have a positive impact on downstream anaysis;
 clean data make reporting and machine learning more accurate and
 consistent data with constraints (e.g., functional dependency) are important for efficient query plans.
 Therefore, data repairing is a first step in an anaysis pipeline and
-this plugin intends to implement a scalable repair algorithm on Apache Spark.
+this plugin intends to implement a scalable repair algorithm on Spark.
 
 ## How to Repair Error Cells
 
@@ -59,8 +59,8 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 
 # Runs jobs to compute repair updates for the seven NULL cells in the `adult` table.
 # A 'repaired' column represents proposed updates to repiar them.
->>> df = scavenger.repair().setTableName("adult").setRowId("tid").run()
->>> df.show()
+>>> repair_updates_df = scavenger.repair().setTableName("adult").setRowId("tid").run()
+>>> repair_updates_df.show()
 +---+---------+-------------+-----------+
 |tid|attribute|current_value|   repaired|
 +---+---------+-------------+-----------+
@@ -102,8 +102,10 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 
 # Or, you can use a misc function to apply computed repair updates into the input
->>> repair_updates_df = scavenger.repair().setTableName("adult").setRowId("tid").run()
->>> df = scavenger.misc().setTableName("adult").setRowId("tid").repair(repair_updates_df)
+>>> df = scavenger.repair().setTableName("adult").setRowId("tid") \
+...   .setRepairUpdates(repair_updates_df) \
+...   .run()
+
 >>> df.show()
 <the same output above>
 ```
@@ -183,7 +185,7 @@ scavenger.repair()
   .setConstraints(str)                         // path of constraint file
 
   // Parameters for Error Detection
-  .setErrorCells(str)                          // user-specified error cells
+  .setErrorCells(df)                           // user-specified error cells
   .setDiscreteThreshold(float)                 // max domain size of discrete values (default: 80)
   .setMinCorrThreshold(float)                  // threshold to decide which columns are used to compute domains (default: 0.70)
   .setDomainThresholds(float, float)           // thresholds to reduce domain size (default: 0.0, 0.70)
@@ -198,13 +200,14 @@ scavenger.repair()
   .setInferenceOrder(str)                      // how to order target columns to build models (default: 'entropy')
 
   // Parameters for Repairing
+  .setRepairUpdates(df)                        // user-specified repair updates
   .setMaximalLikelihoodRepairEnabled(boolean)  // whether to enable maximal likelihood repair (default: False)
   .setRepairDelta(int)                         // max number of applied repairs
 
   // Running Mode Parameters
   .run(
     detect_errors_only=boolean,                // whether to return detected error cells (default: False)
-    compute_repair_candidate_prob=boolean      // whether to return repair probabiity mass function of repairs (default: False)
+    compute_repair_candidate_prob=boolean      // whether to return probabiity mass function of repairs (default: False)
     repair_data=boolean,                       // whether to return repaired data (default: False)
   )
 ```

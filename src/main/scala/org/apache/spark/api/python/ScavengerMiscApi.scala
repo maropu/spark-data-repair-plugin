@@ -23,6 +23,22 @@ import org.apache.spark.util.{Utils => SparkUtils}
 
 object ScavengerMiscApi extends BaseScavengerRepairApi {
 
+  /**
+   * To compare result rows easily, this method flattens an input table
+   * as a schema (`rowId`, attribute, val).
+   */
+  def flattenTable(dbName: String, tableName: String, rowId: String): DataFrame = {
+    logBasedOnLevel(s"flattenTable called with: dbName=$dbName tableName=$tableName rowId=$rowId")
+
+    withSparkSession { _ =>
+      val (inputDf, _) = checkAndGetInputTable(dbName, tableName, rowId)
+      val expr = inputDf.schema.filter(_.name != rowId)
+        .map { f => s"STRUCT($rowId, '${f.name}', CAST(${f.name} AS STRING))" }
+        .mkString("ARRAY(", ", ", ")")
+      inputDf.selectExpr(s"INLINE($expr) AS (tid, attribute, value)")
+    }
+  }
+
   def injectNullAt(dbName: String, tableName: String, targetAttrList: String, nullRatio: Double): DataFrame = {
     logBasedOnLevel(s"injectNullAt called with: dbName=$dbName tableName=$tableName " +
       s"targetAttrList=$targetAttrList, nullRatio=$nullRatio")
@@ -46,23 +62,6 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
       }
       inputDf.selectExpr(exprs: _*)
     }
-  }
-
-  /**
-   * To compare result rows easily, this method flattens an input table
-   * as a schema (`rowId`, attribute, val).
-   */
-  def flattenTable(dbName: String, tableName: String, rowId: String): String = {
-    logBasedOnLevel(s"flattenTable called with: dbName=$dbName tableName=$tableName rowId=$rowId")
-
-    val df = withSparkSession { _ =>
-      val (inputDf, _) = checkAndGetInputTable(dbName, tableName, rowId)
-      val expr = inputDf.schema.filter(_.name != rowId)
-        .map { f => s"STRUCT($rowId, '${f.name}', CAST(${f.name} AS STRING))" }
-        .mkString("ARRAY(", ", ", ")")
-      inputDf.selectExpr(s"INLINE($expr) AS (tid, attribute, value)")
-    }
-    Seq("flatten" -> createAndCacheTempView(df)).asJson
   }
 
   def toErrorMap(errCellView: String, dbName: String, tableName: String, rowId: String): DataFrame = {

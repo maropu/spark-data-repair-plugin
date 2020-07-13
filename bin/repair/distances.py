@@ -40,5 +40,5 @@ class Levenshtein(Distance):
 
     def compute(self, x, y):
         import Levenshtein
-        return float(Levenshtein.distance(x, y))
+        return float(Levenshtein.distance(str(x), str(y)))
 

@@ -66,6 +66,7 @@ class ScavengerRepairModel(ApiBase):
         self.lgb_max_depth = -1
 
         # Parameters for repairing
+        self.repair_updates = None
         self.maximal_likelihood_repair_enabled = False
         self.repair_delta = None
 
@@ -101,11 +102,9 @@ class ScavengerRepairModel(ApiBase):
             "partial_repaired",
             "repaired",
             "dirty",
-            "partial_dirty",
             "weak",
             "train",
-            "flatten",
-            "score"
+            "top_delta_repairs"
         ]
 
     def setConstraints(self, constraint_input_path):
@@ -177,22 +176,33 @@ class ScavengerRepairModel(ApiBase):
         self.lgb_max_depth = n
         return self
 
+    def setRepairUpdates(self, repair_updates):
+        self.repair_updates = repair_updates
+        return self
+
     def setMaximalLikelihoodRepairEnabled(self, enabled):
         self.maximal_likelihood_repair_enabled = enabled
         return self
 
     def setRepairDelta(self, delta):
+        if int(delta) <= 0:
+            raise ValueError("repair delta must be positive")
         self.repair_delta = delta
         return self
 
     def __temp_name(self, prefix="temp"):
         return "%s_%s" % (prefix, datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
 
+    def __temp_view(self, df):
+        temp_view = self.__temp_name()
+        df.createOrReplaceTempView(temp_view)
+        return temp_view
+
     def __flatten(self, df):
         temp_view = self.__temp_name()
         df.createOrReplaceTempView(temp_view)
-        ret_as_json = json.loads(self.jvm.ScavengerMiscApi.flattenTable("", temp_view, self.row_id))
-        return self.spark.table(ret_as_json["flatten"])
+        jdf = self.jvm.ScavengerMiscApi.flattenTable("", temp_view, self.row_id)
+        return DataFrame(jdf, self.spark._wrapped)
 
     def __start_spark_jobs(self, name, desc):
         self.spark.sparkContext.setJobGroup(name, name)
@@ -215,7 +225,9 @@ class ScavengerRepairModel(ApiBase):
 
     def __check_input(self, env):
         env.update(json.loads(self.__svg_api.checkInputTable(self.db_name, self.table_name, self.row_id)))
-        return self.spark.table(env["input_table"]), env["continous_attrs"].split(",")
+        continous_attrs = env["continous_attrs"].split(",")
+        return self.spark.table(env["input_table"]), \
+            continous_attrs if continous_attrs != [""] else []
 
     def __detect_error_cells(self, env):
         # Initializes defined error detectors with the given env
@@ -232,20 +244,23 @@ class ScavengerRepairModel(ApiBase):
     def __detect_errors(self, env):
         # If `self.error_cells` provided, just uses it
         if self.error_cells is not None:
-            df = self.spark.table(str(self.error_cells))
+            df = self.error_cells if isinstance(self.error_cells, DataFrame) \
+                else self.spark.table(self.error_cells)
             if not all(c in df.columns for c in (self.row_id, "attribute")):
-                raise ValueError("`%s` must have `%s` and `attribute` in columns" % \
-                    (str(self.error_cells), self.row_id))
+                raise ValueError("error cells must have `%s` and `attribute` in columns" % self.row_id)
 
-            self.outputToConsole("Error cells provided by `%s`" % str(self.error_cells))
-            env["gray_cells"] = str(self.error_cells)
+            env["gray_cells"] = self.__temp_view(df) if isinstance(self.error_cells, DataFrame) \
+                else str(self.error_cells)
+            self.outputToConsole("[Error Detection Phase] Error cells provided by `%s`" % \
+                str(env["gray_cells"]))
+
             # We assume that the given error cells are true, so we skip computing error domains
             # with probability because the computational cost is much high.
             self.domain_threshold_beta = 1.0
         else:
             # Applys error detectors to get gray cells
             self.__start_spark_jobs("error detection",
-                "[Error Detection Phase 1] Detecting errors in a table `%s` (%s cols x %s rows)..." % \
+                "[Error Detection Phase] Detecting errors in a table `%s` (%s cols x %s rows)..." % \
                     (env["input_table"], env["num_attrs"], env["num_input_rows"]))
             env["gray_cells"] = self.__detect_error_cells(env)
             self.__end_spark_jobs()
@@ -296,7 +311,7 @@ class ScavengerRepairModel(ApiBase):
             self.attr_stat_threshold)))
 
         self.__start_spark_jobs("cell domains analysis",
-            "[Error Detection Phase 2] Analyzing cell domains to fix error cells...")
+            "[Error Detection Phase] Analyzing cell domains to fix error cells...")
         env.update(json.loads(self.__svg_api.computeDomainInErrorCells(
             env["discrete_features"], env["attr_stats"], env["gray_cells"], env["row_id"],
             env["continous_attrs"],
@@ -314,7 +329,7 @@ class ScavengerRepairModel(ApiBase):
         weak_df = cell_domain_df.selectExpr(self.row_id, "attribute", "current_value", fix_cells_expr).cache()
         error_cells_df = weak_df.where("value IS NULL").drop("value").cache()
         env["weak"] = self.__temp_name("weak")
-        weak_df = weak_df.where("value IS NOT NULL").drop("current_value")
+        weak_df = weak_df.where("value IS NOT NULL").selectExpr(self.row_id, "attribute", "value repaired")
         weak_df.cache().createOrReplaceTempView(env["weak"])
         ret_as_json = self.__svg_api.repairAttrsFrom(env["weak"], "", env["repair_base"], self.row_id)
         env["partial_repaired"] = json.loads(ret_as_json)["repaired"]
@@ -515,8 +530,7 @@ class ScavengerRepairModel(ApiBase):
                 ",".join(features)))
         self.__end_spark_jobs()
 
-        continous_target_columns = [ c for c in target_columns if c in continous_attrs ]
-        return models, target_columns, continous_target_columns
+        return models, target_columns
 
     def __repair(self, env, models, target_columns, continous_attrs, dirty_df, error_cells_df, compute_repair_candidate_prob):
         # Shares all the variables for the learnt models in a Spark cluster
@@ -578,17 +592,15 @@ class ScavengerRepairModel(ApiBase):
         # Predicts the remaining error cells based on the trained models.
         # TODO: Might need to compare repair costs (cost of an update, c) to
         # the likelihood benefits of the updates (likelihood benefit of an update, l).
-        self.__start_spark_jobs("repairing", "[Repairing Phase] Repairing %s error cells in %s rows..." % \
+        self.__start_spark_jobs("repairing", "[Repairing Phase] Computing %s repair updates in %s rows..." % \
             (error_cells_df.count(), dirty_df.count()))
         repaired_df = dirty_df.groupBy(grouping_key).apply(repair).drop(grouping_key).cache()
         repaired_df.write.format("noop").mode("overwrite").save()
         self.__end_spark_jobs()
         return repaired_df
 
-    def __compute_repair_pmf(self, repaired_df, error_cells_df, continous_attrs):
+    def __compute_repair_pmf(self, repaired_df, error_cells_df):
         parse_pmf_json_expr = "from_json(value, 'classes array<string>, probs array<double>') pmf"
-        is_discrete_predicate = "attribute not in (%s)" % ",".join(map(lambda c: "'%s'" % c, continous_attrs)) \
-            if len(continous_attrs) > 0 else "TRUE"
         to_pmf_expr = "arrays_zip(pmf.classes, pmf.probs) pmf"
         to_current_expr = "named_struct('value', current_value, 'prob', " \
             "coalesce(pmf.probs[array_position(pmf.classes, current_value) - 1], 0.0)) current"
@@ -596,25 +608,26 @@ class ScavengerRepairModel(ApiBase):
             "(left, right) -> if(left.`1` < right.`1`, 1, -1)) pmf"
         pmf_df = self.__flatten(repaired_df) \
             .join(error_cells_df, [self.row_id, "attribute"], "inner") \
-            .where(is_discrete_predicate) \
             .selectExpr(self.row_id, "attribute", "current_value", parse_pmf_json_expr) \
             .selectExpr(self.row_id, "attribute", to_current_expr, to_pmf_expr) \
             .selectExpr(self.row_id, "attribute", "current", sorted_pmf_expr)
 
         return pmf_df
 
-    def __maximal_likelihood_repair(self, env, pmf_df, repaired_df):
+    def __maximal_likelihood_repair(self, env, repaired_df, error_cells_df):
         # A “Maximal Likelihood Repair” problem defined in the SCARE [2] paper is as follows;
         # Given a scalar \delta and a database D = D_{e} \cup D_{c}, the problem is to
         # find another database instance D' = D'_{e} \cup D_{c} such that L(D'_{e} \| D_{c})
         # is maximum subject to the constraint Dist(D, D') <= \delta.
         # L is a likelihood function and Dist is an arbitrary distance function
         # (e.g., edit distances) between the two database instances D and D'.
+        pmf_df = self.__compute_repair_pmf(repaired_df, error_cells_df)
+
         broadcasted_distance = self.spark.sparkContext.broadcast(self.__distance)
 
         @functions.pandas_udf("double", functions.PandasUDFType.SCALAR)
         def distance(xs, ys):
-            distance = broadcasted_distance
+            distance = broadcasted_distance.value
             dists = [distance.compute(x, y) for x, y in zip(xs, ys)]
             return pd.Series(dists)
 
@@ -623,30 +636,17 @@ class ScavengerRepairModel(ApiBase):
         score_df = pmf_df \
             .selectExpr(self.row_id, "attribute", "current", maximal_likelihood_repair_expr) \
             .withColumn("distance", distance(col("current.value"), col("repaired.value"))) \
-            .selectExpr(self.row_id, "attribute", "repaired.value value", score_expr)
+            .selectExpr(self.row_id, "attribute", "current.value current_value", "repaired.value repaired", score_expr)
 
-        if self.repair_delta is not None:
-            row = score_df.selectExpr("percentile(score, %s) thres" % (float(self.repair_delta) / num_error_cells)).collect()[0]
-            score_df = score_df.where("score < %s" % row.thres)
-            logging.info("Bounded # of repairs from %s to %s" % (num_error_cells, score_df.count()))
+        assert self.repair_delta is not None
+        num_error_cells = pmf_df.count()
+        percent = min(1.0, float(self.repair_delta) / num_error_cells)
+        row = score_df.selectExpr("percentile(score, %s) thres" % percent).collect()[0]
+        top_delta_repairs_expr = "IF(score <= %s, repaired, current_value) repaired" % row.thres
+        top_delta_repairs_df = score_df.selectExpr(self.row_id, "attribute", top_delta_repairs_expr)
+        return top_delta_repairs_df
 
-        # Finally, replaces error cells with ones in `score_df`
-        env["partial_dirty"] = self.__temp_name("partial_dirty")
-        repaired_df.createOrReplaceTempView(env["partial_dirty"])
-        env["score"] = self.__temp_name("score")
-        score_df.createOrReplaceTempView(env["score"])
-        env.update(json.loads(self.__svg_api.repairAttrsFrom(env["score"], "", env["partial_dirty"], self.row_id)))
-        return self.spark.table(env["repaired"])
-
-    def __run(self, detect_errors_only, compute_repair_candidate_prob, repair_data):
-        # Env used to repair the given table
-        env = {}
-        env["row_id"] = self.row_id
-        env["constraint_input_path"] = self.constraint_input_path
-
-        # Checks # of input rows and attributes
-        input_df, continous_attrs = self.__check_input(env)
-
+    def __run(self, env, input_df, continous_attrs, detect_errors_only, compute_repair_candidate_prob, repair_data):
         #################################################################################
         # 1. Error Detection Phase
         #################################################################################
@@ -693,34 +693,40 @@ class ScavengerRepairModel(ApiBase):
             raise ValueError("At least %s features needed to repair error cells, " \
                 "but %s features found" % num_features)
 
-        models, target_columns, continous_target_columns = \
-            self.__build_repair_models(env, train_df, error_attrs, continous_attrs)
+        models, target_columns = self.__build_repair_models(env, train_df, error_attrs, continous_attrs)
 
         #################################################################################
         # 3. Repair Phase
         #################################################################################
 
-        repaired_df = self.__repair(env, models, target_columns, continous_attrs, dirty_df, error_cells_df, compute_repair_candidate_prob)
+        repaired_df = self.__repair(env, models, target_columns, continous_attrs,
+            dirty_df, error_cells_df, compute_repair_candidate_prob)
 
-        # If `compute_repair_candidate_prob` is True, returns probability mass function for repair candidates
+        # If `compute_repair_candidate_prob` is True, returns probability mass function of repair candidates
         if compute_repair_candidate_prob:
-             pmf_df = self.__compute_repair_pmf(repaired_df, error_cells_df, continous_attrs)
-             if len(target_columns) <= len(continous_target_columns):
-                 self.outputToConsole("No discrete column found, so returns an empty table")
-             return pmf_df
+             return self.__compute_repair_pmf(repaired_df, error_cells_df)
 
         # If any discrete target columns and its probability distribution given, computes scores
         # to decide which cells should be repaired to follow the “Maximal Likelihood Repair” problem.
-        if self.maximal_likelihood_repair_enabled and len(target_columns) > len(continous_target_columns):
-            pmf_df = self.__compute_repair_pmf(repaired_df, error_cells_df, continous_attrs)
-            repaired_df = self.__maximal_likelihood_repair(env, pmf_df, repaired_df)
+        if self.maximal_likelihood_repair_enabled:
+            top_delta_repairs_df = self.__maximal_likelihood_repair(env, repaired_df, error_cells_df)
+            if not repair_data:
+                return top_delta_repairs_df
+
+            env["top_delta_repairs"] = self.__temp_name("top_delta_repairs")
+            top_delta_repairs_df.createOrReplaceTempView(env["top_delta_repairs"])
+            env.update(json.loads(self.__svg_api.repairAttrsFrom(env["top_delta_repairs"], "", env["dirty"], self.row_id)))
+            self.outputToConsole("[Repairing Phase] %s repair updates applied among %s candidates..." % \
+                (score_df.where("score <= %s" % row.thres).count(), num_error_cells))
+            repaired_df = self.spark.table(env["repaired"])
 
         # If `repair_data` is False, returns repair candidates whoes
         # value is the same with `current_value`.
         if not repair_data:
             repair_candidates_df = self.__flatten(repaired_df) \
                 .join(error_cells_df, [self.row_id, "attribute"], "inner") \
-                .selectExpr("tid", "attribute", "current_value", "value repaired")
+                .selectExpr("tid", "attribute", "current_value", "value repaired") \
+                .where("not(current_value <=> repaired)")
             return repair_candidates_df
         else:
             clean_df = fixed_df.union(repaired_df)
@@ -730,12 +736,36 @@ class ScavengerRepairModel(ApiBase):
     def run(self, detect_errors_only=False, compute_repair_candidate_prob=False, repair_data=False):
         if self.table_name is None or self.row_id is None:
             raise ValueError("`setTableName` and `setRowId` should be called before repairing")
+        if self.maximal_likelihood_repair_enabled and self.repair_delta is None:
+            raise ValueError("`setRepairDelta` should be called before maximal likelihood repairing")
         if self.inference_order not in ["error", "domain", "entropy"]:
-            raise ValueError("Inference order must be `error`, `domain`, or `entropy`, but `%s` found" % \
+            raise ValueError("inference order must be `error`, `domain`, or `entropy`, but `%s` found" % \
                 self.inference_order)
 
+        # If `self.repair_updates` specified, just applies repair updates
+        if self.repair_updates is not None:
+            repair_updates_view = self.__temp_view(self.repair_updates) \
+                if isinstance(self.repair_updates, DataFrame) else str(self.repair_updates_view)
+            ret_as_json = self.__svg_api.repairAttrsFrom(repair_updates_view, self.db_name, self.table_name, self.row_id)
+            return self.spark.table(json.loads(ret_as_json)["repaired"])
+
+        # Env used to repair the given table
+        env = {}
+        env["row_id"] = self.row_id
+        env["constraint_input_path"] = self.constraint_input_path
+
+        # Checks # of input rows and attributes
+        input_df, continous_attrs = self.__check_input(env)
+
+        if compute_repair_candidate_prob and len(continous_attrs) != 0:
+            raise ValueError("Cannot compute probability mass function of repairs" \
+                "when continous attributes found")
+        if self.maximal_likelihood_repair_enabled and len(continous_attrs) != 0:
+            raise ValueError("Cannot enable maximal likelihood repair mode " \
+                "when continous attributes found")
+
         __start = time.time()
-        df = self.__run(detect_errors_only, compute_repair_candidate_prob, repair_data)
+        df = self.__run(env, input_df, continous_attrs, detect_errors_only, compute_repair_candidate_prob, repair_data)
         self.outputToConsole("!!!Total processing time is %s(s)!!!" % (time.time() - __start))
         return df
 
