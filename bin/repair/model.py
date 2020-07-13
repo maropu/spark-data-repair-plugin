@@ -76,6 +76,7 @@ class ScavengerRepairModel(ApiBase):
         self.__timer_base = None
 
         # Defines detectors to discover error cells
+        # TODO: Needs to support a pattern-based error detector (See [10])
         self.__detectors = [
             NullErrorDetector(),
             ConstraintErrorDetector(),

@@ -9,4 +9,5 @@
  - [7] Wu, Richard et al., Attention-based Learning for Missing Data Imputation in HoloClean, MLSys, 2020.
  - [8] Michael Stonebraker et al., Data Curation at Scale: The Data Tamer System, CIDR, 2013.
  - [9] Ziawasch Abedjan et al., Detecting Data Errors: Where Are We and What Needs to be Done?, Proceedings of the VLDB Endowment, 9(12), pp.993–1004, 2016.
+ - [10] Zuhair Khayyat et al., BigDansing: A System for Big Data Cleansing, Proceedings of SIGMOD, pp.1215–1230, 2015.
 
