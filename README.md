@@ -57,8 +57,24 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 | 19|31-50|     HS-grad|            Sales|      Husband|  Male|         Iran|MoreThan50K|
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 
-# Runs jobs to repair the seven NULL cells in the `adult` table
+# Runs jobs to compute repair updates for the seven NULL cells in the `adult` table.
+# A 'repaired' column represents proposed updates to repiar them.
 >>> df = scavenger.repair().setTableName("adult").setRowId("tid").run()
+>>> df.show()
++---+---------+-------------+-----------+
+|tid|attribute|current_value|   repaired|
++---+---------+-------------+-----------+
+|  7|      Sex|         null|     Female|
+| 12|      Age|         null|      18-21|
+| 12|      Sex|         null|     Female|
+|  3|      Sex|         null|     Female|
+|  5|      Age|         null|      18-21|
+|  5|   Income|         null|MoreThan50K|
+| 16|   Income|         null|MoreThan50K|
++---+---------+-------------+-----------+
+
+# You need to set `True` to `repair_data` for getting repaired data
+>>> df = scavenger.repair().setTableName("adult").setRowId("tid").run(repair_data=True)
 >>> df.show()
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 |tid|  Age|   Education|       Occupation| Relationship|   Sex|      Country|     Income|
@@ -84,6 +100,12 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 | 18|31-50|        10th|Handlers-cleaners|      Husband|  Male|United-States|LessThan50K|
 | 19|31-50|     HS-grad|            Sales|      Husband|  Male|         Iran|MoreThan50K|
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
+
+# Or, you can use a misc function to apply computed repair updates into the input
+>>> repair_updates_df = scavenger.repair().setTableName("adult").setRowId("tid").run()
+>>> df = scavenger.misc().setTableName("adult").setRowId("tid").repair(repair_updates_df)
+>>> df.show()
+<the same output above>
 ```
 
 For more running examples, please check scripts in the [resources/examples](./resources/examples) folder.
@@ -182,8 +204,8 @@ scavenger.repair()
   // Running Mode Parameters
   .run(
     detect_errors_only=boolean,                // whether to return detected error cells (default: False)
-    return_repair_candidates=boolean,          // whether to return repair candidates (default: False)
-    return_repair_prob=boolean                 // whether to return repair probabiity mass function of repairs (default: False)
+    compute_repair_candidate_prob=boolean      // whether to return repair probabiity mass function of repairs (default: False)
+    repair_data=boolean,                       // whether to return repaired data (default: False)
   )
 ```
 

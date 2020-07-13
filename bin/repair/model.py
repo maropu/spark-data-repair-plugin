@@ -518,12 +518,12 @@ class ScavengerRepairModel(ApiBase):
         continous_target_columns = [ c for c in target_columns if c in continous_attrs ]
         return models, target_columns, continous_target_columns
 
-    def __repair(self, env, models, target_columns, continous_attrs, dirty_df, error_cells_df, return_repair_prob):
+    def __repair(self, env, models, target_columns, continous_attrs, dirty_df, error_cells_df, compute_repair_candidate_prob):
         # Shares all the variables for the learnt models in a Spark cluster
         broadcasted_target_columns = self.spark.sparkContext.broadcast(target_columns)
         broadcasted_continous_attrs = self.spark.sparkContext.broadcast(continous_attrs)
         broadcasted_models = self.spark.sparkContext.broadcast(models)
-        broadcasted_return_repair_prob = self.spark.sparkContext.broadcast(return_repair_prob)
+        broadcasted_compute_repair_candidate_prob = self.spark.sparkContext.broadcast(compute_repair_candidate_prob)
         broadcasted_maximal_likelihood_repair_enabled = \
             self.spark.sparkContext.broadcast(self.maximal_likelihood_repair_enabled)
 
@@ -539,7 +539,7 @@ class ScavengerRepairModel(ApiBase):
             target_columns = broadcasted_target_columns.value
             continous_attrs = broadcasted_continous_attrs.value
             models = broadcasted_models.value
-            return_repair_prob = broadcasted_return_repair_prob.value
+            compute_repair_candidate_prob = broadcasted_compute_repair_candidate_prob.value
             maximal_likelihood_repair_enabled = \
                 broadcasted_maximal_likelihood_repair_enabled.value
             rows = []
@@ -563,7 +563,7 @@ class ScavengerRepairModel(ApiBase):
                             row[y] = float(predicted[0])
                     else:
                         if row[y] is None:
-                            if return_repair_prob or maximal_likelihood_repair_enabled:
+                            if compute_repair_candidate_prob or maximal_likelihood_repair_enabled:
                                 predicted = model.predict_proba(X)
                                 pmf = { "classes" : model.classes_.tolist(), "probs" : predicted[0].tolist() }
                                 row[y] = json.dumps(pmf)
@@ -638,7 +638,7 @@ class ScavengerRepairModel(ApiBase):
         env.update(json.loads(self.__svg_api.repairAttrsFrom(env["score"], "", env["partial_dirty"], self.row_id)))
         return self.spark.table(env["repaired"])
 
-    def __run(self, detect_errors_only, return_repair_prob, return_repair_candidates):
+    def __run(self, detect_errors_only, compute_repair_candidate_prob, repair_data):
         # Env used to repair the given table
         env = {}
         env["row_id"] = self.row_id
@@ -700,10 +700,10 @@ class ScavengerRepairModel(ApiBase):
         # 3. Repair Phase
         #################################################################################
 
-        repaired_df = self.__repair(env, models, target_columns, continous_attrs, dirty_df, error_cells_df, return_repair_prob)
+        repaired_df = self.__repair(env, models, target_columns, continous_attrs, dirty_df, error_cells_df, compute_repair_candidate_prob)
 
-        # If `return_repair_prob` is True, returns probability mass function for repair candidates
-        if return_repair_prob:
+        # If `compute_repair_candidate_prob` is True, returns probability mass function for repair candidates
+        if compute_repair_candidate_prob:
              pmf_df = self.__compute_repair_pmf(repaired_df, error_cells_df, continous_attrs)
              if len(target_columns) <= len(continous_target_columns):
                  self.outputToConsole("No discrete column found, so returns an empty table")
@@ -715,9 +715,9 @@ class ScavengerRepairModel(ApiBase):
             pmf_df = self.__compute_repair_pmf(repaired_df, error_cells_df, continous_attrs)
             repaired_df = self.__maximal_likelihood_repair(env, pmf_df, repaired_df)
 
-        # If `return_repair_candidates` is True, returns repair candidates whoes
+        # If `repair_data` is False, returns repair candidates whoes
         # value is the same with `current_value`.
-        if return_repair_candidates:
+        if not repair_data:
             repair_candidates_df = self.__flatten(repaired_df) \
                 .join(error_cells_df, [self.row_id, "attribute"], "inner") \
                 .selectExpr("tid", "attribute", "current_value", "value repaired")
@@ -727,7 +727,7 @@ class ScavengerRepairModel(ApiBase):
             assert clean_df.count() == input_df.count()
             return clean_df
 
-    def run(self, detect_errors_only=False, return_repair_prob=False, return_repair_candidates=False):
+    def run(self, detect_errors_only=False, compute_repair_candidate_prob=False, repair_data=False):
         if self.table_name is None or self.row_id is None:
             raise ValueError("`setTableName` and `setRowId` should be called before repairing")
         if self.inference_order not in ["error", "domain", "entropy"]:
@@ -735,7 +735,7 @@ class ScavengerRepairModel(ApiBase):
                 self.inference_order)
 
         __start = time.time()
-        df = self.__run(detect_errors_only, return_repair_prob, return_repair_candidates)
+        df = self.__run(detect_errors_only, compute_repair_candidate_prob, repair_data)
         self.outputToConsole("!!!Total processing time is %s(s)!!!" % (time.time() - __start))
         return df
 
