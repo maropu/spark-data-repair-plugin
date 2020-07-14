@@ -84,27 +84,16 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     }
   }
 
-  def convertToDiscreteFeatures(
-      dbName: String,
-      tableName: String,
-      rowId: String,
-      discreteThres: Int): String = {
-
-    logBasedOnLevel(s"convertToDiscreteFeatures called with: dbName=$dbName tableName=$tableName " +
-      s"rowId=$rowId discreteThres=$discreteThres")
-
-    require(rowId.nonEmpty, s"$rowId should be a non-empty string.")
+  private def doConvertToDiscreteFeatures(
+      inputView: String,
+      discreteThres: Int,
+      whitelist: Set[String] = Set.empty): (DataFrame, Map[String, ColumnStat]) = {
     require(2 <= discreteThres && discreteThres < 65536, "discreteThres should be in [2, 65536).")
 
-    withSparkSession { _ =>
-      val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
-      val statMap = computeAndGetTableStats(qualifiedName)
+    withSparkSession { sparkSession =>
+      val statMap = computeAndGetTableStats(inputView)
+      val inputDf = sparkSession.table(inputView)
       val attrTypeMap = inputDf.schema.map { f => f.name -> f.dataType }.toMap
-      val rowCnt = inputDf.count()
-      if (inputDf.selectExpr(rowId).distinct().count() != rowCnt) {
-        throw new SparkException(s"Uniqueness does not hold in column '$rowId' " +
-          s"of table '$dbName.$tableName'.")
-      }
       val discreteExprs = inputDf.columns.flatMap { attr =>
         (statMap(attr), attrTypeMap(attr)) match {
           case (ColumnStat(_, min, max), tpe) if continousTypes.contains(tpe) =>
@@ -112,7 +101,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
               s"max=${max.get}), so discretized into [0, $discreteThres)")
             Some(s"int(($attr - ${min.get}) / (${max.get} - ${min.get}) * $discreteThres) $attr")
           case (ColumnStat(distinctCnt, _, _), _)
-              if attr == rowId || (1 < distinctCnt && distinctCnt < discreteThres) =>
+              if whitelist.contains(attr) || (1 < distinctCnt && distinctCnt < discreteThres) =>
             Some(attr)
           case (ColumnStat(distinctCnt, _, _), _) =>
             logWarning(s"'$attr' dropped because of its unsuitable domain (size=$distinctCnt)")
@@ -120,11 +109,53 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         }
       }
       val discreteDf = inputDf.selectExpr(discreteExprs: _*)
-      val distinctStats = statMap.mapValues(_.distinctCount.toString)
-      Seq("discrete_features" -> createAndCacheTempView(discreteDf, "discrete_features"),
-        "distinct_stats" -> distinctStats
-      ).asJson
+      (discreteDf, statMap)
     }
+  }
+
+  def convertToHistogram(inputView: String, discreteThres: Int): String = {
+    logBasedOnLevel(s"convertToHistogram called with: inputView=$inputView " +
+      s"discreteThres=$discreteThres")
+
+    val (discreteDf, _) = doConvertToDiscreteFeatures(inputView, discreteThres)
+
+    val histogramDf = withSparkSession { sparkSession =>
+      withTempView(discreteDf, cache = true) { discreteView =>
+        discreteDf.columns.map { attr =>
+          sparkSession.sql(
+            s"""
+               |SELECT '$attr' attribute, collect_list(b) histogram
+               |FROM (
+               |  SELECT named_struct('value', $attr, 'cnt', COUNT(1)) b
+               |  FROM $discreteView
+               |  GROUP BY $attr
+               |)
+             """.stripMargin)
+        }.reduce(_.union(_))
+      }
+    }
+    Seq("histogram" -> createAndCacheTempView(histogramDf)).asJson
+  }
+
+  def convertToDiscreteFeatures(
+      dbName: String,
+      tableName: String,
+      rowId: String,
+      discreteThres: Int): String = {
+    require(rowId.nonEmpty, s"$rowId should be a non-empty string.")
+    logBasedOnLevel(s"convertToDiscreteFeatures called with: dbName=$dbName tableName=$tableName " +
+      s"rowId=$rowId discreteThres=$discreteThres")
+    val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
+    val rowCnt = inputDf.count()
+    if (inputDf.selectExpr(rowId).distinct().count() != rowCnt) {
+      throw new SparkException(s"Uniqueness does not hold in column '$rowId' " +
+        s"of table '$dbName.$tableName'.")
+    }
+    val (discreteDf, statMap) = doConvertToDiscreteFeatures(qualifiedName, discreteThres, Set(rowId))
+    val distinctStats = statMap.mapValues(_.distinctCount.toString)
+    Seq("discrete_features" -> createAndCacheTempView(discreteDf),
+      "distinct_stats" -> distinctStats
+    ).asJson
   }
 
   def repairAttrsFrom(repairedCells: String, dbName: String, tableName: String, rowId: String): String = {
@@ -180,7 +211,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
              """.stripMargin)
         }
       }
-      Seq("repaired" -> createAndCacheTempView(repaired, "repaired")).asJson
+      Seq("repaired" -> createAndCacheTempView(repaired)).asJson
     }
   }
 
@@ -221,7 +252,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
              |ON $discreteAttrView.$rowId = $errAttrView.$rowId
            """.stripMargin)
       }
-      Seq("repair_base" -> createAndCacheTempView(repairBase, "repair_base")).asJson
+      Seq("repair_base" -> createAndCacheTempView(repairBase)).asJson
     }
   }
 
@@ -275,7 +306,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
              """.stripMargin)
         }
       }
-      Seq("attr_stats" -> createAndCacheTempView(statDf, "attr_stats")).asJson
+      Seq("attr_stats" -> createAndCacheTempView(statDf)).asJson
     }
   }
 
@@ -565,7 +596,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
       }
 
       val cellDomainView = withJobDescription("compute domain values with posteriori probability") {
-        createAndCacheTempView(cellDomainDf, "cell_domain")
+        createAndCacheTempView(cellDomainDf)
       }
       // Number of rows in `cellDomainView` is the same with the number of error cells
       // assert(cellDomainDf.count == sparkSession.table(errCellView).count)

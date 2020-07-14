@@ -347,6 +347,26 @@ class ScavengerRepairModel(ApiBase):
         assert len(error_attrs) > 0
         return fixed_df, dirty_df, error_attrs
 
+    def __convert_to_histogram(self, df):
+        temp_view = self.__temp_name()
+        df.createOrReplaceTempView(temp_view)
+        ret_as_json = self.__svg_api.convertToHistogram(temp_view, self.discrete_thres)
+        return self.spark.table(json.loads(ret_as_json)["histogram"])
+
+    def __show_histogram(self, df):
+        import matplotlib.pyplot as plt
+        fig = plt.figure()
+        num_targets = df.count()
+        for index, row in enumerate(df.collect()):
+            pdf = df.where("attribute = '%s'" % row.attribute).selectExpr("inline(histogram)").toPandas()
+            f = fig.add_subplot(num_targets, 1, index + 1)
+            f.bar(pdf["value"], pdf["cnt"])
+            f.set_xlabel(row.attribute)
+            f.set_ylabel("cnt")
+
+        fig.tight_layout()
+        fig.show()
+
     def __select_training_rows(self, fixed_df):
         # Prepares training data to repair the remaining error cells
         # TODO: Needs more smart sampling, e.g., down-sampling
@@ -648,7 +668,8 @@ class ScavengerRepairModel(ApiBase):
             (score_df.where("score <= %s" % percentile.thres).count(), self.repair_delta, num_error_cells))
         return top_delta_repairs_df
 
-    def __run(self, env, input_df, continous_attrs, detect_errors_only, compute_repair_candidate_prob, repair_data):
+    def __run(self, env, input_df, continous_attrs, detect_errors_only, compute_training_target_hist,
+            compute_repair_candidate_prob, repair_data):
         #################################################################################
         # 1. Error Detection Phase
         #################################################################################
@@ -683,6 +704,13 @@ class ScavengerRepairModel(ApiBase):
 
         # Selects rows for training, build models, and repair cells
         fixed_df, dirty_df, error_attrs = self.__split_clean_and_dirty_rows(env, error_cells_df)
+        if compute_training_target_hist:
+            target_columns = list(map(lambda row: row.attribute, error_attrs))
+            df = fixed_df.selectExpr(target_columns)
+            hist_df = self.__convert_to_histogram(df)
+            # self.__show_histogram(hist_df)
+            return hist_df
+
         train_df = self.__select_training_rows(fixed_df)
         if train_df.count() <= float(env["num_input_rows"]) * 0.10:
             raise ValueError("Number of clean training rows must be greater than the 10% number of input rows")
@@ -734,7 +762,8 @@ class ScavengerRepairModel(ApiBase):
             assert clean_df.count() == input_df.count()
             return clean_df
 
-    def run(self, detect_errors_only=False, compute_repair_candidate_prob=False, repair_data=False):
+    def run(self, detect_errors_only=False, compute_repair_candidate_prob=False,
+            compute_training_target_hist=False, repair_data=False):
         if self.table_name is None or self.row_id is None:
             raise ValueError("`setTableName` and `setRowId` should be called before repairing")
         if self.maximal_likelihood_repair_enabled and self.repair_delta is None:
@@ -766,7 +795,8 @@ class ScavengerRepairModel(ApiBase):
                 "when continous attributes found")
 
         __start = time.time()
-        df = self.__run(env, input_df, continous_attrs, detect_errors_only, compute_repair_candidate_prob, repair_data)
+        df = self.__run(env, input_df, continous_attrs, detect_errors_only, compute_training_target_hist,
+            compute_repair_candidate_prob, repair_data)
         self.outputToConsole("!!!Total processing time is %s(s)!!!" % (time.time() - __start))
         return df
 
