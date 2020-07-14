@@ -639,11 +639,13 @@ class ScavengerRepairModel(ApiBase):
             .selectExpr(self.row_id, "attribute", "current.value current_value", "repaired.value repaired", score_expr)
 
         assert self.repair_delta is not None
-        num_error_cells = pmf_df.count()
-        percent = min(1.0, float(self.repair_delta) / num_error_cells)
-        row = score_df.selectExpr("percentile(score, %s) thres" % percent).collect()[0]
-        top_delta_repairs_expr = "IF(score <= %s, repaired, current_value) repaired" % row.thres
+        num_error_cells = error_cells_df.count()
+        percent = min(1.0, self.repair_delta / num_error_cells)
+        percentile = score_df.selectExpr("percentile(score, %s) thres" % percent).collect()[0]
+        top_delta_repairs_expr = "IF(score <= %s, repaired, current_value) repaired" % percentile.thres
         top_delta_repairs_df = score_df.selectExpr(self.row_id, "attribute", top_delta_repairs_expr)
+        self.outputToConsole("[Repairing Phase] %s repair updates (delta=%s) selected among %s candidates..." % \
+            (score_df.where("score <= %s" % percentile.thres).count(), self.repair_delta, num_error_cells))
         return top_delta_repairs_df
 
     def __run(self, env, input_df, continous_attrs, detect_errors_only, compute_repair_candidate_prob, repair_data):
@@ -713,11 +715,10 @@ class ScavengerRepairModel(ApiBase):
             if not repair_data:
                 return top_delta_repairs_df
 
+            # If `repair_data` is True, applys the selected repair updates into `dirty`
             env["top_delta_repairs"] = self.__temp_name("top_delta_repairs")
             top_delta_repairs_df.createOrReplaceTempView(env["top_delta_repairs"])
             env.update(json.loads(self.__svg_api.repairAttrsFrom(env["top_delta_repairs"], "", env["dirty"], self.row_id)))
-            self.outputToConsole("[Repairing Phase] %s repair updates applied among %s candidates..." % \
-                (score_df.where("score <= %s" % row.thres).count(), num_error_cells))
             repaired_df = self.spark.table(env["repaired"])
 
         # If `repair_data` is False, returns repair candidates whoes
@@ -745,7 +746,7 @@ class ScavengerRepairModel(ApiBase):
         # If `self.repair_updates` specified, just applies repair updates
         if self.repair_updates is not None:
             repair_updates_view = self.__temp_view(self.repair_updates) \
-                if isinstance(self.repair_updates, DataFrame) else str(self.repair_updates_view)
+                if isinstance(self.repair_updates, DataFrame) else str(self.repair_updates)
             ret_as_json = self.__svg_api.repairAttrsFrom(repair_updates_view, self.db_name, self.table_name, self.row_id)
             return self.spark.table(json.loads(ret_as_json)["repaired"])
 

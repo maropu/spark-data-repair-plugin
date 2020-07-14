@@ -41,7 +41,6 @@ logging.basicConfig(level=logging.WARN)
 # Since 3.0, `spark.sql.crossJoin.enabled` is set to true by default
 spark.sql("SET spark.sql.crossJoin.enabled=true")
 spark.sql("SET spark.sql.cbo.enabled=true")
-spark.sql("SET spark.sql.cbo.enabled=true")
 
 # Tunes # shuffle partitions
 num_tasks_per_core = 1
