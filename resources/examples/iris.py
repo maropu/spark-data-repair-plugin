@@ -7,7 +7,7 @@ spark.read \
   .write \
   .saveAsTable("iris")
 
-scavenger.repair().misc() \
+scavenger.misc() \
   .setDbName("default") \
   .setTableName("iris") \
   .setRowId("tid") \
@@ -33,7 +33,7 @@ repaired_df = scavenger.repair() \
   .setTableName("iris") \
   .setRowId("tid") \
   .setInferenceOrder("entropy") \
-  .run(return_repair_candidates=True)
+  .run()
 
 # Computes performance numbers for continous attributes (RMSE)
 n = repaired_df.count()

@@ -5,7 +5,7 @@ spark.read \
   .write \
   .saveAsTable("adult")
 
-scavenger.repair().misc() \
+scavenger.misc() \
   .setDbName("default") \
   .setTableName("adult") \
   .setRowId("tid") \
@@ -38,7 +38,7 @@ repaired_df = scavenger.repair() \
   .setTableName("adult") \
   .setRowId("tid") \
   .setConstraints("./testdata/adult_constraints.txt") \
-  .run(return_repair_candidates=True)
+  .run()
 
 # Computes performance numbers (precision & recall)
 #  - Precision: the fraction of correct repairs, i.e., repairs that match

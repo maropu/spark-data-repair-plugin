@@ -76,14 +76,12 @@ only showing top 1 row
 
 >>> 
 >>> # Detects error cells then repairs them
-... scavenger.repair() \
+... val repaired_df = scavenger.repair() \
 ...   .setDbName("default") \
 ...   .setTableName("hospital") \
 ...   .setRowId("tid") \
 ...   .setConstraints("./testdata/hospital_constraints.txt") \
-...   .run(return_repair_candidates=True) \
-...   .write \
-...   .saveAsTable("hospital_repaired")
+...   .run()
 Detecting errors in a table `default.hospital` (1000 rows x 20 cols)...
 ...
 
@@ -92,9 +90,9 @@ Detecting errors in a table `default.hospital` (1000 rows x 20 cols)...
 ... #  - Precision: the fraction of correct repairs, i.e., repairs that match
 ... #    the ground truth, over the total number of repairs performed
 ... #  - Recall: correct repairs over the total number of errors
-... pdf = spark.table("hospital_repaired") \
+... pdf = repaired_df \
 ...   .join(spark.table("hospital_clean"), ["tid", "attribute"], "inner")
->>> rdf = spark.table("hospital_repaired") \
+>>> rdf = repaired_df \
 ...   .join(spark.table("error_cells_ground_truth"), ["tid", "attribute"], "right_outer")
 >>> 
 >>> precision = pdf.where("repaired <=> correct_val").count() / pdf.count()

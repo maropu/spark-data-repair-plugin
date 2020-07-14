@@ -5,7 +5,7 @@ spark.read \
   .write \
   .saveAsTable("hospital")
 
-scavenger.repair().misc() \
+scavenger.misc() \
   .setDbName("default") \
   .setTableName("hospital") \
   .setRowId("tid") \
@@ -40,7 +40,7 @@ repaired_df = scavenger.repair() \
   .setConstraints("./testdata/hospital_constraints.txt") \
   .setDiscreteThreshold(100) \
   .setInferenceOrder("domain") \
-  .run(return_repair_candidates=True)
+  .run()
 
 # Computes performance numbers (precision & recall)
 #  - Precision: the fraction of correct repairs, i.e., repairs that match

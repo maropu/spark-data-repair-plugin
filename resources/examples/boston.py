@@ -7,7 +7,7 @@ spark.read \
   .write \
   .saveAsTable("boston")
 
-scavenger.repair().misc() \
+scavenger.misc() \
   .setDbName("default") \
   .setTableName("boston") \
   .setRowId("tid") \
@@ -42,7 +42,7 @@ repaired_df = scavenger.repair() \
   .setDiscreteThreshold(30) \
   .setMaxTrainingColumnNum(14) \
   .setInferenceOrder("entropy") \
-  .run(return_repair_candidates=True)
+  .run()
 
 # Computes performance numbers for discrete attributes (precision & recall)
 #  - Precision: the fraction of correct repairs, i.e., repairs that match
