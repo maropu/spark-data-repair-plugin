@@ -121,17 +121,17 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
     val histogramDf = withSparkSession { sparkSession =>
       withTempView(discreteDf, cache = true) { discreteView =>
-        discreteDf.columns.map { attr =>
-          sparkSession.sql(
-            s"""
-               |SELECT '$attr' attribute, collect_list(b) histogram
-               |FROM (
-               |  SELECT named_struct('value', $attr, 'cnt', COUNT(1)) b
-               |  FROM $discreteView
-               |  GROUP BY $attr
-               |)
-             """.stripMargin)
-        }.reduce(_.union(_))
+        val sqls = discreteDf.columns.map { attr =>
+          s"""
+             |SELECT '$attr' attribute, collect_list(b) histogram
+             |FROM (
+             |  SELECT named_struct('value', $attr, 'cnt', COUNT(1)) b
+             |  FROM $discreteView
+             |  GROUP BY $attr
+             |)
+           """.stripMargin
+        }
+        sparkSession.sql(sqls.mkString(" UNION ALL "))
       }
     }
     Seq("histogram" -> createAndCacheTempView(histogramDf)).asJson
