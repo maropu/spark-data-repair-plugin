@@ -61,15 +61,15 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
 
       withTempView(inputDf, cache = true) { inputView =>
         // Detects error erroneous cells in a given table
-        val errCellDf = inputDf.columns.map { attr =>
-          sparkSession.sql(
-            s"""
-               |SELECT $rowId, '$attr' AS attribute
-               |FROM $inputView
-               |WHERE $attr IS NULL
-             """.stripMargin)
+        val sqls = inputDf.columns.map { attr =>
+          s"""
+             |SELECT $rowId, '$attr' AS attribute
+             |FROM $inputView
+             |WHERE $attr IS NULL
+           """.stripMargin
+        }
 
-        }.reduce(_.union(_)).cache()
+        val errCellDf = sparkSession.sql(sqls.mkString(" UNION ALL "))
 
         withTempView(errCellDf) { errCellView =>
           val attrsToRepair = {
@@ -123,32 +123,24 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
             })
 
             // Detects error erroneous cells in a given table
-            val errCellDf = constraints.predicates.flatMap { preds =>
-              val queryToValidateConstraint =
-                s"""
-                   |SELECT t1.$rowId
-                   |FROM $inputView AS ${constraints.leftTable}
-                   |WHERE EXISTS (
-                   |  SELECT $rowId
-                   |  FROM $inputView AS ${constraints.rightTable}
-                   |  WHERE ${preds.mkString(" AND ")}
-                   |)
-                 """.stripMargin
+            val sqls = constraints.predicates.map { preds =>
+              val attrs = preds.flatMap(_.references)
+              s"""
+                 |SELECT $rowId, explode(array(${attrs.map(a => s"'$a'").mkString(",")})) attribute
+                 |FROM (
+                 |  SELECT t1.$rowId
+                 |  FROM $inputView AS ${constraints.leftTable}
+                 |  WHERE EXISTS (
+                 |    SELECT $rowId
+                 |    FROM $inputView AS ${constraints.rightTable}
+                 |    WHERE ${preds.mkString(" AND ")}
+                 |  )
+                 |)
+               """.stripMargin
+            }
 
-              val df = sparkSession.sql(queryToValidateConstraint)
-              logBasedOnLevel(
-                s"""
-                   |Number of violate tuples: ${df.count}
-                   |Query to validate constraints:
-                   |$queryToValidateConstraint
-                 """.stripMargin)
-
-              preds.flatMap(_.references).map { attr =>
-                df.selectExpr(rowId, s"'$attr' AS attribute")
-              }
-            }.reduce(_.union(_)).distinct().cache()
-
-            val errCellView = createAndCacheTempView(errCellDf, "err_cells_from_constraints")
+            val errCellDf = sparkSession.sql(sqls.mkString(" UNION ALL "))
+            val errCellView = createAndCacheTempView(errCellDf)
             loggingErrorStats(
               "Constraint-based error detector",
               qualifiedName,
@@ -190,27 +182,28 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
             s"percentile($attr, array(0.25, 0.75))"
           }
         }
+
         val percentileRow = sparkSession.sql(
           s"""
              |SELECT ${percentileExprs.mkString(", ")}
              |FROM $qualifiedName
            """.stripMargin).collect.head
 
-        val errCellDf = continousAttrs.zipWithIndex.map { case (attr, i) =>
+        val sqls = continousAttrs.zipWithIndex.map { case (attr, i) =>
           // Detects outliers simply based on a Box-and-Whisker plot
           // TODO: Needs to support more sophisticated ways to detect outliers
           val Seq(q1, q3) = percentileRow.getSeq[Double](i)
           val (lower, upper) = (q1 - 1.5 * (q3 - q1), q3 + 1.5 * (q3 - q1))
           logBasedOnLevel(s"Non-outlier values in $attr should be in [$lower, $upper]")
-          sparkSession.sql(
-            s"""
-               |SELECT $rowId, '$attr' attribute
-               |FROM $qualifiedName
-               |WHERE $attr < $lower OR $attr > $upper
-             """.stripMargin)
-        }.reduce(_.union(_)).cache()
+          s"""
+             |SELECT $rowId, '$attr' attribute
+             |FROM $qualifiedName
+             |WHERE $attr < $lower OR $attr > $upper
+           """.stripMargin
+        }
 
-        val errCellView = createAndCacheTempView(errCellDf, "err_cells_from_outliers")
+        val errCellDf = sparkSession.sql(sqls.mkString(" UNION ALL "))
+        val errCellView = createAndCacheTempView(errCellDf)
         loggingErrorStats(
           "Outlier-based error detector",
           qualifiedName,

@@ -334,8 +334,8 @@ class ScavengerRepairModel(ApiBase):
         ret_as_json = self.__svg_api.repairAttrsFrom(env["weak"], "", env["repair_base"], self.row_id)
         env["partial_repaired"] = json.loads(ret_as_json)["repaired"]
 
-        logging.info("%d suspicious cells fixed by the computed cell domain `%s` and %d error cells remaining" %
-            (self.spark.table(env["weak"]).count(), env["cell_domain"], error_cells_df.count()))
+        self.outputToConsole("[Error Detection Phase] %d suspicious cells fixed and %d error cells remaining..." % \
+            (self.spark.table(env["weak"]).count(), error_cells_df.count()))
 
         return error_cells_df
 
