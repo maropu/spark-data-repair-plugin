@@ -154,6 +154,9 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
     }
   }
 
+  // TODO: Needs to support more sophisticated outlier detectors, e.g., a nonparametric histogram
+  // approach and a correlation based approach (named 'OD' in the HoloDetect paper [1]).
+  // We might be able to compute outliers by reusing [[ScavengerRepairApi.computeDomainInErrorCells]].
   def detectErrorCellsFromOutliers(
       dbName: String,
       tableName: String,
