@@ -788,7 +788,7 @@ class ScavengerRepairModel(ApiBase):
         input_df, continous_attrs = self.__check_input(env)
 
         if compute_repair_candidate_prob and len(continous_attrs) != 0:
-            raise ValueError("Cannot compute probability mass function of repairs" \
+            raise ValueError("Cannot compute probability mass function of repairs " \
                 "when continous attributes found")
         if self.maximal_likelihood_repair_enabled and len(continous_attrs) != 0:
             raise ValueError("Cannot enable maximal likelihood repair mode " \
