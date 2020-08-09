@@ -39,7 +39,7 @@ class BaseScavengerRepairApi extends Logging {
 
   protected val continousTypes: Set[DataType] = Set(FloatType, DoubleType)
   protected val supportedType: Set[DataType] = Set(StringType, BooleanType, ByteType, ShortType,
-    IntegerType, LongType, DateType, TimestampType) ++ continousTypes
+    IntegerType, LongType) ++ continousTypes
 
   protected implicit def seqToJsonEncoder(ar: Seq[(String, AnyRef)]) = JsonEncoder(ar)
 
@@ -61,7 +61,7 @@ class BaseScavengerRepairApi extends Logging {
     }
   }
 
-  protected def checkAndGetInputTable(dbName: String, tableName: String, rowId: String = "")
+  private[python] def checkAndGetInputTable(dbName: String, tableName: String, rowId: String = "")
     : (DataFrame, String) = {
     assert(SparkSession.getActiveSession.nonEmpty)
     val spark = SparkSession.getActiveSession.get
@@ -70,7 +70,7 @@ class BaseScavengerRepairApi extends Logging {
     // Checks if the given table has a column named `rowId`
     if (rowId.nonEmpty && !inputDf.columns.contains(rowId)) {
       // TODO: Implicitly adds unique row IDs if they don't exist in a given table
-      throw new SparkException(s"Column '$rowId' does not exist in $inputName.")
+      throw new SparkException(s"Column '$rowId' does not exist in '$inputName'.")
     }
     (inputDf, inputName)
   }
@@ -80,7 +80,7 @@ class BaseScavengerRepairApi extends Logging {
     val spark = SparkSession.getActiveSession.get
     val columnsInRepairedCells = spark.table(tableName).columns
     if (!expectedColumns.forall(columnsInRepairedCells.contains)) {
-      throw new SparkException(s"$tableName must have " +
+      throw new SparkException(s"'$tableName' must have " +
         s"${expectedColumns.map(c => s"'$c'").mkString(", ")} columns.")
     }
   }
@@ -93,7 +93,7 @@ class BaseScavengerRepairApi extends Logging {
     val tableAttrSet = tableAttrs.toSet
     val absentAttrs = attrsInConstraints.filterNot(tableAttrSet.contains)
     if (absentAttrs.nonEmpty) {
-      logWarning(s"Non-existent constraint attributes found in $inputName: ${absentAttrs.mkString(", ")}")
+      logWarning(s"Non-existent constraint attributes found in '$inputName': ${absentAttrs.mkString(", ")}")
       val newPredEntries = allConstraints.predicates.filter { _.forall { p =>
         tableAttrSet.contains(p.leftAttr) && tableAttrSet.contains(p.rightAttr)
       }}
