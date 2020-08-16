@@ -800,3 +800,7 @@ class ScavengerRepairModel(ApiBase):
         self.outputToConsole("!!!Total processing time is %s(s)!!!" % (time.time() - __start))
         return df
 
+    def version(self):
+        # TODO: Extracts a version string from the root pom.xml
+        return "0.1.0-spark3.0-EXPERIMENTAL"
+
