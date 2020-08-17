@@ -61,10 +61,14 @@ class BaseScavengerRepairApi extends Logging {
     }
   }
 
+  protected def activeSparkSession(): SparkSession = {
+    assert(SparkSession.getActiveSession.nonEmpty, "invalid use")
+    SparkSession.getActiveSession.get
+  }
+
   private[python] def checkAndGetInputTable(dbName: String, tableName: String, rowId: String = "")
     : (DataFrame, String) = {
-    assert(SparkSession.getActiveSession.nonEmpty)
-    val spark = SparkSession.getActiveSession.get
+    val spark = activeSparkSession()
     val inputName = if (dbName.nonEmpty) s"$dbName.$tableName" else tableName
     val inputDf = spark.table(inputName)
     // Checks if the given table has a column named `rowId`
@@ -76,8 +80,7 @@ class BaseScavengerRepairApi extends Logging {
   }
 
   protected def checkIfColumnsExistIn(tableName: String, expectedColumns: Seq[String]): Unit = {
-    assert(SparkSession.getActiveSession.nonEmpty)
-    val spark = SparkSession.getActiveSession.get
+    val spark = activeSparkSession()
     val columnsInRepairedCells = spark.table(tableName).columns
     if (!expectedColumns.forall(columnsInRepairedCells.contains)) {
       throw new SparkException(s"'$tableName' must have " +
@@ -125,8 +128,7 @@ class BaseScavengerRepairApi extends Logging {
   }
 
   protected def createEmptyTable(schema: String): DataFrame = {
-    assert(SparkSession.getActiveSession.nonEmpty)
-    val spark = SparkSession.getActiveSession.get
+    val spark = activeSparkSession()
     spark.createDataFrame(spark.sparkContext.emptyRDD[Row], StructType.fromDDL(schema))
   }
 }

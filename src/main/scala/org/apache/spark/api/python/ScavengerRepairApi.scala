@@ -45,8 +45,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
   case class ColumnStat(distinctCount: Long, min: Option[Any], max: Option[Any])
 
   private def getColumnStats(inputName: String): Map[String, ColumnStat] = {
-    assert(SparkSession.getActiveSession.nonEmpty)
-    val spark = SparkSession.getActiveSession.get
+    val spark = activeSparkSession()
     val df = spark.table(inputName)
     val tableStats = {
       val tableNode = df.queryExecution.optimizedPlan.collectLeaves().head.asInstanceOf[LeafNode]
@@ -62,9 +61,8 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
   }
 
   private[python] def computeAndGetTableStats(tableIdentifier: String): Map[String, ColumnStat] = {
-    assert(SparkSession.getActiveSession.isDefined)
-    val spark = SparkSession.getActiveSession.get
     // For safe guards, just cache it for `ANALYZE TABLE`
+    val spark = activeSparkSession()
     spark.table(tableIdentifier).cache()
     spark.sql(
       s"""
@@ -599,7 +597,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
         createAndCacheTempView(cellDomainDf)
       }
       // Number of rows in `cellDomainView` is the same with the number of error cells
-      // assert(cellDomainDf.count == sparkSession.table(errCellView).count)
+      assert(cellDomainDf.count == sparkSession.table(errCellView).count)
       Seq("cell_domain" -> cellDomainView,
         "pairwise_attr_stats" -> pairWiseStatMap.mapValues(seqToJson)
       ).asJson

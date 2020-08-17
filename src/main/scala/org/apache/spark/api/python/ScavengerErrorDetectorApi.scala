@@ -26,9 +26,8 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
       inputName: String,
       errCellView: String,
       attrsToRepair: Seq[String]): Unit = {
-    assert(SparkSession.getActiveSession.nonEmpty)
     logBasedOnLevel({
-      val spark = SparkSession.getActiveSession.get
+      val spark = activeSparkSession()
       logBasedOnLevel({
         val errorNumOfEachAttribute = {
           val df = spark.sql(s"SELECT attribute, COUNT(1) FROM $errCellView GROUP BY attribute")
