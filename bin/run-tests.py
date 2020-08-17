@@ -32,14 +32,16 @@ def print_red(text):
 
 SCAVENGER_REPAIR_API_LIB = ""
 SCAVENGER_MODULE_PATH = ""
+SCAVENGER_TEST_DATA = ""
 
 LOGGER = logging.getLogger()
 
 def run_individual_python_test(target_dir, test_name):
     env = dict(os.environ)
     env.update({
-        'PYTHONPATH': '/Users/maropu/Repositories/scavenger/bin',
-        'SCAVENGER_REPAIR_API_LIB': SCAVENGER_MODULE_PATH,
+        'PYTHONPATH': SCAVENGER_MODULE_PATH,
+        'SCAVENGER_REPAIR_API_LIB': SCAVENGER_REPAIR_API_LIB,
+        'SCAVENGER_TEST_DATA': SCAVENGER_TEST_DATA,
         'SPARK_TESTING': '1'
     })
 
@@ -87,11 +89,13 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument('--package', dest='package', type=str, required=True)
     parser.add_argument('--mod', dest='module', type=str, required=True)
+    parser.add_argument('--data', dest='data', type=str, required=True)
     args = parser.parse_args()
 
     # Sets enveironmental variables for tests
     SCAVENGER_REPAIR_API_LIB = args.package
     SCAVENGER_MODULE_PATH = args.module
+    SCAVENGER_TEST_DATA = args.data
 
     logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(message)s")
     LOGGER.info("Running Python tests...")

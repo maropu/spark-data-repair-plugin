@@ -36,5 +36,5 @@ if [ ! -e "$PACKAGE_JAR" ]; then
 fi
 
 exec python -u ${ROOT_DIR}/bin/run-tests.py \
-  --package=${PACKAGE_JAR} --mod ${ROOT_DIR}/bin "$@"
+  --package=${PACKAGE_JAR} --mod ${ROOT_DIR}/bin --data ${ROOT_DIR}/testdata "$@"
 

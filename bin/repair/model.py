@@ -38,7 +38,7 @@ from repair.distances import *
 class ScavengerRepairModel(ApiBase):
 
     # TODO: Prohibit instantiation directly
-    def __init__(self, output, db_name):
+    def __init__(self, output="", db_name=""):
         super().__init__()
 
         # Basic parameters

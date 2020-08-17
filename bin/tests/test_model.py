@@ -37,22 +37,47 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
 
     @classmethod
     def conf(cls):
-        return SparkConf().set('spark.jars', os.getenv('SCAVENGER_REPAIR_API_LIB'))
+        return SparkConf() \
+            .set("spark.jars", os.getenv("SCAVENGER_REPAIR_API_LIB")) \
+            .set("spark.sql.crossJoin.enabled", "true") \
+            .set("spark.sql.cbo.enabled", "true") \
+            .set("spark.sql.statistics.histogram.enabled", "true") \
+            .set("spark.sql.statistics.histogram.numBins", "254")
 
     @classmethod
     def setUpClass(cls):
         super(ScavengerRepairModelTests, cls).setUpClass()
 
-        # Initializes a test target
-        cls.test_model = ScavengerRepairModel("", "default")
+        # Tunes # shuffle partitions
+        num_parallelism = cls.spark.sparkContext.defaultParallelism
+        cls.spark.sql("SET spark.sql.shuffle.partitions=%s" % num_parallelism)
+
+        # Loads test data
+        cls.spark.read.format("csv").option("header", True) \
+            .load("%s/adult.csv" % os.getenv("SCAVENGER_TEST_DATA")) \
+            .createOrReplaceTempView("test_data_adult")
 
     def test_basic(self):
-        self.assertEqual(self.test_model.version(), "0.1.0-spark3.0-EXPERIMENTAL")
+        test_model = ScavengerRepairModel()
+        df = test_model.setTableName("test_data_adult").setRowId("tid").run()
+        self.assertEqual(df.orderBy("tid", "attribute").collect(), [
+            Row(tid="12", attribute="Age", current_value=None, repaired="18-21"),
+            Row(tid="12", attribute="Sex", current_value=None, repaired="Female"),
+            Row(tid="16", attribute="Income", current_value=None, repaired="MoreThan50K"),
+            Row(tid="3", attribute="Sex", current_value=None, repaired="Female"),
+            Row(tid="5", attribute="Age", current_value=None, repaired="18-21"),
+            Row(tid="5", attribute="Income", current_value=None, repaired="MoreThan50K"),
+            Row(tid="7", attribute="Sex", current_value=None, repaired="Female")
+        ])
 
-if __name__ == '__main__':
+    def test_version(self):
+        self.assertEqual(ScavengerRepairModel().version(), \
+            "0.1.0-spark3.0-EXPERIMENTAL")
+
+if __name__ == "__main__":
     try:
         import xmlrunner
-        testRunner = xmlrunner.XMLTestRunner(output='target/test-reports', verbosity=2)
+        testRunner = xmlrunner.XMLTestRunner(output="target/test-reports", verbosity=2)
     except ImportError:
         testRunner = None
     unittest.main(testRunner=testRunner, verbosity=2)
