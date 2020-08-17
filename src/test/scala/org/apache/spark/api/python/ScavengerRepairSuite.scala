@@ -84,14 +84,28 @@ class ScavengerRepairSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  ignore("computeDomainSizes") {
+  test("computeAndGetTableStats") {
+    withTempView("t") {
+      spark.range(30).selectExpr(
+        "CAST(id % 2 AS BOOLEAN) AS v0",
+        "CAST(id % 3 AS LONG) AS v1",
+        "CAST(id % 8 AS DOUBLE) AS v2",
+        "CAST(id % 6 AS STRING) AS v3"
+      ).createOrReplaceTempView("t")
+      val statMap = ScavengerRepairApi.computeAndGetTableStats("t")
+      assert(statMap.mapValues(_.distinctCount) ===
+        Map("v0" -> 2, "v1" -> 3, "v2" -> 8, "v3" -> 6))
+    }
+  }
+
+  test("computeDomainSizes") {
     withTempView("t") {
       spark.range(30).selectExpr("id % 3 AS v0", "id % 8 AS v1", "id % 6 AS v2", "id % 9 AS v3")
         .createOrReplaceTempView("t")
       val jsonString = ScavengerRepairApi.computeDomainSizes("t")
       val jsonObj = parse(jsonString)
       val data = jsonObj.asInstanceOf[JObject].values
-      assert(data("distinct_stats") === "")
+      assert(data("distinct_stats") === Map("v0" -> 3, "v1" -> 8, "v2" -> 6, "v3" -> 9))
     }
   }
 }

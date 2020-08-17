@@ -42,14 +42,14 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     ).asJson
   }
 
-  private case class ColumnStat(distinctCount: Long, min: Option[Any], max: Option[Any])
+  case class ColumnStat(distinctCount: Long, min: Option[Any], max: Option[Any])
 
   private def getColumnStats(inputName: String): Map[String, ColumnStat] = {
     assert(SparkSession.getActiveSession.nonEmpty)
     val spark = SparkSession.getActiveSession.get
     val df = spark.table(inputName)
     val tableStats = {
-      val tableNode = df.queryExecution.analyzed.collectLeaves().head.asInstanceOf[LeafNode]
+      val tableNode = df.queryExecution.optimizedPlan.collectLeaves().head.asInstanceOf[LeafNode]
       tableNode.computeStats()
     }
     val statMap = tableStats.attributeStats.map { kv =>
@@ -61,7 +61,7 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
     statMap
   }
 
-  private def computeAndGetTableStats(tableIdentifier: String): Map[String, ColumnStat] = {
+  private[python] def computeAndGetTableStats(tableIdentifier: String): Map[String, ColumnStat] = {
     assert(SparkSession.getActiveSession.isDefined)
     val spark = SparkSession.getActiveSession.get
     // For safe guards, just cache it for `ANALYZE TABLE`
