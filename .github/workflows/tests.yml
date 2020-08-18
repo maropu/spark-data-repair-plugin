@@ -39,4 +39,10 @@ jobs:
         run: |
           ./build/mvn -q clean package
           ./bin/run-tests
+      - name: Upload test results to report
+        if: always()
+        uses: actions/upload-artifact@v2
+        with:
+          name: test-results-jdk${{ matrix.java }}-python${{ matrix.python}}
+          path: "./target/surefire-reports/*.xml"
 
