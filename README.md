@@ -1,4 +1,8 @@
 [![License](http://img.shields.io/:license-Apache_v2-blue.svg)](https://github.com/maropu/scavenger/blob/master/LICENSE)
+[![Build Status](https://travis-ci.org/maropu/scavenger.svg?branch=master)](https://travis-ci.org/maropu/scavenger)
+<!---
+[![Coverage Status](https://coveralls.io/repos/github/maropu/scavenger/badge.svg?branch=master)](https://coveralls.io/github/maropu/scavenger?branch=master)
+-->
 
 This is an experimental prototype to provide data repair functinalites for Spark catalog tables.
 Clean and consistent data can have a positive impact on downstream anaysis;
