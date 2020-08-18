@@ -29,6 +29,11 @@ from pyspark.sql.functions import col, udf
 
 from repair.api import *
 
+def load_testdata(spark, filename):
+    fmt = os.path.splitext(filename)[1][1:]
+    return spark.read.format(fmt) \
+        .option("header", True) \
+        .load("%s/%s" % (os.getenv("SCAVENGER_TESTDATA"), filename))
 
 @unittest.skipIf(
     not have_pandas or not have_pyarrow,
@@ -53,22 +58,16 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
         cls.spark.sql("SET spark.sql.shuffle.partitions=%s" % num_parallelism)
 
         # Loads test data
-        cls.spark.read.format("csv").option("header", True) \
-            .load("%s/adult.csv" % os.getenv("SCAVENGER_TEST_DATA")) \
-            .createOrReplaceTempView("test_data_adult")
+        load_testdata(cls.spark, "adult.csv").createOrReplaceTempView("adult")
+        load_testdata(cls.spark, "adult_dirty.csv").createOrReplaceTempView("adult_dirty")
 
     def test_basic(self):
         test_model = ScavengerRepairModel()
-        df = test_model.setTableName("test_data_adult").setRowId("tid").run()
-        self.assertEqual(df.orderBy("tid", "attribute").collect(), [
-            Row(tid="12", attribute="Age", current_value=None, repaired="18-21"),
-            Row(tid="12", attribute="Sex", current_value=None, repaired="Female"),
-            Row(tid="16", attribute="Income", current_value=None, repaired="MoreThan50K"),
-            Row(tid="3", attribute="Sex", current_value=None, repaired="Female"),
-            Row(tid="5", attribute="Age", current_value=None, repaired="18-21"),
-            Row(tid="5", attribute="Income", current_value=None, repaired="MoreThan50K"),
-            Row(tid="7", attribute="Sex", current_value=None, repaired="Female")
-        ])
+        df = test_model.setTableName("adult").setRowId("tid").setErrorCells("adult_dirty").run()
+        repair_expected_df = load_testdata(self.spark, "adult_repair_expected.csv")
+        self.assertEqual(
+            df.orderBy("tid", "attribute").collect(),
+            repair_expected_df.orderBy("tid", "attribute").collect())
 
     def test_version(self):
         self.assertEqual(ScavengerRepairModel().version(), \
