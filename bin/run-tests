@@ -25,8 +25,10 @@ ROOT_DIR="$(cd "`dirname $0`"/..; pwd)"
 # Loads some variables from `pom.xml`
 . ${ROOT_DIR}/bin/package.sh && get_package_variables_from_pom "${ROOT_DIR}"
 
-# Activate a conda virtual env
-. ${ROOT_DIR}/bin/conda.sh && activate_conda_virtual_env "${ROOT_DIR}"
+if [ -z "$TRAVISCI" ]; then
+  # Activate a conda virtual env
+  . ${ROOT_DIR}/bin/conda.sh && activate_conda_virtual_env "${ROOT_DIR}"
+fi
 
 # Resolves a path of the test package
 PACKAGE_JAR="${ROOT_DIR}/target/${PACKAGE_JAR_NAME}"

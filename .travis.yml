@@ -1,6 +1,14 @@
+language: python
+
+dist: trusty
+
 sudo: false
 
-language: scala
+notifications:
+  email: false
+
+python:
+  - "3.6"
 
 jdk:
   - openjdk8
@@ -9,17 +17,15 @@ branches:
   only:
     - master
 
-notifications:
-  email: false
-
-before_install:
-  - wget http://repo.continuum.io/miniconda/Miniconda-latest-Linux-x86_64.sh -O miniconda.sh
-  - chmod +x miniconda.sh
-  - ./miniconda.sh -b  -p /home/travis/miniconda
-  - export PATH=/home/travis/miniconda/bin:$PATH
-  - conda update --yes conda
+# In TravisCI, conda fails because of `InvalidSpecError: Invalid spec: =20190808`,
+# so we use pip instead.
+install:
+  - pip install -r ./bin/requirements.txt
 
 script:
+  # oraclejdk8 enabled by default, so we switch it to openjdk8
+  - java -version
+  - jdk_switcher use openjdk8
   - ./bin/run-travis-tests.sh
 
 # after_success:

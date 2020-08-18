@@ -30,5 +30,5 @@ cd ${ROOT_DIR}
 ./build/mvn -q clean package
 
 # Run tests for Python code
-# ./bin/run-tests
+TRAVISCI=1 ./bin/run-tests
 

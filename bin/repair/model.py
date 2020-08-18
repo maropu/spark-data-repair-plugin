@@ -34,7 +34,6 @@ from repair.base import *
 from repair.detectors import *
 from repair.distances import *
 
-
 class ScavengerRepairModel(ApiBase):
 
     # TODO: Prohibit instantiation directly
