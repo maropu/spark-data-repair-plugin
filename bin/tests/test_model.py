@@ -61,6 +61,43 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
         load_testdata(cls.spark, "adult.csv").createOrReplaceTempView("adult")
         load_testdata(cls.spark, "adult_dirty.csv").createOrReplaceTempView("adult_dirty")
 
+    def test_invalid_params(self):
+        self.assertRaisesRegexp(
+            ValueError,
+            "`setTableName` and `setRowId` should be called before repairing",
+            lambda: ScavengerRepairModel().run())
+        self.assertRaisesRegexp(
+            ValueError,
+            "`setTableName` and `setRowId` should be called before repairing",
+            lambda: ScavengerRepairModel().setTableName("dummyTab").run())
+        self.assertRaisesRegexp(
+            ValueError,
+            "`setRepairDelta` should be called before maximal likelihood repairing",
+            lambda: ScavengerRepairModel().setTableName("dummyTab").setRowId("dummyId") \
+                .setMaximalLikelihoodRepairEnabled(True).run())
+        self.assertRaisesRegexp(
+            ValueError,
+            "inference order must be `error`, `domain`, or `entropy`",
+            lambda: ScavengerRepairModel().setTableName("dummyTab").setRowId("dummyId") \
+                .setInferenceOrder("invalid").run())
+
+    def __assert_exclusive_params(self, func):
+        self.assertRaisesRegexp(ValueError, "cannot be set to True simultaneously", func)
+
+    def test_exclusive_params(self):
+        test_model = ScavengerRepairModel()
+        api = test_model.setTableName("dummyTab").setRowId("dummyId")
+        self.__assert_exclusive_params(
+            lambda: api.run(detect_errors_only=True, compute_repair_candidate_prob=True))
+        self.__assert_exclusive_params(
+            lambda: api.run(detect_errors_only=True, compute_training_target_hist=True))
+        self.__assert_exclusive_params(
+            lambda: api.run(detect_errors_only=True, repair_data=True))
+        self.__assert_exclusive_params(
+            lambda: api.run(compute_repair_candidate_prob=True, compute_training_target_hist=True))
+        self.__assert_exclusive_params(
+            lambda: api.run(compute_repair_candidate_prob=True, repair_data=True))
+
     def test_basic(self):
         test_model = ScavengerRepairModel()
         df = test_model.setTableName("adult").setRowId("tid").setErrorCells("adult_dirty").run()

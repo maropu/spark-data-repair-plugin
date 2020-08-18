@@ -772,6 +772,13 @@ class ScavengerRepairModel(ApiBase):
             raise ValueError("inference order must be `error`, `domain`, or `entropy`, but `%s` found" % \
                 self.inference_order)
 
+        exclusive_param_list = [detect_errors_only, compute_repair_candidate_prob, \
+            compute_training_target_hist, repair_data]
+        if exclusive_param_list.count(True) > 1:
+            raise ValueError("`detect_errors_only`, `compute_repair_candidate_prob`, " \
+                "`compute_training_target_hist`, and `repair_data` cannot " \
+                "be set to True simultaneously")
+
         # If `self.repair_updates` specified, just applies repair updates
         if self.repair_updates is not None:
             repair_updates_view = self.__temp_view(self.repair_updates) \
