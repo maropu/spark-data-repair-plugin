@@ -161,7 +161,7 @@ if __name__ == "__main__":
     parser.add_argument('--env_id', dest='env_id', type=str, required=True)
     args = parser.parse_args()
 
-    conda_env_path = os.path.dirname(__file__) + '/conda.yaml'
+    conda_env_path = os.path.dirname(__file__) + '/conda.yml'
     conda_env_name = _get_or_create_conda_env(conda_env_path, args.env_id)
 
     if args.command == 'get_activate_command':

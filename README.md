@@ -1,5 +1,5 @@
 [![License](http://img.shields.io/:license-Apache_v2-blue.svg)](https://github.com/maropu/scavenger/blob/master/LICENSE)
-[![Build Status](https://travis-ci.org/maropu/scavenger.svg?branch=master)](https://travis-ci.org/maropu/scavenger)
+[![Build and test](https://github.com/maropu/scavenger/workflows/Build%20and%20tests/badge.svg)](https://github.com/maropu/scavenger/actions?query=workflow%3A%22Build+and+tests%22)
 <!---
 [![Coverage Status](https://coveralls.io/repos/github/maropu/scavenger/badge.svg?branch=master)](https://coveralls.io/github/maropu/scavenger?branch=master)
 -->

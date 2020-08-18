@@ -1,4 +1,4 @@
-# Synced with ./bin/conda.yaml
+# Synced with ./bin/conda.yml
 pyspark==3.0.0
 pyarrow==0.17.1
 pandas==0.25.3
