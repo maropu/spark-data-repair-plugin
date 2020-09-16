@@ -33,6 +33,7 @@ class ScavengerRepairMisc(ApiBase):
         self.table_name = None
         self.row_id = None
         self.target_attr_list = ""
+        self.k = None
         self.null_ratio = 0.01
 
         # JVM interfaces for Scavenger APIs
@@ -50,9 +51,27 @@ class ScavengerRepairMisc(ApiBase):
         self.target_attr_list = target_attr_list
         return self
 
+    def setK(self, k):
+        self.k = int(k)
+        return self
+
     def setNullRatio(self, null_ratio):
         self.null_ratio = null_ratio
         return self
+
+    def flatten(self):
+        if self.table_name is None or self.row_id is None:
+            raise ValueError("`setTableName` and `setRowId` should be called before flattening")
+
+        jdf = self.__svg_api.flattenTable(self.db_name, self.table_name, self.row_id)
+        return DataFrame(jdf, self.spark._wrapped)
+
+    def blockRows(self):
+        if self.table_name is None or self.row_id is None or self.k is None:
+            raise ValueError("`setTableName`, `setRowId`, and `setK` should be called before blocking rows")
+
+        jdf = self.__svg_api.blockRows(self.db_name, self.table_name, self.row_id, self.target_attr_list, self.k)
+        return DataFrame(jdf, self.spark._wrapped)
 
     def injectNull(self):
         if self.table_name is None:
@@ -66,13 +85,6 @@ class ScavengerRepairMisc(ApiBase):
             raise ValueError("`setTableName` and `setRowId` should be called before flattening")
 
         jdf = self.__svg_api.toErrorMap(error_cells, self.db_name, self.table_name, self.row_id)
-        return DataFrame(jdf, self.spark._wrapped)
-
-    def flatten(self):
-        if self.table_name is None or self.row_id is None:
-            raise ValueError("`setTableName` and `setRowId` should be called before flattening")
-
-        jdf = self.__svg_api.flattenTable(self.db_name, self.table_name, self.row_id)
         return DataFrame(jdf, self.spark._wrapped)
 
 

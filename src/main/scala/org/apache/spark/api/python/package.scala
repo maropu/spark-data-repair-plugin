@@ -18,8 +18,10 @@
 package org.apache.spark.api
 
 import org.apache.commons.lang.RandomStringUtils
+
 import org.apache.spark.SparkException
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.util.Utils
 
 package object python {
@@ -52,6 +54,12 @@ package object python {
     val ret = f(tempView)
     SparkSession.getActiveSession.get.sql(s"DROP VIEW $tempView")
     ret
+  }
+
+  def createEmptyTable(schema: String): DataFrame = {
+    assert(SparkSession.getActiveSession.nonEmpty)
+    val spark = SparkSession.getActiveSession.get
+    spark.createDataFrame(spark.sparkContext.emptyRDD[Row], StructType.fromDDL(schema))
   }
 
   def getRandomString(prefix: String = ""): String = {

@@ -17,6 +17,7 @@
 
 package org.apache.spark.api.python
 
+import org.apache.spark.SparkException
 import org.apache.spark.sql.{QueryTest, Row}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
@@ -26,32 +27,105 @@ class ScavengerMiscSuite extends QueryTest with SharedSparkSession{
   protected override def beforeAll(): Unit = {
     super.beforeAll()
     spark.sql(s"SET ${SQLConf.CBO_ENABLED.key}=true")
+    spark.sql("CREATE TABLE t(tid STRING, v1 INT, v2 STRING) USING parquet")
+    spark.sql(
+      s"""
+         |INSERT INTO t VALUES
+         |  ("1", 100000, "test-1"),
+         |  ("2", 200000, "test-2"),
+         |  ("3", 300000, "test-3"),
+         |  ("4", 400000, "test-4")
+       """.stripMargin)
+  }
+
+  protected override def afterAll(): Unit = {
+    try {
+      spark.sql("DROP TABLE IF EXISTS t")
+    } finally {
+      super.afterAll()
+    }
   }
 
   test("flattenTable") {
-    withTable("t") {
-      spark.sql("CREATE TABLE t(tid STRING, v1 INT, v2 STRING) USING parquet")
-      spark.sql(
-        s"""
-           |INSERT INTO t VALUES
-           |  ("1", 100000, "test-1"),
-           |  ("2", 200000, "test-2"),
-           |  ("3", 300000, "test-3"),
-           |  ("4", 400000, "test-4")
-         """.stripMargin)
+    val df = ScavengerMiscApi.flattenTable("default", "t", "tid")
+    val expectedSchema = "`tid` STRING,`attribute` STRING,`value` STRING"
+    assert(df.schema.toDDL === expectedSchema)
+    checkAnswer(df,
+      Row("1", "v1", "100000") ::
+      Row("2", "v1", "200000") ::
+      Row("3", "v1", "300000") ::
+      Row("4", "v1", "400000") ::
+      Row("1", "v2", "test-1") ::
+      Row("2", "v2", "test-2") ::
+      Row("3", "v2", "test-3") ::
+      Row("4", "v2", "test-4") ::
+      Nil
+    )
+  }
 
-      val df = ScavengerMiscApi.flattenTable("default", "t", "tid")
+  test("blockRows") {
+    val df1 = ScavengerMiscApi.blockRows("default", "t", "tid", "", 2)
+    val expectedSchema = "`tid` STRING,`k` INT"
+    assert(df1.schema.toDDL === expectedSchema)
+    assert(df1.select("k").collect.map(_.getInt(0)).toSet === Set(0, 1))
+    val df2 = ScavengerMiscApi.blockRows("default", "t", "tid", "v1", 2)
+    assert(df2.schema.toDDL === expectedSchema)
+    assert(df2.select("k").collect.map(_.getInt(0)).toSet === Set(0, 1))
+
+    val errMsg = intercept[SparkException] {
+      ScavengerMiscApi.blockRows("default", "t", "tid", "non-existent", 2)
+    }.getMessage
+    assert(errMsg.contains("Columns 'non-existent' do not exist in 'default.t'"))
+  }
+
+  test("injectNullAt") {
+    val df1 = ScavengerMiscApi.injectNullAt("default", "t", "v1", 1.0)
+    val expectedSchema = "`tid` STRING,`v1` INT,`v2` STRING"
+    assert(df1.schema.toDDL === expectedSchema)
+    checkAnswer(df1,
+      Row("1", null, "test-1") ::
+      Row("2", null, "test-2") ::
+      Row("3", null, "test-3") ::
+      Row("4", null, "test-4") ::
+      Nil
+    )
+    val df2 = ScavengerMiscApi.injectNullAt("default", "t", "v2", 0.0)
+    assert(df2.schema.toDDL === expectedSchema)
+    checkAnswer(df2,
+      Row("1", 100000, "test-1") ::
+      Row("2", 200000, "test-2") ::
+      Row("3", 300000, "test-3") ::
+      Row("4", 400000, "test-4") ::
+      Nil
+    )
+
+    val errMsg = intercept[SparkException] {
+      ScavengerMiscApi.injectNullAt("default", "t", "non-existent", 1.0)
+    }.getMessage
+    assert(errMsg.contains("Columns 'non-existent' do not exist in 'default.t'"))
+  }
+
+  test("toErrorMap") {
+    withTempView("errCellView", "IllegalView") {
+      import testImplicits._
+      Seq(("1", "v1"), ("2", "v1"), ("4", "v2")).toDF("tid", "attribute")
+        .createOrReplaceTempView("errCellView")
+      val df = ScavengerMiscApi.toErrorMap("errCellView", "default", "t", "tid")
+      val expectedSchema = "`error_map` STRING"
+      assert(df.schema.toDDL === expectedSchema)
       checkAnswer(df,
-        Row("1", "v1", "100000") ::
-        Row("2", "v1", "200000") ::
-        Row("3", "v1", "300000") ::
-        Row("4", "v1", "400000") ::
-        Row("1", "v2", "test-1") ::
-        Row("2", "v2", "test-2") ::
-        Row("3", "v2", "test-3") ::
-        Row("4", "v2", "test-4") ::
+        Row("-*-") ::
+        Row("-*-") ::
+        Row("--*") ::
+        Row("---") ::
         Nil
       )
+
+      val errMsg = intercept[SparkException] {
+        createEmptyTable("tid STRING, illegal STRING").createOrReplaceTempView("IllegalView")
+        ScavengerMiscApi.toErrorMap("IllegalView", "default", "t", "tid")
+      }.getMessage
+      assert(errMsg.contains("'IllegalView' must have 'tid', 'attribute' columns"))
     }
   }
 }

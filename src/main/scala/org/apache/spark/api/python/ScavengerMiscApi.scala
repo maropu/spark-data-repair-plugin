@@ -17,8 +17,13 @@
 
 package org.apache.spark.api.python
 
+import scala.collection.mutable
+
 import org.apache.spark.SparkException
+import org.apache.spark.ml.clustering.BisectingKMeans
+import org.apache.spark.ml.feature.CountVectorizer
 import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.functions.udf
 import org.apache.spark.util.{Utils => SparkUtils}
 
 object ScavengerMiscApi extends BaseScavengerRepairApi {
@@ -35,7 +40,78 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
       val expr = inputDf.schema.filter(_.name != rowId)
         .map { f => s"STRUCT($rowId, '${f.name}', CAST(${f.name} AS STRING))" }
         .mkString("ARRAY(", ", ", ")")
-      inputDf.selectExpr(s"INLINE($expr) AS (tid, attribute, value)")
+      inputDf.selectExpr(s"INLINE($expr) AS ($rowId, attribute, value)")
+    }
+  }
+
+  private def compute2gram(ar: Seq[String]): Seq[String] = {
+    if (ar != null) {
+      val buffer = mutable.ArrayBuffer[String]()
+      ar.foreach { str =>
+        if (str != null) {
+          if (str.length > 2) {
+            for (i <- 0 to str.length - 2) {
+              buffer += s"${str.charAt(i)}${str.charAt(i + 1)}"
+            }
+          } else {
+            buffer += str
+          }
+        }
+      }
+      buffer
+    } else {
+      Nil
+    }
+  }
+
+  /**
+   * To reduce the time complexity of data cleaning, there is the well-known pre-processing
+   * technique, so called "blocking" [11][12], that split input rows into multiple blocks.
+   * Then, data cleaning is applied into blocks independently. This method splits
+   * an input `dbName`.`tableName` into `k` blocks.
+   */
+  def blockRows(dbName: String, tableName: String, rowId: String, targetAttrList: String, k: Int): DataFrame = {
+    logBasedOnLevel(s"blockSimilarRows called with: dbName=$dbName tableName=$tableName rowId=$rowId" +
+      s"targetAttrList=$targetAttrList, k=$k")
+
+    withSparkSession { sparkSession =>
+      val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
+      val targetAttrs = if (targetAttrList.isEmpty) {
+        inputDf.columns.filterNot(_ == rowId).toSeq
+      } else {
+        val attrs = SparkUtils.stringToSeq(targetAttrList)
+        val unknownAttrs = attrs.filterNot(inputDf.columns.contains)
+        if (unknownAttrs.nonEmpty) {
+          throw new SparkException(s"Columns '${unknownAttrs.mkString(", ")}' " +
+            s"do not exist in '$qualifiedName'")
+        }
+        attrs
+      }
+
+      // Since we assume input rows have lexical heterogeneity (e.g., lexical errors like typos),
+      // we compute bi-gram for the rows and create features by using bag-of-bigram.
+      val featureAttr = getRandomString()
+      val featureDf = {
+        import sparkSession.implicits._
+        val compute2gramUdf = udf[Seq[String], Seq[String]](compute2gram)
+        val Seq(inputAttr, bigramAttr) = Seq.fill(2)(0).map {
+          _ => getRandomString()
+        }
+        val df = inputDf.selectExpr(rowId, s"array(${targetAttrs.mkString(", ")}) AS $inputAttr")
+          .withColumn(bigramAttr, compute2gramUdf($"$inputAttr"))
+          .drop(inputAttr)
+
+        val cv = new CountVectorizer().setInputCol(bigramAttr).setOutputCol(featureAttr)
+        cv.fit(df).transform(df).drop(bigramAttr)
+      }
+
+      val bkm = new BisectingKMeans()
+        .setFeaturesCol(featureAttr)
+        .setPredictionCol("k")
+        .setK(k)
+        .setSeed(0)
+
+      bkm.fit(featureDf).transform(featureDf).drop(featureAttr)
     }
   }
 
@@ -46,11 +122,13 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
     withSparkSession { _ =>
       val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName)
       val targetAttrSet = if (targetAttrList.nonEmpty) {
-        val attrSet = SparkUtils.stringToSeq(targetAttrList).toSet
-        if (!inputDf.columns.exists(attrSet.contains)) {
-          throw new SparkException(s"No target attribute selected in $qualifiedName")
+        val attrs = SparkUtils.stringToSeq(targetAttrList)
+        val unknownAttrs = attrs.filterNot(inputDf.columns.contains)
+        if (unknownAttrs.nonEmpty) {
+          throw new SparkException(s"Columns '${unknownAttrs.mkString(", ")}' " +
+            s"do not exist in '$qualifiedName'")
         }
-        attrSet
+        attrs.toSet
       } else {
         inputDf.columns.toSet
       }
@@ -83,7 +161,7 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
            |SELECT
            |  $rowId, map_from_entries(COLLECT_LIST(r)) AS errors
            |FROM (
-           |  select $rowId, struct(attribute, value) r
+           |  select $rowId, struct(attribute, '') r
            |  FROM $errCellView
            |)
            |GROUP BY

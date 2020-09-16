@@ -10,4 +10,6 @@
  - [8] Michael Stonebraker et al., Data Curation at Scale: The Data Tamer System, CIDR, 2013.
  - [9] Ziawasch Abedjan et al., Detecting Data Errors: Where Are We and What Needs to be Done?, Proceedings of the VLDB Endowment, 9(12), pp.993–1004, 2016.
  - [10] Zuhair Khayyat et al., BigDansing: A System for Big Data Cleansing, Proceedings of SIGMOD, pp.1215–1230, 2015.
+ - [11] George Papadakis, et al., Blocking and Filtering Techniques for Entity Resolution, ACM Computing Surveys, Article 31, pp.42, 2020.
+ - [12] Ahmed K. Elmagarmid et al., Duplicate Record Detection: A Survey, IEEE Transactions on Knowledge and Data Engineering, vol.19, no.1, pp.1-16, 2007.
 
