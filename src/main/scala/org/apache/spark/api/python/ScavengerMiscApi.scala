@@ -98,7 +98,10 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
         attrs
       }
 
-      // Since we assume input rows have lexical heterogeneity (e.g., lexical errors like typos),
+      // There are many types of errors: typos, missing values, incorrect values, contradicting facts,
+      // shifted data and so on. Therefore, We need to select a suitable approach so that
+      // it could detect and handle given errors correctly. Since we assume, in this method,
+      // input rows have lexical heterogeneity (e.g., lexical errors like typos),
       // we compute q-gram for the rows and create features by using bag-of-q-gram.
       val featureAttr = getRandomString()
       val featureDf = {
@@ -118,6 +121,9 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
         cv.fit(df).transform(df).drop(bigramAttr)
       }
 
+      // Currently, the two types of the clustering algorithms ('bisect-kmeans' and 'kmeans++')
+      // implemented in Spark MLlib are available here. For implementation details,
+      // please check a document below:
       // https://spark.apache.org/docs/latest/ml-clustering.html#clustering
       def createKmeansPlusPlus() = new KMeans()
         .setFeaturesCol(featureAttr)
