@@ -62,7 +62,7 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
 
     def test_splitInputTableInto(self):
         misc = ScavengerRepairMisc("")
-        df = misc.setTableName("adult").setRowId("tid").setK(3).setQ(2).splitInputTableInto()
+        df = misc.setTableName("adult").setRowId("tid").setK(3).splitInputTableInto()
         self.assertEqual(
             df.selectExpr("k").distinct().orderBy("k").collect(),
             [Row(k=0), Row(k=1), Row(k=2)])

@@ -21,7 +21,7 @@ import scala.collection.mutable
 import scala.util.Try
 
 import org.apache.spark.SparkException
-import org.apache.spark.ml.clustering.BisectingKMeans
+import org.apache.spark.ml.clustering.{BisectingKMeans, KMeans}
 import org.apache.spark.ml.feature.CountVectorizer
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.functions.{lit, udf}
@@ -108,6 +108,8 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
           _ => getRandomString()
         }
         val q = if (optionMap.contains("q")) Try(optionMap("q").toInt).getOrElse(2) else 2
+        // TODO: Adds an option for using a feature hashing trick to reduce dimension
+        // https://spark.apache.org/docs/latest/ml-features.html#featurehasher
         val df = inputDf.selectExpr(rowId, s"array(${targetAttrs.mkString(", ")}) AS $inputAttr")
           .withColumn(bigramAttr, computeQgramUdf(lit(q), $"$inputAttr"))
           .drop(inputAttr)
@@ -116,13 +118,29 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
         cv.fit(df).transform(df).drop(bigramAttr)
       }
 
-      val bkm = new BisectingKMeans()
+      // https://spark.apache.org/docs/latest/ml-clustering.html#clustering
+      def createKmeansPlusPlus() = new KMeans()
         .setFeaturesCol(featureAttr)
         .setPredictionCol("k")
         .setK(k)
         .setSeed(0)
 
-      bkm.fit(featureDf).transform(featureDf).drop(featureAttr)
+      def createBisectingKmeans() = new BisectingKMeans()
+        .setFeaturesCol(featureAttr)
+        .setPredictionCol("k")
+        .setK(k)
+        .setSeed(0)
+
+      val clusteringAlg = optionMap.get("clusteringAlg") match {
+        case Some("bisect-kmeans") => createKmeansPlusPlus()
+        case Some("kmeans++") => createBisectingKmeans()
+        case Some(clsAlg) =>
+          throw new IllegalArgumentException(s"Unknown clustering algorithm found: $clsAlg")
+        case None =>
+          logWarning("No clustering algorithm given, so use bisecting k-means by default")
+          createBisectingKmeans()
+      }
+      clusteringAlg.fit(featureDf).transform(featureDf).drop(featureAttr)
     }
   }
 

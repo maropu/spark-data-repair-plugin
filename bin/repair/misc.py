@@ -35,6 +35,7 @@ class ScavengerRepairMisc(ApiBase):
         self.target_attr_list = ""
         self.k = None
         self.q = 2
+        self.clustering_alg = "bisect-kmeans"
         self.null_ratio = 0.01
 
         # JVM interfaces for Scavenger APIs
@@ -60,6 +61,10 @@ class ScavengerRepairMisc(ApiBase):
         self.q = int(q)
         return self
 
+    def setClusteringAlg(self, alg):
+        self.clustering_alg = alg
+        return self
+
     def setNullRatio(self, null_ratio):
         self.null_ratio = null_ratio
         return self
@@ -75,7 +80,7 @@ class ScavengerRepairMisc(ApiBase):
         if self.table_name is None or self.row_id is None or self.k is None:
             raise ValueError("`setTableName`, `setRowId`, and `setK` should be called before computing row groups")
 
-        options = "q=%s" % self.q
+        options = "q=%s,clusteringAlg=%s" % (self.q, self.clustering_alg)
         jdf = self.__svg_api.splitInputTableInto(self.k, self.db_name, self.table_name, self.row_id, self.target_attr_list, options)
         return DataFrame(jdf, self.spark._wrapped)
 
