@@ -60,9 +60,9 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
         # Loads test data
         load_testdata(cls.spark, "adult.csv").createOrReplaceTempView("adult")
 
-    def test_blockRows(self):
+    def test_splitInputTableInto(self):
         misc = ScavengerRepairMisc("")
-        df = misc.setTableName("adult").setRowId("tid").setK(3).blockRows()
+        df = misc.setTableName("adult").setRowId("tid").setK(3).setQ(2).splitInputTableInto()
         self.assertEqual(
             df.selectExpr("k").distinct().orderBy("k").collect(),
             [Row(k=0), Row(k=1), Row(k=2)])

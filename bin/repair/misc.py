@@ -34,6 +34,7 @@ class ScavengerRepairMisc(ApiBase):
         self.row_id = None
         self.target_attr_list = ""
         self.k = None
+        self.q = 2
         self.null_ratio = 0.01
 
         # JVM interfaces for Scavenger APIs
@@ -55,6 +56,10 @@ class ScavengerRepairMisc(ApiBase):
         self.k = int(k)
         return self
 
+    def setQ(self, q):
+        self.q = int(q)
+        return self
+
     def setNullRatio(self, null_ratio):
         self.null_ratio = null_ratio
         return self
@@ -66,11 +71,12 @@ class ScavengerRepairMisc(ApiBase):
         jdf = self.__svg_api.flattenTable(self.db_name, self.table_name, self.row_id)
         return DataFrame(jdf, self.spark._wrapped)
 
-    def blockRows(self):
+    def splitInputTableInto(self):
         if self.table_name is None or self.row_id is None or self.k is None:
-            raise ValueError("`setTableName`, `setRowId`, and `setK` should be called before blocking rows")
+            raise ValueError("`setTableName`, `setRowId`, and `setK` should be called before computing row groups")
 
-        jdf = self.__svg_api.blockRows(self.db_name, self.table_name, self.row_id, self.target_attr_list, self.k)
+        options = "q=%s" % self.q
+        jdf = self.__svg_api.splitInputTableInto(self.k, self.db_name, self.table_name, self.row_id, self.target_attr_list, options)
         return DataFrame(jdf, self.spark._wrapped)
 
     def injectNull(self):

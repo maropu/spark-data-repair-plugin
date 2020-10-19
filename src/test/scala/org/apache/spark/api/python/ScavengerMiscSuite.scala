@@ -63,17 +63,34 @@ class ScavengerMiscSuite extends QueryTest with SharedSparkSession{
     )
   }
 
-  test("blockRows") {
-    val df1 = ScavengerMiscApi.blockRows("default", "t", "tid", "", 2)
+  test("q-gram") {
+    val res1 = ScavengerMiscApi.computeQgram(2, Seq("abcdef", "ghijklm", "n", "op", "qrs", "tuvwxyz"))
+    assert(res1 === Seq("ab", "bc", "cd", "de", "ef", "gh", "hi", "ij", "jk", "kl", "lm", "n",
+      "op", "qr", "rs", "tu", "uv", "vw", "wx", "xy", "yz"))
+    val res2 = ScavengerMiscApi.computeQgram(3, Seq("abcdef", "ghijklm", "n", "op", "qrs", "tuvwxyz"))
+    assert(res2 === Seq("abc", "bcd", "cde", "def", "ghi", "hij", "ijk", "jkl", "klm", "n",
+      "op", "qrs", "tuv", "uvw", "vwx", "wxy", "xyz"))
+    val res3 = ScavengerMiscApi.computeQgram(4, Seq("abcdef", "ghijklm", "n", "op", "qrs", "tuvwxyz"))
+    assert(res3 === Seq("abcd", "bcde", "cdef", "ghij", "hijk", "ijkl", "jklm", "n",
+      "op", "qrs", "tuvw", "uvwx", "vwxy", "wxyz"))
+
+    val errMsg = intercept[IllegalArgumentException] {
+      ScavengerMiscApi.computeQgram(0, Nil)
+    }.getMessage
+    assert(errMsg.contains("`q` must be positive, but 0 got"))
+  }
+
+  test("splitInputTableInto") {
+    val df1 = ScavengerMiscApi.splitInputTableInto(2, "default", "t", "tid", "", "")
     val expectedSchema = "`tid` STRING,`k` INT"
     assert(df1.schema.toDDL === expectedSchema)
     assert(df1.select("k").collect.map(_.getInt(0)).toSet === Set(0, 1))
-    val df2 = ScavengerMiscApi.blockRows("default", "t", "tid", "v1", 2)
+    val df2 = ScavengerMiscApi.splitInputTableInto(2, "default", "t", "tid", "v1", "")
     assert(df2.schema.toDDL === expectedSchema)
     assert(df2.select("k").collect.map(_.getInt(0)).toSet === Set(0, 1))
 
     val errMsg = intercept[SparkException] {
-      ScavengerMiscApi.blockRows("default", "t", "tid", "non-existent", 2)
+      ScavengerMiscApi.splitInputTableInto(2, "default", "t", "tid", "non-existent", "")
     }.getMessage
     assert(errMsg.contains("Columns 'non-existent' do not exist in 'default.t'"))
   }

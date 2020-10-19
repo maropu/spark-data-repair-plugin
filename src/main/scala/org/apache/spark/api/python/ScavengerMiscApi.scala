@@ -18,12 +18,13 @@
 package org.apache.spark.api.python
 
 import scala.collection.mutable
+import scala.util.Try
 
 import org.apache.spark.SparkException
 import org.apache.spark.ml.clustering.BisectingKMeans
 import org.apache.spark.ml.feature.CountVectorizer
 import org.apache.spark.sql.DataFrame
-import org.apache.spark.sql.functions.udf
+import org.apache.spark.sql.functions.{lit, udf}
 import org.apache.spark.util.{Utils => SparkUtils}
 
 object ScavengerMiscApi extends BaseScavengerRepairApi {
@@ -44,14 +45,15 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
     }
   }
 
-  private def compute2gram(ar: Seq[String]): Seq[String] = {
+  private[python] def computeQgram(q: Int, ar: Seq[String]): Seq[String] = {
+    require(q > 0, s"`q` must be positive, but $q got")
     if (ar != null) {
       val buffer = mutable.ArrayBuffer[String]()
       ar.foreach { str =>
         if (str != null) {
-          if (str.length > 2) {
-            for (i <- 0 to str.length - 2) {
-              buffer += s"${str.charAt(i)}${str.charAt(i + 1)}"
+          if (str.length > q) {
+            for (i <- 0 to str.length - q) {
+              buffer += str.substring(i, i + q)
             }
           } else {
             buffer += str
@@ -65,17 +67,25 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
   }
 
   /**
-   * To reduce the time complexity of data cleaning, there is the well-known pre-processing
-   * technique, so called "blocking" [11][12], that split input rows into multiple blocks.
-   * Then, data cleaning is applied into blocks independently. This method splits
-   * an input `dbName`.`tableName` into `k` blocks.
+   * To reduce the running time of data cleaning, this method splits an input `dbName`.`tableName`
+   * into `k` groups so that each group can have similar rows. Then, data cleaning is
+   * applied into the groups independently.
    */
-  def blockRows(dbName: String, tableName: String, rowId: String, targetAttrList: String, k: Int): DataFrame = {
-    logBasedOnLevel(s"blockSimilarRows called with: dbName=$dbName tableName=$tableName rowId=$rowId" +
-      s"targetAttrList=$targetAttrList, k=$k")
+  def splitInputTableInto(
+      k: Int,
+      dbName: String,
+      tableName: String,
+      rowId: String,
+      targetAttrList: String,
+      options: String): DataFrame = {
+
+    logBasedOnLevel(s"splitInputTableInto called with: k=$k dbName=$dbName tableName=$tableName rowId=$rowId " +
+      s"targetAttrList=$targetAttrList options=${if (options.nonEmpty) s"{$options}" else ""}")
 
     withSparkSession { sparkSession =>
       val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
+      val optionMap = SparkUtils.stringToSeq(options).map(_.split("=")).filter(_.length == 2)
+        .map { case Array(k, v) => k -> v }.toMap
       val targetAttrs = if (targetAttrList.isEmpty) {
         inputDf.columns.filterNot(_ == rowId).toSeq
       } else {
@@ -89,16 +99,17 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
       }
 
       // Since we assume input rows have lexical heterogeneity (e.g., lexical errors like typos),
-      // we compute bi-gram for the rows and create features by using bag-of-bigram.
+      // we compute q-gram for the rows and create features by using bag-of-q-gram.
       val featureAttr = getRandomString()
       val featureDf = {
         import sparkSession.implicits._
-        val compute2gramUdf = udf[Seq[String], Seq[String]](compute2gram)
+        val computeQgramUdf = udf[Seq[String], Int, Seq[String]](computeQgram)
         val Seq(inputAttr, bigramAttr) = Seq.fill(2)(0).map {
           _ => getRandomString()
         }
+        val q = if (optionMap.contains("q")) Try(optionMap("q").toInt).getOrElse(2) else 2
         val df = inputDf.selectExpr(rowId, s"array(${targetAttrs.mkString(", ")}) AS $inputAttr")
-          .withColumn(bigramAttr, compute2gramUdf($"$inputAttr"))
+          .withColumn(bigramAttr, computeQgramUdf(lit(q), $"$inputAttr"))
           .drop(inputAttr)
 
         val cv = new CountVectorizer().setInputCol(bigramAttr).setOutputCol(featureAttr)
