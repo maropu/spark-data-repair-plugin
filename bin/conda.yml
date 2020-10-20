@@ -5,7 +5,7 @@ channels:
   - defaults
 dependencies:
   - python=3.6.8
-  - pyspark=3.0.0
+  - pyspark=3.0.1
   - pyarrow=0.17.1
   - pandas=0.25.3
   - lightgbm=2.3.1
