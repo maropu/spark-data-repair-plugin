@@ -19,12 +19,16 @@ package org.apache.spark.api.python
 
 import scala.collection.mutable
 import scala.util.Try
+import scala.collection.JavaConverters._
 
 import org.apache.spark.SparkException
 import org.apache.spark.ml.clustering.{BisectingKMeans, KMeans}
 import org.apache.spark.ml.feature.CountVectorizer
-import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.{DataFrame, Row}
+import org.apache.spark.sql.catalyst.plans.logical.{Histogram, LeafNode}
 import org.apache.spark.sql.functions.{lit, udf}
+import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.{Utils => SparkUtils}
 
 object ScavengerMiscApi extends BaseScavengerRepairApi {
@@ -174,6 +178,51 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
           f.name
       }
       inputDf.selectExpr(exprs: _*)
+    }
+  }
+
+  def computeAndGetStats(dbName: String, tableName: String): DataFrame = {
+    logBasedOnLevel(s"computeAndGetStats called with: dbName=$dbName tableName=$tableName")
+
+    withSparkSession { sparkSession =>
+      val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName)
+      sparkSession.table(qualifiedName).cache()
+      withSQLConf(
+          SQLConf.PLAN_STATS_ENABLED.key -> "true",
+          SQLConf.HISTOGRAM_ENABLED.key -> "true",
+          SQLConf.HISTOGRAM_NUM_BINS.key -> "8") {
+
+        sparkSession.sql(
+          s"""
+             |ANALYZE TABLE $qualifiedName COMPUTE STATISTICS
+             |FOR ALL COLUMNS
+           """.stripMargin)
+
+        val tableStats = {
+          val tableNode = inputDf.queryExecution.optimizedPlan.collectLeaves().head.asInstanceOf[LeafNode]
+          val stat = tableNode.computeStats()
+          assert(stat.attributeStats.nonEmpty, "stats must be computed")
+          stat
+        }
+
+        def histogram2Seq(histOpt: Option[Histogram]): Option[Seq[Double]] = {
+          histOpt.map { h =>
+            val dist = h.bins.map { b => b.hi - b.lo }
+            val maxValue = dist.max
+            dist.map(_ / maxValue)
+          }
+        }
+        val statNames = Seq(Seq("distinctCnt", "mix", "max", "nullCnt", "avgLen", "maxLen", "hist"))
+        val statSeq = (statNames ++ tableStats.attributeStats.map { case (_, stat) =>
+          Seq(stat.distinctCount, stat.min, stat.max, stat.nullCount, stat.avgLen,
+            stat.maxLen, histogram2Seq(stat.histogram)).map(_.map(_.toString).orNull)
+        }).transpose
+
+        val statRows = statSeq.map(Row.fromSeq).asJava
+        val statSchema = ("summary" +: tableStats.attributeStats.map(_._1.name).toSeq)
+          .map { n => s"$n STRING" }.mkString(", ")
+        sparkSession.createDataFrame(statRows, StructType.fromDDL(statSchema))
+      }
     }
   }
 

@@ -91,6 +91,13 @@ class ScavengerRepairMisc(ApiBase):
         jdf = self.__svg_api.injectNullAt(self.db_name, self.table_name, self.target_attr_list, self.null_ratio)
         return DataFrame(jdf, self.spark._wrapped)
 
+    def computeAndGetStats(self):
+        if self.table_name is None:
+            raise ValueError("`setTableName` should be called before injecting NULL")
+
+        jdf = self.__svg_api.computeAndGetStats(self.db_name, self.table_name)
+        return DataFrame(jdf, self.spark._wrapped)
+
     def toErrorMap(self, error_cells):
         if self.table_name is None or self.row_id is None:
             raise ValueError("`setTableName` and `setRowId` should be called before flattening")

@@ -22,6 +22,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.python.ScavengerConf._
 import org.apache.spark.python._
 import org.apache.spark.sql._
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.types.StructType
 
@@ -58,6 +59,28 @@ class BaseScavengerRepairApi extends Logging {
       case "WARN" => logWarning(msg)
       case "ERROR" => logError(msg)
       case _ => logTrace(msg)
+    }
+  }
+
+  protected def withSQLConf[T](pairs: (String, String)*)(f: => T): T= {
+    val conf = SQLConf.get
+    val (keys, values) = pairs.unzip
+    val currentValues = keys.map { key =>
+      if (conf.contains(key)) {
+        Some(conf.getConfString(key))
+      } else {
+        None
+      }
+    }
+    (keys, values).zipped.foreach { (k, v) =>
+      assert(!SQLConf.staticConfKeys.contains(k))
+      conf.setConfString(k, v)
+    }
+    try f finally {
+      keys.zip(currentValues).foreach {
+        case (key, Some(value)) => conf.setConfString(key, value)
+        case (key, None) => conf.unsetConf(key)
+      }
     }
   }
 
