@@ -22,7 +22,7 @@ import org.apache.spark.sql.{QueryTest, Row}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 
-class ScavengerMiscSuite extends QueryTest with SharedSparkSession{
+class ScavengerMiscSuite extends QueryTest with SharedSparkSession {
 
   protected override def beforeAll(): Unit = {
     super.beforeAll()
