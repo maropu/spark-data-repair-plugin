@@ -18,6 +18,7 @@
 package org.apache.spark.api.python
 
 import org.apache.spark.sql._
+import org.apache.spark.sql.types.StringType
 
 object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
 
@@ -52,6 +53,11 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
     })
   }
 
+  private def emptyTable(df: DataFrame, rowId: String): DataFrame = {
+    val rowIdType = df.schema.find(_.name == rowId).get.dataType.sql
+    createEmptyTable(s"$rowId $rowIdType, attribute STRING")
+  }
+
   def detectNullCells(dbName: String, tableName: String, rowId: String): DataFrame = {
     logBasedOnLevel(s"detectNullCells called with: dbName=$dbName tableName=$tableName rowId=$rowId")
 
@@ -60,7 +66,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
 
       withTempView(inputDf, cache = true) { inputView =>
         // Detects error erroneous cells in a given table
-        val sqls = inputDf.columns.map { attr =>
+        val sqls = inputDf.columns.filter(_ != rowId).map { attr =>
           s"""
              |SELECT $rowId, '$attr' AS attribute
              |FROM $inputView
@@ -86,30 +92,86 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
     }
   }
 
-  def detectErrorCellsFromConstraints(
-      constraintFilePath: String,
+  def detectErrorCellsFromRegEx(
       dbName: String,
       tableName: String,
-      rowId: String): DataFrame = {
+      rowId: String,
+      regex: String,
+      cellsAsString: Boolean = false): DataFrame = {
+
+    logBasedOnLevel(s"detectErrorCellsFromRegEx called with: dbName=$dbName tableName=$tableName " +
+      s"rowId=$rowId, regex=$regex, cellAsString=$cellsAsString")
+
+    withSparkSession { sparkSession =>
+      val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
+
+      // If `regex` not given, just returns an empty table
+      if (regex == null || regex.trim.isEmpty) {
+        emptyTable(inputDf, rowId)
+      } else {
+        withTempView(inputDf, cache = true) { inputView =>
+          // Detects error erroneous cells in a given table
+          val sqls = if (cellsAsString) {
+            inputDf.columns.filter(_ != rowId).map { attr =>
+              s"""
+                 |SELECT $rowId, '$attr' AS attribute
+                 |FROM $inputView
+                 |WHERE CAST($attr AS STRING) RLIKE '$regex'
+               """.stripMargin
+            }.toSeq
+          } else {
+            inputDf.schema.filter { f => f.name != rowId && f.dataType == StringType }.map { f =>
+              s"""
+                 |SELECT $rowId, '${f.name}' AS attribute
+                 |FROM $inputView
+                 |WHERE ${f.name} RLIKE '$regex'
+               """.stripMargin
+            }
+          }
+
+          if (sqls.isEmpty) {
+            emptyTable(inputDf, rowId)
+          } else {
+            val errCellDf = sparkSession.sql(sqls.mkString(" UNION ALL "))
+
+            withTempView(errCellDf) { errCellView =>
+              val attrsToRepair = {
+                sparkSession.sql(s"SELECT collect_set(attribute) FROM $errCellView")
+                  .collect.head.getSeq[String](0)
+              }
+              loggingErrorStats(
+                "RegEx-based error detector",
+                qualifiedName,
+                errCellView,
+                attrsToRepair)
+            }
+            errCellDf
+          }
+        }
+      }
+    }
+  }
+
+  def detectErrorCellsFromConstraints(
+      dbName: String,
+      tableName: String,
+      rowId: String,
+      constraintFilePath: String): DataFrame = {
 
     logBasedOnLevel(s"detectErrorCellsFromConstraints called with: constraintFilePath=$constraintFilePath " +
       s"dbName=$dbName tableName=$tableName rowId=$rowId")
 
     withSparkSession { sparkSession =>
       val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
-      lazy val emptyTable = {
-        val rowIdType = inputDf.schema.find(_.name == rowId).get.dataType.sql
-        createEmptyTable(s"$rowId $rowIdType, attribute STRING")
-      }
 
       // If `constraintFilePath` not given, just returns an empty table
       if (constraintFilePath == null || constraintFilePath.trim.isEmpty) {
-        emptyTable
+        emptyTable(inputDf, rowId)
       } else {
         withTempView(inputDf, cache = true) { inputView =>
           val constraints = loadConstraintsFromFile(constraintFilePath, tableName, inputDf.columns)
           if (constraints.predicates.isEmpty) {
-            emptyTable
+            emptyTable(inputDf, rowId)
           } else {
             logBasedOnLevel({
               val constraintLists = constraints.predicates.zipWithIndex.map { case (preds, i) =>
@@ -125,7 +187,7 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
             val sqls = constraints.predicates.map { preds =>
               val attrs = preds.flatMap(_.references)
               s"""
-                 |SELECT $rowId, explode(array(${attrs.map(a => s"'$a'").mkString(",")})) attribute
+                 |SELECT DISTINCT $rowId, explode(array(${attrs.map(a => s"'$a'").mkString(",")})) attribute
                  |FROM (
                  |  SELECT t1.$rowId
                  |  FROM $inputView AS ${constraints.leftTable}
@@ -160,22 +222,18 @@ object ScavengerErrorDetectorApi extends BaseScavengerRepairApi {
       dbName: String,
       tableName: String,
       rowId: String,
-      approxEnabled: Boolean): DataFrame = {
+      approxEnabled: Boolean = false): DataFrame = {
 
     logBasedOnLevel(s"detectErrorCellsFromOutliers called with: dbName=$dbName tableName=$tableName " +
       s"rowId=$rowId approxEnabled=$approxEnabled")
 
     withSparkSession { sparkSession =>
       val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
-      lazy val emptyTable = {
-        val rowIdType = inputDf.schema.find(_.name == rowId).get.dataType.sql
-        createEmptyTable(s"$rowId $rowIdType, attribute STRING")
-      }
 
       val continousAttrs = inputDf.schema
         .filter(f => continousTypes.contains(f.dataType)).map(_.name)
       if (continousAttrs.isEmpty) {
-        emptyTable
+        emptyTable(inputDf, rowId)
       } else {
         val percentileExprs = continousAttrs.map { attr =>
           if (approxEnabled) {

@@ -25,14 +25,17 @@ class ErrorDetector:
     __metaclass__ = ABCMeta
 
     def __init__(self, name):
-        self.env = None
+        self.params = None
         self.spark = SparkSession.builder.getOrCreate()
 
         # JVM interfaces for Scavenger APIs
         self.api = self.spark.sparkContext._active_spark_context._jvm.ScavengerErrorDetectorApi
 
-    def setup(self, env):
-        self.env = env
+    def setup(self, params):
+        self.params = params
+
+    def _has_param(key):
+        return key in self.params and self.params[key] is not None
 
     @abstractmethod
     def detect(self):
@@ -44,7 +47,19 @@ class NullErrorDetector(ErrorDetector):
         ErrorDetector.__init__(self, 'NullErrorDetector')
 
     def detect(self):
-        jdf = self.api.detectNullCells('', self.env['input_table'], self.env['row_id'])
+        jdf = self.api.detectNullCells('', self.params['input_table'], self.params['row_id'])
+        return DataFrame(jdf, self.spark._wrapped)
+
+class RegExErrorDetector(ErrorDetector):
+
+    def __init__(self):
+        ErrorDetector.__init__(self, 'RegExErrorDetector')
+
+    def detect(self):
+        error_pattern = self.params['error_pattern'] if self._has_param('error_pattern') else ''
+        jdf = self.api.detectErrorCellsFromRegEx(
+            '', self.params['input_table'], self.params['row_id'], self.params['error_pattern'],
+            self.params['error_cells_as_string'])
         return DataFrame(jdf, self.spark._wrapped)
 
 class ConstraintErrorDetector(ErrorDetector):
@@ -53,8 +68,9 @@ class ConstraintErrorDetector(ErrorDetector):
         ErrorDetector.__init__(self, 'ConstraintErrorDetector')
 
     def detect(self):
+        constraint_path = self.params['constraint_path'] if self._has_param('constraint_path') else ''
         jdf = self.api.detectErrorCellsFromConstraints(
-            self.env['constraint_input_path'], '', self.env['input_table'], self.env['row_id'])
+            '', self.params['input_table'], self.params['row_id'], constraint_path)
         return DataFrame(jdf, self.spark._wrapped)
 
 class OutlierErrorDetector(ErrorDetector):
@@ -64,6 +80,6 @@ class OutlierErrorDetector(ErrorDetector):
 
     def detect(self):
         jdf = self.api.detectErrorCellsFromOutliers(
-            '', self.env['input_table'], self.env['row_id'], False)
+            '', self.params['input_table'], self.params['row_id'], False)
         return DataFrame(jdf, self.spark._wrapped)
 

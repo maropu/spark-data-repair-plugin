@@ -49,6 +49,7 @@ object ScavengerMiscApi extends BaseScavengerRepairApi {
     }
   }
 
+  // TODO: Implements this func as an expression for supporting codegen
   private[python] def computeQgram(q: Int, ar: Seq[String]): Seq[String] = {
     require(q > 0, s"`q` must be positive, but $q got")
     if (ar != null) {

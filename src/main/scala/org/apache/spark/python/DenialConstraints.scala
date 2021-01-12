@@ -21,10 +21,11 @@ import java.net.URI
 
 import scala.collection.mutable
 import scala.io.Source
+
 import org.apache.spark.internal.Logging
 
 case class Predicate(
-    cmp: String,
+    genCmp: (String, String) => String,
     leftTable: Option[String],
     leftAttr: String,
     rightTable: Option[String],
@@ -39,18 +40,18 @@ case class Predicate(
   override def toString(): String = {
     val left = leftTable.map(t => s"$t.$leftAttr").getOrElse(leftAttr)
     val right = rightTable.map(t => s"$t.$rightAttr").getOrElse(rightAttr)
-    s"$left $cmp $right"
+    genCmp(left, right)
   }
 }
 
 object Predicate {
 
-  def apply(c: String, lt: String, la: String, rt: String, ra: String): Predicate = {
-    new Predicate(c, Some(lt), la, Some(rt), ra)
+  def apply(genCmp: (String, String) => String, lt: String, la: String, rt: String, ra: String): Predicate = {
+    new Predicate(genCmp, Some(lt), la, Some(rt), ra)
   }
 
-  def apply(c: String, lt: String, la: String, constant: String): Predicate = {
-    new Predicate(c, Some(lt), la, None, constant)
+  def apply(genCmp: (String, String) => String, lt: String, la: String, constant: String): Predicate = {
+    new Predicate(genCmp, Some(lt), la, None, constant)
   }
 }
 
@@ -65,10 +66,6 @@ case class DenialConstraints(predicates: Seq[Seq[Predicate]], references: Seq[St
     predicates.flatten.flatMap(_.rightTable).distinct.ensuring(_.size < 2)
       .headOption.getOrElse("__auto_generated_2")
   }
-
-  def toWhereCondition(predicates: Seq[Predicate]): String = {
-    predicates.map(_.toString).mkString(" AND ")
-  }
 }
 
 object DenialConstraints extends Logging {
@@ -77,8 +74,11 @@ object DenialConstraints extends Logging {
 
   // TODO: These entries below must be synced with `IntegrityConstraintDiscovery`
   private val opSigns = Seq("EQ", "IQ", "LT", "GT")
-  private val signMap: Map[String, String] =
-    Map("EQ" -> "=", "IQ" -> "!=", "LT" -> "<", "GT" -> ">")
+  private val signMap: Map[String, (String, String) => String] = Map(
+    "EQ" -> ((l: String, r: String) => s"$l <=> $r"),
+    "IQ" -> ((l: String, r: String) => s"NOT($l <=> $r)"),
+    "LT" -> ((l: String, r: String) => s"$l < $r"),
+    "GT" -> ((l: String, r: String) => s"$l > $r"))
 
   // The format like this: "t1&t2&EQ(t1.fk1,t2.fk1)&IQ(t1.v4,t2.v4)"
   def parse(path: String): DenialConstraints = {

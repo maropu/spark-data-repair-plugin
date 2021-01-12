@@ -41,13 +41,15 @@ class ScavengerRepairModel(ApiBase):
         super().__init__()
 
         # Basic parameters
-        self.constraint_input_path = None
         self.db_name = db_name
         self.table_name = None
         self.row_id = None
 
         # Parameters for error detection
         self.error_cells = None
+        self.constraint_path = None
+        self.error_pattern = None
+        self.error_cells_as_string = False
         self.discrete_thres = 80
         self.min_corr_thres = 0.70
         self.domain_threshold_alpha = 0.0
@@ -79,6 +81,7 @@ class ScavengerRepairModel(ApiBase):
         # TODO: Needs to support a pattern-based error detector (See [10])
         self.__detectors = [
             NullErrorDetector(),
+            RegExErrorDetector(),
             ConstraintErrorDetector(),
             # OutlierErrorDetector()
         ]
@@ -106,8 +109,13 @@ class ScavengerRepairModel(ApiBase):
             "top_delta_repairs"
         ]
 
-    def setConstraints(self, constraint_input_path):
-        self.constraint_input_path = constraint_input_path
+    def setConstraints(self, constraint_path):
+        self.constraint_path = constraint_path
+        return self
+
+    def setErrorPattern(self, error_pattern, error_cells_as_string = False):
+        self.error_pattern = error_pattern
+        self.error_cells_as_string = error_cells_as_string
         return self
 
     def setDbName(self, db_name):
@@ -222,16 +230,23 @@ class ScavengerRepairModel(ApiBase):
         for t in list(filter(lambda x: x in self.__meta_view_names, env.values())):
             self.spark.sql("DROP VIEW IF EXISTS %s" % env[t])
 
-    def __check_input(self, env):
-        env.update(json.loads(self.__svg_api.checkInputTable(self.db_name, self.table_name, self.row_id)))
+    def __check_input(self):
+        env = json.loads(self.__svg_api.checkInputTable(self.db_name, self.table_name, self.row_id))
         continous_attrs = env["continous_attrs"].split(",")
-        return self.spark.table(env["input_table"]), \
+        return env, self.spark.table(env["input_table"]), \
             continous_attrs if continous_attrs != [""] else []
 
-    def __detect_error_cells(self, env):
-        # Initializes defined error detectors with the given env
+    def __detect_error_cells(self, input_table):
+        params = {}
+        params["row_id"] = self.row_id
+        params["input_table"] = input_table
+        params["constraint_path"] = self.constraint_path
+        params["error_pattern"] = self.error_pattern
+        params["error_cells_as_string"] = self.error_cells_as_string
+
+        # Initializes defined error detectors with the given params
         for d in self.__detectors:
-            d.setup(env)
+            d.setup(params)
 
         error_cells_dfs = [ d.detect() for d in self.__detectors ]
 
@@ -261,7 +276,7 @@ class ScavengerRepairModel(ApiBase):
             self.__start_spark_jobs("error detection",
                 "[Error Detection Phase] Detecting errors in a table `%s` (%s cols x %s rows)..." % \
                     (env["input_table"], env["num_attrs"], env["num_input_rows"]))
-            env["gray_cells"] = self.__detect_error_cells(env)
+            env["gray_cells"] = self.__detect_error_cells(env["input_table"])
             self.__end_spark_jobs()
 
         return self.spark.table(env["gray_cells"])
@@ -312,7 +327,7 @@ class ScavengerRepairModel(ApiBase):
         self.__start_spark_jobs("cell domains analysis",
             "[Error Detection Phase] Analyzing cell domains to fix error cells...")
         env.update(json.loads(self.__svg_api.computeDomainInErrorCells(
-            env["discrete_features"], env["attr_stats"], env["gray_cells"], env["row_id"],
+            env["discrete_features"], env["attr_stats"], env["gray_cells"], self.row_id,
             env["continous_attrs"],
             self.max_attrs_to_compute_domains,
             self.min_corr_thres,
@@ -785,13 +800,8 @@ class ScavengerRepairModel(ApiBase):
             ret_as_json = self.__svg_api.repairAttrsFrom(repair_updates_view, self.db_name, self.table_name, self.row_id)
             return self.spark.table(json.loads(ret_as_json)["repaired"])
 
-        # Env used to repair the given table
-        env = {}
-        env["row_id"] = self.row_id
-        env["constraint_input_path"] = self.constraint_input_path
-
         # Checks # of input rows and attributes
-        input_df, continous_attrs = self.__check_input(env)
+        env, input_df, continous_attrs = self.__check_input()
 
         if compute_repair_candidate_prob and len(continous_attrs) != 0:
             raise ValueError("Cannot compute probability mass function of repairs " \
