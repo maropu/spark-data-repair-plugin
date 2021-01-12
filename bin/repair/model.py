@@ -47,9 +47,8 @@ class ScavengerRepairModel(ApiBase):
 
         # Parameters for error detection
         self.error_cells = None
-        self.constraint_path = None
-        self.error_pattern = None
-        self.error_cells_as_string = False
+        # A set of error detectors, we use the NULL detector by default
+        self.error_detectors = [NullErrorDetector()]
         self.discrete_thres = 80
         self.min_corr_thres = 0.70
         self.domain_threshold_alpha = 0.0
@@ -60,6 +59,7 @@ class ScavengerRepairModel(ApiBase):
 
         # Parameters for repair model training
         self.training_data_sample_ratio = 1.0
+        self.min_training_row_ratio = 0.10
         self.max_training_column_num = None
         self.small_domain_threshold = 12
         self.inference_order = "entropy"
@@ -71,20 +71,12 @@ class ScavengerRepairModel(ApiBase):
         self.maximal_likelihood_repair_enabled = False
         self.repair_delta = None
 
+
         # JVM interfaces for Scavenger APIs
         self.__svg_api = self.jvm.ScavengerRepairApi
 
         # Internally used to check elapsed time
         self.__timer_base = None
-
-        # Defines detectors to discover error cells
-        # TODO: Needs to support a pattern-based error detector (See [10])
-        self.__detectors = [
-            NullErrorDetector(),
-            RegExErrorDetector(),
-            ConstraintErrorDetector(),
-            # OutlierErrorDetector()
-        ]
 
         # Defines a class to compute cost of updates.
         #
@@ -109,15 +101,6 @@ class ScavengerRepairModel(ApiBase):
             "top_delta_repairs"
         ]
 
-    def setConstraints(self, constraint_path):
-        self.constraint_path = constraint_path
-        return self
-
-    def setErrorPattern(self, error_pattern, error_cells_as_string = False):
-        self.error_pattern = error_pattern
-        self.error_cells_as_string = error_cells_as_string
-        return self
-
     def setDbName(self, db_name):
         self.db_name = db_name
         return self
@@ -132,6 +115,13 @@ class ScavengerRepairModel(ApiBase):
 
     def setErrorCells(self, error_cells):
         self.error_cells = error_cells
+        return self
+
+    def setErrorDetector(self, detector):
+        if not isinstance(detector, ErrorDetector):
+            raise ValueError("Error detector must derive a base class " \
+                "`repair.detectors.ErrorDetector`")
+        self.error_detectors.append(detector)
         return self
 
     def setDiscreteThreshold(self, thres):
@@ -193,7 +183,7 @@ class ScavengerRepairModel(ApiBase):
 
     def setRepairDelta(self, delta):
         if int(delta) <= 0:
-            raise ValueError("repair delta must be positive")
+            raise ValueError("Repair delta must be positive")
         self.repair_delta = delta
         return self
 
@@ -237,18 +227,11 @@ class ScavengerRepairModel(ApiBase):
             continous_attrs if continous_attrs != [""] else []
 
     def __detect_error_cells(self, input_table):
-        params = {}
-        params["row_id"] = self.row_id
-        params["input_table"] = input_table
-        params["constraint_path"] = self.constraint_path
-        params["error_pattern"] = self.error_pattern
-        params["error_cells_as_string"] = self.error_cells_as_string
+        # Initializes the given error detectors with the input params
+        for d in self.error_detectors:
+            d.setup(self.row_id, input_table)
 
-        # Initializes defined error detectors with the given params
-        for d in self.__detectors:
-            d.setup(params)
-
-        error_cells_dfs = [ d.detect() for d in self.__detectors ]
+        error_cells_dfs = [ d.detect() for d in self.error_detectors ]
 
         err_cells = self.__temp_name("gray_cells")
         err_cells_df = functools.reduce(lambda x, y: x.union(y), error_cells_dfs)
@@ -261,7 +244,7 @@ class ScavengerRepairModel(ApiBase):
             df = self.error_cells if isinstance(self.error_cells, DataFrame) \
                 else self.spark.table(self.error_cells)
             if not all(c in df.columns for c in (self.row_id, "attribute")):
-                raise ValueError("error cells must have `%s` and `attribute` in columns" % self.row_id)
+                raise ValueError("Error cells must have `%s` and `attribute` in columns" % self.row_id)
 
             env["gray_cells"] = self.__temp_view(df) if isinstance(self.error_cells, DataFrame) \
                 else str(self.error_cells)
@@ -613,7 +596,7 @@ class ScavengerRepairModel(ApiBase):
                         if row[y] is None:
                             if compute_repair_candidate_prob or maximal_likelihood_repair_enabled:
                                 predicted = model.predict_proba(X)
-                                pmf = { "classes" : model.classes_.tolist(), "probs" : predicted[0].tolist() }
+                                pmf = {"classes" : model.classes_.tolist(), "probs" : predicted[0].tolist()}
                                 row[y] = json.dumps(pmf)
                             else:
                                 predicted = model.predict(X)
@@ -726,8 +709,10 @@ class ScavengerRepairModel(ApiBase):
             return hist_df
 
         train_df = self.__select_training_rows(fixed_df)
-        if train_df.count() <= float(env["num_input_rows"]) * 0.10:
-            raise ValueError("Number of clean training rows must be greater than the 10% number of input rows")
+        min_training_row_num = int(float(env["num_input_rows"]) * self.min_training_row_ratio)
+        if train_df.count() <= min_training_row_num:
+            raise ValueError("Number of training rows must be greater than %d (the %d%% number of input rows), " \
+                "but %d rows found" % (min_training_row_num, int(self.min_training_row_ratio * 100), train_df.count()))
 
         # Checks if we have the enough number of features for inference
         # TODO: In case of `num_features == 0`, we might be able to select the most accurate and
@@ -783,7 +768,7 @@ class ScavengerRepairModel(ApiBase):
         if self.maximal_likelihood_repair_enabled and self.repair_delta is None:
             raise ValueError("`setRepairDelta` should be called before maximal likelihood repairing")
         if self.inference_order not in ["error", "domain", "entropy"]:
-            raise ValueError("inference order must be `error`, `domain`, or `entropy`, but `%s` found" % \
+            raise ValueError("Inference order must be `error`, `domain`, or `entropy`, but `%s` found" % \
                 self.inference_order)
 
         exclusive_param_list = [detect_errors_only, compute_repair_candidate_prob, \

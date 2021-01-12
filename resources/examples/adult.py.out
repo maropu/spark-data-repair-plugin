@@ -78,6 +78,7 @@ only showing top 1 row
 ...   .setDbName("default") \
 ...   .setTableName("adult") \
 ...   .setRowId("tid") \
+...   .setErrorDetector(ConstraintErrorDetector(constraint_path="./testdata/adult_constraints.txt")) \
 ...   .run()
 Detecting errors in a table `default.adult` (20 rows x 7 cols)...
 ...

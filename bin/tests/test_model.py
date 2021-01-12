@@ -77,7 +77,7 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
                 .setMaximalLikelihoodRepairEnabled(True).run())
         self.assertRaisesRegexp(
             ValueError,
-            "inference order must be `error`, `domain`, or `entropy`",
+            "Inference order must be `error`, `domain`, or `entropy`",
             lambda: ScavengerRepairModel().setTableName("dummyTab").setRowId("dummyId") \
                 .setInferenceOrder("invalid").run())
 

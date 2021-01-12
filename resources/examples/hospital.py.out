@@ -80,7 +80,7 @@ only showing top 1 row
 ...   .setDbName("default") \
 ...   .setTableName("hospital") \
 ...   .setRowId("tid") \
-...   .setConstraints("./testdata/hospital_constraints.txt") \
+...   .setErrorDetector(ConstraintErrorDetector(constraint_path="./testdata/hospital_constraints.txt")) \
 ...   .run()
 Detecting errors in a table `default.hospital` (1000 rows x 20 cols)...
 ...

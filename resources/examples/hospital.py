@@ -37,7 +37,7 @@ repaired_df = scavenger.repair() \
   .setDbName("default") \
   .setTableName("hospital") \
   .setRowId("tid") \
-  .setConstraints("./testdata/hospital_constraints.txt") \
+  .setErrorDetector(ConstraintErrorDetector(constraint_path="./testdata/hospital_constraints.txt")) \
   .setDiscreteThreshold(100) \
   .setInferenceOrder("domain") \
   .run()

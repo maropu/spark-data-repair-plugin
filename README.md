@@ -118,7 +118,8 @@ For more running examples, please check scripts in the [resources/examples](./re
 
 ## Error Detection
 
-You can use constraint rules to detect error cells if you set a file having the rules in `.setConstraints`.
+You can take advantage of constraint rules to detect error cells if you use the built-in error detector
+`ConstraintErrorDetector` that is initialized with a file having the rules.
 Note that the file format follows the [HoloClean](http://www.holoclean.io/) one;
 they use the [denial constraints](https://www.sciencedirect.com/science/article/pii/S0890540105000179) [5]
 whose predicates cannot hold true simultaneously.
@@ -134,7 +135,7 @@ t1&EQ(t1.Sex,"Male")&EQ(t1.Relationship,"Wife")
 # Note that a process will return repair candidates instead of clean data
 # when setting `True` to `return_repair_candidates`.
 >>> df = scavenger.repair().setTableName("adult").setRowId("tid") \
-...   .setConstraints("./testdata/adult_constraints.txt") \
+...   .setErrorDetector(ConstraintErrorDetector(constraint_path="./testdata/adult_constraints.txt")) \
 ...   .run(return_repair_candidates=True)
 
 # Changes values from `Female` to `Male` in the `Sex` cells
@@ -186,10 +187,10 @@ scavenger.repair()
   .setDbName(str)                              // database name (default: 'default')
   .setTableName(str)                           // table name
   .setRowId(str)                               // unique column name in table
-  .setConstraints(str)                         // path of constraint file
 
   // Parameters for Error Detection
   .setErrorCells(df)                           // user-specified error cells
+  .setErrorDetector(impl)                      // error detector implementation (`RegExErrorDetector`, `ConstraintErrorDetector`, or `OutlierErrorDetector`)
   .setDiscreteThreshold(float)                 // max domain size of discrete values (default: 80)
   .setMinCorrThreshold(float)                  // threshold to decide which columns are used to compute domains (default: 0.70)
   .setDomainThresholds(float, float)           // thresholds to reduce domain size (default: 0.0, 0.70)

@@ -37,7 +37,7 @@ repaired_df = scavenger.repair() \
   .setDbName("default") \
   .setTableName("adult") \
   .setRowId("tid") \
-  .setConstraints("./testdata/adult_constraints.txt") \
+  .setErrorDetector(ConstraintErrorDetector(constraint_path="./testdata/adult_constraints.txt")) \
   .run()
 
 # Computes performance numbers (precision & recall)

@@ -25,61 +25,66 @@ class ErrorDetector:
     __metaclass__ = ABCMeta
 
     def __init__(self, name):
-        self.params = None
+        self.row_id = None
+        self.input_table = None
         self.spark = SparkSession.builder.getOrCreate()
 
         # JVM interfaces for Scavenger APIs
         self.api = self.spark.sparkContext._active_spark_context._jvm.ScavengerErrorDetectorApi
 
-    def setup(self, params):
-        self.params = params
-
-    def _has_param(key):
-        return key in self.params and self.params[key] is not None
+    def setup(self, row_id, input_table):
+        self.row_id = row_id
+        self.input_table = input_table
 
     @abstractmethod
-    def detect(self):
+    def _detect_impl(self):
         raise NotImplementedError
+
+    def detect(self):
+        dirty_df = self._detect_impl()
+        assert isinstance(dirty_df, DataFrame)
+        return dirty_df
 
 class NullErrorDetector(ErrorDetector):
 
     def __init__(self):
         ErrorDetector.__init__(self, 'NullErrorDetector')
 
-    def detect(self):
-        jdf = self.api.detectNullCells('', self.params['input_table'], self.params['row_id'])
+    def _detect_impl(self):
+        jdf = self.api.detectNullCells('', self.input_table, self.row_id)
         return DataFrame(jdf, self.spark._wrapped)
 
 class RegExErrorDetector(ErrorDetector):
 
-    def __init__(self):
+    def __init__(self, error_pattern, error_cells_as_string=False):
         ErrorDetector.__init__(self, 'RegExErrorDetector')
+        self.error_pattern = error_pattern
+        self.error_cells_as_string = error_cells_as_string
 
-    def detect(self):
-        error_pattern = self.params['error_pattern'] if self._has_param('error_pattern') else ''
+    def _detect_impl(self):
         jdf = self.api.detectErrorCellsFromRegEx(
-            '', self.params['input_table'], self.params['row_id'], self.params['error_pattern'],
-            self.params['error_cells_as_string'])
+            '', self.input_table, self.row_id, self.error_pattern, self.error_cells_as_string)
         return DataFrame(jdf, self.spark._wrapped)
 
 class ConstraintErrorDetector(ErrorDetector):
 
-    def __init__(self):
+    def __init__(self, constraint_path):
         ErrorDetector.__init__(self, 'ConstraintErrorDetector')
+        self.constraint_path = constraint_path
 
-    def detect(self):
-        constraint_path = self.params['constraint_path'] if self._has_param('constraint_path') else ''
+    def _detect_impl(self):
         jdf = self.api.detectErrorCellsFromConstraints(
-            '', self.params['input_table'], self.params['row_id'], constraint_path)
+            '', self.input_table, self.row_id, self.constraint_path)
         return DataFrame(jdf, self.spark._wrapped)
 
 class OutlierErrorDetector(ErrorDetector):
 
-    def __init__(self):
+    def __init__(self, approx_enabled):
         ErrorDetector.__init__(self, 'OutlierErrorDetector')
+        self.approx_enabled = approx_enabled
 
-    def detect(self):
+    def _detect_impl(self):
         jdf = self.api.detectErrorCellsFromOutliers(
-            '', self.params['input_table'], self.params['row_id'], False)
+            '', self.input_table, self.row_id, self.approx_enabled)
         return DataFrame(jdf, self.spark._wrapped)
 
