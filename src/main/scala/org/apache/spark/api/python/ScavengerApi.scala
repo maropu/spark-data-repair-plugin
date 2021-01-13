@@ -25,6 +25,7 @@ import org.apache.spark.python._
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.types._
+import org.apache.spark.util.ScavengerUtils._
 import org.apache.spark.util.{Utils => SparkUtils}
 
 /** A Python API entry point to use the Scavenger functionality. */

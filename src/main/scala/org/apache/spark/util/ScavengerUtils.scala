@@ -15,16 +15,15 @@
  * limitations under the License.
  */
 
-package org.apache.spark.api
+package org.apache.spark.util
 
 import org.apache.commons.lang.RandomStringUtils
 
 import org.apache.spark.SparkException
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
-import org.apache.spark.util.Utils
 
-package object python {
+object ScavengerUtils {
 
   def withSparkSession[T](f: SparkSession => T): T = {
     SparkSession.getActiveSession.map { sparkSession =>

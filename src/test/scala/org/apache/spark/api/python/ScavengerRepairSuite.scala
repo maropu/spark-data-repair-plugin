@@ -20,7 +20,7 @@ package org.apache.spark.api.python
 import org.json4s._
 import org.json4s.jackson.JsonMethods._
 
-import org.apache.spark.sql.{QueryTest, Row}
+import org.apache.spark.sql.QueryTest
 import org.apache.spark.SparkException
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
@@ -30,31 +30,6 @@ class ScavengerRepairSuite extends QueryTest with SharedSparkSession {
   protected override def beforeAll(): Unit = {
     super.beforeAll()
     spark.sql(s"SET ${SQLConf.CBO_ENABLED.key}=true")
-  }
-
-  test("checkAndGetInputTable") {
-    withTable("t") {
-      spark.range(1).selectExpr("CAST(id AS STRING) tid", "id AS v").write.saveAsTable("t")
-      val errMsg = intercept[SparkException] {
-        ScavengerRepairApi.checkAndGetInputTable("default", "t", "no_existent_tid")
-      }.getMessage
-      assert(errMsg.contains("Column 'no_existent_tid' does not exist in 'default.t'."))
-
-      val (inputDf, qualifiedName) = ScavengerRepairApi.checkAndGetInputTable("default", "t", "tid")
-      checkAnswer(inputDf, Row("0", 0L))
-      assert(qualifiedName === "default.t")
-    }
-    withTempView("t") {
-      spark.range(1).selectExpr("CAST(id AS STRING) tid", "id AS v").createOrReplaceTempView("t")
-      val errMsg = intercept[SparkException] {
-        ScavengerRepairApi.checkAndGetInputTable("", "t", "no_existent_tid")
-      }.getMessage
-      assert(errMsg.contains("Column 'no_existent_tid' does not exist in 't'."))
-
-      val (inputDf, qualifiedName) = ScavengerRepairApi.checkAndGetInputTable("", "t", "tid")
-      checkAnswer(inputDf, Row("0", 0L))
-      assert(qualifiedName === "t")
-    }
   }
 
   test("checkInputTable - unsupported types") {

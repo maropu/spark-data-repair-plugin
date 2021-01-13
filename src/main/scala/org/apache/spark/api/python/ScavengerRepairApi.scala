@@ -20,10 +20,11 @@ package org.apache.spark.api.python
 import org.apache.spark.SparkException
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.plans.logical.LeafNode
+import org.apache.spark.util.ScavengerUtils._
 import org.apache.spark.util.{Utils => SparkUtils}
 
 /** A Python API entry point for data cleaning. */
-object ScavengerRepairApi extends BaseScavengerRepairApi {
+object ScavengerRepairApi extends ScavengerBase {
 
   def checkInputTable(dbName: String, tableName: String, rowId: String): String = {
     val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
@@ -45,7 +46,6 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
   case class ColumnStat(distinctCount: Long, min: Option[Any], max: Option[Any])
 
   private def getColumnStats(inputName: String): Map[String, ColumnStat] = {
-    val spark = activeSparkSession()
     val df = spark.table(inputName)
     val tableStats = {
       val tableNode = df.queryExecution.optimizedPlan.collectLeaves().head.asInstanceOf[LeafNode]
@@ -62,7 +62,6 @@ object ScavengerRepairApi extends BaseScavengerRepairApi {
 
   private[python] def computeAndGetTableStats(tableIdentifier: String): Map[String, ColumnStat] = {
     // For safe guards, just cache it for `ANALYZE TABLE`
-    val spark = activeSparkSession()
     spark.table(tableIdentifier).cache()
     spark.sql(
       s"""

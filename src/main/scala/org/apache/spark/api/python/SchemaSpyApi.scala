@@ -28,6 +28,7 @@ import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.util.{MutableURLClassLoader, Utils => SparkUtils}
+import org.apache.spark.util.ScavengerUtils._
 
 import io.github.maropu.SchemaSpyLauncher
 

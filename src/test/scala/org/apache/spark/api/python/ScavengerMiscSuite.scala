@@ -21,6 +21,7 @@ import org.apache.spark.SparkException
 import org.apache.spark.sql.{QueryTest, Row}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
+import org.apache.spark.util.ScavengerUtils._
 
 class ScavengerMiscSuite extends QueryTest with SharedSparkSession {
 
