@@ -31,9 +31,9 @@ from repair.model import *
 
 class Scavenger(ApiBase):
 
-    __instance = None # type: ignore
+    __instance: Any = None
 
-    def __new__(cls, *args, **kwargs): # type: ignore
+    def __new__(cls, *args: Any, **kwargs: Any) -> "Scavenger":
         if cls.__instance == None:
             cls.__instance = super(Scavenger, cls).__new__(cls)
         return cls.__instance
@@ -43,15 +43,15 @@ class Scavenger(ApiBase):
         super().__init__()
 
     @staticmethod
-    def getOrCreate(): # type: ignore
+    def getOrCreate() -> "Scavenger":
         return Scavenger()
 
     def constraints(self) -> ScavengerConstraints:
-        return ScavengerConstraints(self.output, self.db_name)
+        return ScavengerConstraints().setDbName(self.db_name).setOutput(self.output)
 
     def repair(self) -> ScavengerRepairModel:
-        return ScavengerRepairModel(self.db_name)
+        return ScavengerRepairModel().setDbName(self.db_name)
 
     def misc(self) -> ScavengerRepairMisc:
-        return ScavengerRepairMisc(self.db_name)
+        return ScavengerRepairMisc().setDbName(self.db_name)
 

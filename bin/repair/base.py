@@ -17,26 +17,26 @@
 # limitations under the License.
 #
 
-from typing import Optional
+from typing import Any, Optional
 
 from pyspark.sql import SparkSession
 
 
 class ApiBase():
 
-    def __init__(self) -> None:
-        self.output: Optional[str] = None
-        self.db_name: str = "default"
+    output: Optional[str] = None
+    db_name: str = ""
 
+    def __init__(self) -> None:
         # For Spark/JVM interactions
         self.spark = SparkSession.builder.getOrCreate()
         self.jvm = self.spark.sparkContext._active_spark_context._jvm
 
-    def setOutput(self, output: str): # type: ignore
+    def setOutput(self, output: str) -> Any:
         self.output = output
         return self
 
-    def setDbName(self, db_name: str): # type: ignore
+    def setDbName(self, db_name: str) -> Any:
         self.db_name = db_name
         return self
 
@@ -45,6 +45,8 @@ class ApiBase():
 
 
 class ResultBase():
+
+    output: Optional[str] = None
 
     # TODO: Prohibit instantiation directly
     def __init__(self, output: str) -> None:

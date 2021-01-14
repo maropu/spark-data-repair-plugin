@@ -24,14 +24,13 @@ from repair.base import *
 
 class ScavengerConstraints(ApiBase):
 
-    # TODO: Prohibit instantiation directly
-    def __init__(self, output: Optional[str], db_name: str) -> None:
-        super().__init__()
-        self.output: Optional[str] = output
-        self.db_name: str = db_name
-        self.table_name: Optional[str] = None
+    table_name: Optional[str] = None
 
-    def setTableName(self, table_name: str): # type: ignore
+    # TODO: Prohibit instantiation directly
+    def __init__(self) -> None:
+        super().__init__()
+
+    def setTableName(self, table_name: str) -> "ScavengerConstraints":
         self.table_name = table_name
         return self
 

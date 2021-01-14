@@ -27,46 +27,46 @@ from repair.base import *
 
 class ScavengerRepairMisc(ApiBase):
 
+    table_name: Optional[str] = None
+    row_id: Optional[str] = None
+    target_attr_list: str = ""
+    k: Optional[int] = None
+    q: int = 2
+    clustering_alg: str = "bisect-kmeans"
+    null_ratio: float = 0.01
+
     # TODO: Prohibit instantiation directly
-    def __init__(self, db_name: str) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.db_name: str = db_name
-        self.table_name: Optional[str] = None
-        self.row_id: Optional[str] = None
-        self.target_attr_list: str = ""
-        self.k: Optional[int] = None
-        self.q: int = 2
-        self.clustering_alg: str = "bisect-kmeans"
-        self.null_ratio: float = 0.01
 
         # JVM interfaces for Scavenger APIs
         self.__svg_api = self.jvm.ScavengerMiscApi
 
-    def setTableName(self, table_name: str): # type: ignore
+    def setTableName(self, table_name: str) -> "ScavengerRepairMisc":
         self.table_name = table_name
         return self
 
-    def setRowId(self, row_id: str): # type: ignore
+    def setRowId(self, row_id: str) -> "ScavengerRepairMisc":
         self.row_id = row_id
         return self
 
-    def setTargetAttrList(self, target_attr_list: str): # type: ignore
+    def setTargetAttrList(self, target_attr_list: str) -> "ScavengerRepairMisc":
         self.target_attr_list = target_attr_list
         return self
 
-    def setK(self, k: int): # type: ignore
+    def setK(self, k: int) -> "ScavengerRepairMisc":
         self.k = k
         return self
 
-    def setQ(self, q: int): # type: ignore
+    def setQ(self, q: int) -> "ScavengerRepairMisc":
         self.q = q
         return self
 
-    def setClusteringAlg(self, alg: str): # type: ignore
+    def setClusteringAlg(self, alg: str) -> "ScavengerRepairMisc":
         self.clustering_alg = alg
         return self
 
-    def setNullRatio(self, null_ratio: float): # type: ignore
+    def setNullRatio(self, null_ratio: float) -> "ScavengerRepairMisc":
         self.null_ratio = null_ratio
         return self
 
@@ -109,9 +109,9 @@ class ScavengerRepairMisc(ApiBase):
 
 class SchemaSpy(ApiBase):
 
-    __instance = None # type: ignore
+    __instance: Any = None
 
-    def __new__(cls, *args, **kwargs): # type: ignore
+    def __new__(cls, *args: Any, **kwargs: Any) -> "SchemaSpy":
         if cls.__instance == None:
             cls.__instance = super(SchemaSpy, cls).__new__(cls)
         return cls.__instance
@@ -126,14 +126,14 @@ class SchemaSpy(ApiBase):
         self.spy_api = self.jvm.SchemaSpyApi
 
     @staticmethod
-    def getOrCreate(): # type: ignore
+    def getOrCreate() -> "SchemaSpy":
         return SchemaSpy()
 
-    def setDriverName(self, driver_name: str): # type: ignore
+    def setDriverName(self, driver_name: str) -> "SchemaSpy":
         self.driver_name = driver_name
         return self
 
-    def setProps(self, props: str): # type: ignore
+    def setProps(self, props: str) -> "SchemaSpy":
         self.props = props
         return self
 
@@ -149,5 +149,5 @@ class SchemaSpy(ApiBase):
 
 # This is a method to use SchemaSpy functionality directly
 def spySchema(args: str = "") -> None:
-    sc._jvm.SchemaSpyApi.run(args)
+    sc._jvm.SchemaSpyApi.run(args) # type: ignore
 

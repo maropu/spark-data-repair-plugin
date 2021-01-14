@@ -18,19 +18,22 @@
 #
 
 from abc import ABCMeta, abstractmethod
+from typing import Union
 
 class Distance:
 
     __metaclass__ = ABCMeta
 
+    name: str
+
     def __init__(self, name: str) -> None:
         self.name: str = name
 
     @abstractmethod
-    def _compute_impl(self, x: float, y: float) -> float:
+    def _compute_impl(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
         raise NotImplementedError
 
-    def compute(self, x: float, y: float) -> float:
+    def compute(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
       distance = self._compute_impl(x, y)
       assert type(distance) is float
       return distance
@@ -40,7 +43,7 @@ class Levenshtein(Distance):
     def __init__(self) -> None:
         Distance.__init__(self, 'Levenshtein')
 
-    def _compute_impl(self, x: float, y: float) -> float:
+    def _compute_impl(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
         import Levenshtein
         return float(Levenshtein.distance(str(x), str(y)))
 

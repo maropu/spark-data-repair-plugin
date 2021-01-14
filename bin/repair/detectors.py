@@ -27,10 +27,13 @@ class ErrorDetector:
 
     __metaclass__ = ABCMeta
 
+    name: str
+
+    row_id: Optional[str] = None
+    input_table: Optional[str] = None
+
     def __init__(self, name: str) -> None:
-        self.name: str = name
-        self.row_id: Optional[str] = None
-        self.input_table: Optional[str] = None
+        self.name = name
 
         # For Spark/JVM interactions
         self.spark = SparkSession.builder.getOrCreate()

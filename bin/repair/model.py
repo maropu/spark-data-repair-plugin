@@ -26,7 +26,7 @@ import logging
 import numpy as np
 import pandas as pd
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 from pyspark.sql import DataFrame, Row, functions
 from pyspark.sql.functions import col
@@ -38,155 +38,163 @@ from repair.distances import *
 
 class ScavengerRepairModel(ApiBase):
 
+    # Basic parameters
+    table_name: Optional[str] = None
+    row_id: Optional[str] = None
+
+    # Parameters for error detection
+    error_cells: Optional[str] = None
+    # A set of error detectors
+    error_detectors: List[ErrorDetector] = []
+    discrete_thres: float = 80
+    min_corr_thres: float = 0.70
+    domain_threshold_alpha: float = 0.0
+    domain_threshold_beta: float = 0.70
+    max_attrs_to_compute_domains: int = 4
+    attr_stat_sample_ratio: float = 1.0
+    attr_stat_threshold: float = 0.0
+
+    # Parameters for repair model training
+    training_data_sample_ratio: float = 1.0
+    min_training_row_ratio: float = 0.10
+    max_training_column_num: Optional[int] = None
+    small_domain_threshold: int = 12
+    inference_order: str = "entropy"
+    lgb_num_leaves: int = 31
+    lgb_max_depth: int = -1
+
+    # Parameters for repairing
+    repair_updates: Optional[str] = None
+    maximal_likelihood_repair_enabled: bool = False
+    repair_delta: Optional[int] = None
+
+    # Defines a class to compute cost of updates.
+    #
+    # TODO: Needs a sophisticated way to compute distances between a current value and a repair candidate.
+    # For example, the HoloDetect paper [1] proposes a noisy channel model for the data augmentation methodology
+    # of training data. This model consists of transformation rules and and data augmentation policies
+    # (i.e., distribution over those data transformation). This model can be re-used to compute this cost.
+    # For more details, see the section 5, 'DATA AUGMENTATION LEARNING', in the paper.
+    distance: Distance = Levenshtein()
+
+    # Internally used to check elapsed time
+    __timer_base: Optional[float] = None
+
+    # Temporary views used in repairing processes
+    __meta_view_names: ClassVar[List[str]] = [
+        "discrete_features",
+        "gray_cells",
+        "repair_base",
+        "cell_domain",
+        "partial_repaired",
+        "repaired",
+        "dirty",
+        "weak",
+        "train",
+        "top_delta_repairs"
+    ]
+
     # TODO: Prohibit instantiation directly
-    def __init__(self, db_name: str = "") -> None:
+    def __init__(self) -> None:
         super().__init__()
 
-        # Basic parameters
-        self.db_name: str = db_name
-        self.table_name: Optional[str] = None
-        self.row_id: Optional[str] = None
-
-        # Parameters for error detection
-        self.error_cells: Optional[str] = None
-        # A set of error detectors, we use the NULL detector by default
-        self.error_detectors: List[ErrorDetector] = [NullErrorDetector()]
-        self.discrete_thres: float = 80
-        self.min_corr_thres: float = 0.70
-        self.domain_threshold_alpha: float = 0.0
-        self.domain_threshold_beta: float = 0.70
-        self.max_attrs_to_compute_domains: int = 4
-        self.attr_stat_sample_ratio: float = 1.0
-        self.attr_stat_threshold: float = 0.0
-
-        # Parameters for repair model training
-        self.training_data_sample_ratio: float = 1.0
-        self.min_training_row_ratio: float = 0.10
-        self.max_training_column_num: Optional[int] = None
-        self.small_domain_threshold: int = 12
-        self.inference_order: str = "entropy"
-        self.lgb_num_leaves: int = 31
-        self.lgb_max_depth: int = -1
-
-        # Parameters for repairing
-        self.repair_updates: Optional[str] = None
-        self.maximal_likelihood_repair_enabled: bool = False
-        self.repair_delta: Optional[int] = None
-
-        # Defines a class to compute cost of updates.
-        #
-        # TODO: Needs a sophisticated way to compute distances between a current value and a repair candidate.
-        # For example, the HoloDetect paper [1] proposes a noisy channel model for the data augmentation methodology
-        # of training data. This model consists of transformation rules and and data augmentation policies
-        # (i.e., distribution over those data transformation). This model can be re-used to compute this cost.
-        # For more details, see the section 5, 'DATA AUGMENTATION LEARNING', in the paper.
-        self.distance: Distance = Levenshtein()
-
+        # To find error cells, the NULL detector is used by default
+        self.error_detectors.append(NullErrorDetector())
 
         # JVM interfaces for Scavenger APIs
         self.__svg_api = self.jvm.ScavengerRepairApi
 
-        # Internally used to check elapsed time
-        self.__timer_base: Optional[float] = None
-
-        # Temporary views used in repairing processes
-        self.__meta_view_names: List[str] = [
-            "discrete_features",
-            "gray_cells",
-            "repair_base",
-            "cell_domain",
-            "partial_repaired",
-            "repaired",
-            "dirty",
-            "weak",
-            "train",
-            "top_delta_repairs"
-        ]
-
-    def setDbName(self, db_name: str): # type: ignore
+    def setDbName(self, db_name: str) -> "ScavengerRepairModel":
         self.db_name = db_name
         return self
 
-    def setTableName(self, table_name: str): # type: ignore
+    def setTableName(self, table_name: str) -> "ScavengerRepairModel":
         self.table_name = table_name
         return self
 
-    def setRowId(self, row_id: str): # type: ignore
+    def setRowId(self, row_id: str) -> "ScavengerRepairModel":
         self.row_id = row_id
         return self
 
-    def setErrorCells(self, error_cells: str): # type: ignore
+    def setErrorCells(self, error_cells: str) -> "ScavengerRepairModel":
         self.error_cells = error_cells
         return self
 
-    def setErrorDetector(self, detector: ErrorDetector): # type: ignore
+    def setErrorDetector(self, detector: ErrorDetector) -> "ScavengerRepairModel":
         if not isinstance(detector, ErrorDetector):
             raise ValueError("Error detector must derive a base class " \
                 "`repair.detectors.ErrorDetector`")
         self.error_detectors.append(detector)
         return self
 
-    def setDiscreteThreshold(self, thres: float): # type: ignore
+    def setDiscreteThreshold(self, thres: float) -> "ScavengerRepairModel":
         self.discrete_thres = thres
         return self
 
-    def setMinCorrThreshold(self, thres: float): # type: ignore
+    def setMinCorrThreshold(self, thres: float) -> "ScavengerRepairModel":
         self.min_corr_thres = thres
         return self
 
-    def setDomainThresholds(self, alpha: float, beta: float): # type: ignore
+    def setDomainThresholds(self, alpha: float, beta: float) -> "ScavengerRepairModel":
         self.domain_threshold_alpha = alpha
         self.domain_threshold_beta = beta
         return self
 
-    def setAttrMaxNumToComputeDomains(self, max: int): # type: ignore
+    def setAttrMaxNumToComputeDomains(self, max: int) -> "ScavengerRepairModel":
         self.max_attrs_to_compute_domains = max
         return self
 
-    def setAttrStatSampleRatio(self, ratio: float): # type: ignore
+    def setAttrStatSampleRatio(self, ratio: float) -> "ScavengerRepairModel":
         self.attr_stat_sample_ratio = ratio
         return self
 
-    def setAttrStatThreshold(self, ratio: float): # type: ignore
+    def setAttrStatThreshold(self, ratio: float) -> "ScavengerRepairModel":
         self.attr_stat_threshold = ratio
         return self
 
-    def setTrainingDataSampleRatio(self, ratio: float): # type: ignore
+    def setTrainingDataSampleRatio(self, ratio: float) -> "ScavengerRepairModel":
         self.training_data_sample_ratio = ratio
         return self
 
-    def setMaxTrainingColumnNum(self, n: int): # type: ignore
+    def setMaxTrainingColumnNum(self, n: int) -> "ScavengerRepairModel":
         self.max_training_column_num = n
         return self
 
-    def setSmallDomainThreshold(self, thres: int): # type: ignore
+    def setSmallDomainThreshold(self, thres: int) -> "ScavengerRepairModel":
         self.small_domain_threshold = thres
         return self
 
-    def setInferenceOrder(self, inference_order: str): # type: ignore
+    def setInferenceOrder(self, inference_order: str) -> "ScavengerRepairModel":
         self.inference_order = inference_order
         return self
 
-    def setLGBNumLeaves(self, n: int): # type: ignore
+    def setLGBNumLeaves(self, n: int) -> "ScavengerRepairModel":
         self.lgb_num_leaves = n
         return self
 
-    def setLGBMaxDepth(self, n: int): # type: ignore
+    def setLGBMaxDepth(self, n: int) -> "ScavengerRepairModel":
         self.lgb_max_depth = n
         return self
 
-    def setRepairUpdates(self, repair_updates: str): # type: ignore
+    def setRepairUpdates(self, repair_updates: str) -> "ScavengerRepairModel":
         self.repair_updates = repair_updates
         return self
 
-    def setMaximalLikelihoodRepairEnabled(self, enabled: bool): # type: ignore
+    def setMaximalLikelihoodRepairEnabled(self, enabled: bool) -> "ScavengerRepairModel":
         self.maximal_likelihood_repair_enabled = enabled
         return self
 
-    def setRepairDelta(self, delta: int): # type: ignore
+    def setRepairDelta(self, delta: int) -> "ScavengerRepairModel":
         if delta <= 0:
             raise ValueError("Repair delta must be positive")
         self.repair_delta = delta
+        return self
+
+    def setDistance(self, distance: Distance) -> "ScavengerRepairModel":
+        if not isinstance(distance, Distance):
+            raise ValueError("Distance function must derive a base class " \
+                "`repair.distances.Distance`")
+        self.distance = distance
         return self
 
     def __temp_name(self, prefix: str = "temp") -> str:
@@ -408,12 +416,12 @@ class ScavengerRepairModel(ApiBase):
 
     def __entropy_based_order(self, env: Dict[str, str], train_df: DataFrame, error_attrs: List[Row]) -> List[str]:
         # Sorts target columns by correlations
-        target_columns = []
+        target_columns: List[str] = []
         error_attrs = list(map(lambda row: row.attribute, error_attrs))
 
         for index in range(len(error_attrs)):
             features = [ c for c in train_df.columns if c not in error_attrs ]
-            targets = [] # type: ignore
+            targets: List[Tuple[float, str]] = []
             for c in error_attrs:
                 total_corr = 0.0
                 for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][c]):
@@ -454,13 +462,13 @@ class ScavengerRepairModel(ApiBase):
         # Selects features if necessary
         if self.max_training_column_num is not None and \
                 int(self.max_training_column_num) < len(features):
-            fts = [] # type: ignore
+            heap: List[Tuple[float, str]] = []
             for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][y]):
                 if f in features:
                    # Converts to a negative value for extracting higher values
-                   heapq.heappush(fts, (-float(corr), f))
+                   heapq.heappush(heap, (-float(corr), f))
 
-            fts = [ heapq.heappop(fts)[1] for i in range(int(self.max_training_column_num)) ]
+            fts = [ heapq.heappop(heap)[1] for i in range(int(self.max_training_column_num)) ]
             logging.info("Select %s relevant features (%s) from available ones (%s)" % \
                 (len(fts), ",".join(fts), ",".join(features)))
             features = fts
@@ -576,14 +584,14 @@ class ScavengerRepairModel(ApiBase):
         dirty_df = dirty_df.withColumn(grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
 
         @functions.pandas_udf(dirty_df.schema, functions.PandasUDFType.GROUPED_MAP)
-        def repair(pdf): # type: ignore
+        def repair(pdf: pd.DataFrame) -> pd.DataFrame:
             target_columns = broadcasted_target_columns.value
             continous_attrs = broadcasted_continous_attrs.value
             models = broadcasted_models.value
             compute_repair_candidate_prob = broadcasted_compute_repair_candidate_prob.value
             maximal_likelihood_repair_enabled = \
                 broadcasted_maximal_likelihood_repair_enabled.value
-            rows = []
+            rows: List[Row] = []
             for index, row in pdf.iterrows():
                 for y in target_columns:
                     (model, features, transformers) = models[y]
@@ -653,7 +661,7 @@ class ScavengerRepairModel(ApiBase):
         broadcasted_distance = self.spark.sparkContext.broadcast(self.distance)
 
         @functions.pandas_udf("double", functions.PandasUDFType.SCALAR)
-        def distance(xs, ys): # type: ignore
+        def distance(xs: pd.Series, ys: pd.Series) -> pd.Series:
             distance = broadcasted_distance.value
             dists = [distance.compute(x, y) for x, y in zip(xs, ys)]
             return pd.Series(dists)
