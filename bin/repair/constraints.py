@@ -17,23 +17,28 @@
 # limitations under the License.
 #
 
+from typing import Optional
+
 from repair.base import *
 
 
 class ScavengerConstraints(ApiBase):
 
     # TODO: Prohibit instantiation directly
-    def __init__(self, output, db_name):
+    def __init__(self, output: Optional[str], db_name: str) -> None:
         super().__init__()
-        self.output = output
-        self.db_name = db_name
-        self.table_name = None
+        self.output: Optional[str] = output
+        self.db_name: str = db_name
+        self.table_name: Optional[str] = None
 
-    def setTableName(self, table_name):
+    def setTableName(self, table_name: str): # type: ignore
         self.table_name = table_name
         return self
 
-    def infer(self):
+    def infer(self) -> ResultBase:
+        if self.table_name is None:
+            raise ValueError("`setTableName` should be called before inferring")
+
         result_path = self.jvm.ScavengerApi. \
             inferConstraints(self.output, self.db_name, self.table_name)
         return ResultBase(result_path)

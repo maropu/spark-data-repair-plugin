@@ -21,6 +21,8 @@
 A Scavenger API Set for Data Profiling & Cleaning
 """
 
+from typing import Optional
+
 from repair.base import *
 from repair.constraints import *
 from repair.misc import *
@@ -29,27 +31,27 @@ from repair.model import *
 
 class Scavenger(ApiBase):
 
-    __instance = None
+    __instance = None # type: ignore
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, *args, **kwargs): # type: ignore
         if cls.__instance == None:
             cls.__instance = super(Scavenger, cls).__new__(cls)
         return cls.__instance
 
     # TODO: Prohibit instantiation directly
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
     @staticmethod
-    def getOrCreate():
+    def getOrCreate(): # type: ignore
         return Scavenger()
 
-    def constraints(self):
+    def constraints(self) -> ScavengerConstraints:
         return ScavengerConstraints(self.output, self.db_name)
 
-    def repair(self):
-        return ScavengerRepairModel(self.output, self.db_name)
+    def repair(self) -> ScavengerRepairModel:
+        return ScavengerRepairModel(self.db_name)
 
-    def misc(self):
+    def misc(self) -> ScavengerRepairMisc:
         return ScavengerRepairMisc(self.db_name)
 

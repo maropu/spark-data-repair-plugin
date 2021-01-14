@@ -17,38 +17,41 @@
 # limitations under the License.
 #
 
+from typing import Optional
+
 from pyspark.sql import SparkSession
 
 
 class ApiBase():
 
-    def __init__(self):
-        self.output = ""
-        self.db_name = "default"
-        self.spark = SparkSession.builder.getOrCreate()
+    def __init__(self) -> None:
+        self.output: Optional[str] = None
+        self.db_name: str = "default"
 
-        # JVM gateway
+        # For Spark/JVM interactions
+        self.spark = SparkSession.builder.getOrCreate()
         self.jvm = self.spark.sparkContext._active_spark_context._jvm
 
-    def setOutput(self, output):
+    def setOutput(self, output: str): # type: ignore
         self.output = output
         return self
 
-    def setDbName(self, db_name):
+    def setDbName(self, db_name: str): # type: ignore
         self.db_name = db_name
         return self
 
-    def outputToConsole(self, msg):
+    def outputToConsole(self, msg: str) -> None:
         print(msg)
 
 
 class ResultBase():
 
     # TODO: Prohibit instantiation directly
-    def __init__(self, output):
+    def __init__(self, output: str) -> None:
         self.output = output
 
-    def show(self):
+    def show(self) -> None:
+        assert self.output is not None
         import webbrowser
         webbrowser.open("file://%s/index.html" % self.output)
 

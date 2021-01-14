@@ -12,6 +12,7 @@ dependencies:
   - category_encoders=2.2.2
   - python-Levenshtein=0.12.0
   - matplotlib=3.2.2
+  - mypy==0.790
   - pip:
     - numpy==1.16.1
 

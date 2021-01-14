@@ -23,22 +23,24 @@ class Distance:
 
     __metaclass__ = ABCMeta
 
-    def __init__(self, name):
-        self.env = None
-
-    def setup(self, env):
-        self.env = env
+    def __init__(self, name: str) -> None:
+        self.name: str = name
 
     @abstractmethod
-    def compute(self, x, y):
+    def _compute_impl(self, x: float, y: float) -> float:
         raise NotImplementedError
+
+    def compute(self, x: float, y: float) -> float:
+      distance = self._compute_impl(x, y)
+      assert type(distance) is float
+      return distance
 
 class Levenshtein(Distance):
 
-    def __init__(self):
+    def __init__(self) -> None:
         Distance.__init__(self, 'Levenshtein')
 
-    def compute(self, x, y):
+    def _compute_impl(self, x: float, y: float) -> float:
         import Levenshtein
         return float(Levenshtein.distance(str(x), str(y)))
 

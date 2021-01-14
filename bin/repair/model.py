@@ -26,57 +26,52 @@ import logging
 import numpy as np
 import pandas as pd
 import time
+from typing import Any, Dict, List, Optional, Tuple
 
-from pyspark.sql import DataFrame, functions
+from pyspark.sql import DataFrame, Row, functions
 from pyspark.sql.functions import col
 
 from repair.base import *
 from repair.detectors import *
 from repair.distances import *
 
+
 class ScavengerRepairModel(ApiBase):
 
     # TODO: Prohibit instantiation directly
-    def __init__(self, output="", db_name=""):
+    def __init__(self, db_name: str = "") -> None:
         super().__init__()
 
         # Basic parameters
-        self.db_name = db_name
-        self.table_name = None
-        self.row_id = None
+        self.db_name: str = db_name
+        self.table_name: Optional[str] = None
+        self.row_id: Optional[str] = None
 
         # Parameters for error detection
-        self.error_cells = None
+        self.error_cells: Optional[str] = None
         # A set of error detectors, we use the NULL detector by default
-        self.error_detectors = [NullErrorDetector()]
-        self.discrete_thres = 80
-        self.min_corr_thres = 0.70
-        self.domain_threshold_alpha = 0.0
-        self.domain_threshold_beta = 0.70
-        self.max_attrs_to_compute_domains = 4
-        self.attr_stat_sample_ratio = 1.0
-        self.attr_stat_threshold = 0.0
+        self.error_detectors: List[ErrorDetector] = [NullErrorDetector()]
+        self.discrete_thres: float = 80
+        self.min_corr_thres: float = 0.70
+        self.domain_threshold_alpha: float = 0.0
+        self.domain_threshold_beta: float = 0.70
+        self.max_attrs_to_compute_domains: int = 4
+        self.attr_stat_sample_ratio: float = 1.0
+        self.attr_stat_threshold: float = 0.0
 
         # Parameters for repair model training
-        self.training_data_sample_ratio = 1.0
-        self.min_training_row_ratio = 0.10
-        self.max_training_column_num = None
-        self.small_domain_threshold = 12
-        self.inference_order = "entropy"
-        self.lgb_num_leaves = 31
-        self.lgb_max_depth = -1
+        self.training_data_sample_ratio: float = 1.0
+        self.min_training_row_ratio: float = 0.10
+        self.max_training_column_num: Optional[int] = None
+        self.small_domain_threshold: int = 12
+        self.inference_order: str = "entropy"
+        self.lgb_num_leaves: int = 31
+        self.lgb_max_depth: int = -1
 
         # Parameters for repairing
-        self.repair_updates = None
-        self.maximal_likelihood_repair_enabled = False
-        self.repair_delta = None
-
-
-        # JVM interfaces for Scavenger APIs
-        self.__svg_api = self.jvm.ScavengerRepairApi
-
-        # Internally used to check elapsed time
-        self.__timer_base = None
+        self.repair_updates: Optional[str] = None
+        self.maximal_likelihood_repair_enabled: bool = False
+        self.repair_delta: Optional[int] = None
 
         # Defines a class to compute cost of updates.
         #
@@ -85,10 +80,17 @@ class ScavengerRepairModel(ApiBase):
         # of training data. This model consists of transformation rules and and data augmentation policies
         # (i.e., distribution over those data transformation). This model can be re-used to compute this cost.
         # For more details, see the section 5, 'DATA AUGMENTATION LEARNING', in the paper.
-        self.__distance = Levenshtein()
+        self.distance: Distance = Levenshtein()
+
+
+        # JVM interfaces for Scavenger APIs
+        self.__svg_api = self.jvm.ScavengerRepairApi
+
+        # Internally used to check elapsed time
+        self.__timer_base: Optional[float] = None
 
         # Temporary views used in repairing processes
-        self.__meta_view_names = [
+        self.__meta_view_names: List[str] = [
             "discrete_features",
             "gray_cells",
             "repair_base",
@@ -101,135 +103,135 @@ class ScavengerRepairModel(ApiBase):
             "top_delta_repairs"
         ]
 
-    def setDbName(self, db_name):
+    def setDbName(self, db_name: str): # type: ignore
         self.db_name = db_name
         return self
 
-    def setTableName(self, table_name):
+    def setTableName(self, table_name: str): # type: ignore
         self.table_name = table_name
         return self
 
-    def setRowId(self, row_id):
+    def setRowId(self, row_id: str): # type: ignore
         self.row_id = row_id
         return self
 
-    def setErrorCells(self, error_cells):
+    def setErrorCells(self, error_cells: str): # type: ignore
         self.error_cells = error_cells
         return self
 
-    def setErrorDetector(self, detector):
+    def setErrorDetector(self, detector: ErrorDetector): # type: ignore
         if not isinstance(detector, ErrorDetector):
             raise ValueError("Error detector must derive a base class " \
                 "`repair.detectors.ErrorDetector`")
         self.error_detectors.append(detector)
         return self
 
-    def setDiscreteThreshold(self, thres):
+    def setDiscreteThreshold(self, thres: float): # type: ignore
         self.discrete_thres = thres
         return self
 
-    def setMinCorrThreshold(self, thres):
+    def setMinCorrThreshold(self, thres: float): # type: ignore
         self.min_corr_thres = thres
         return self
 
-    def setDomainThresholds(self, alpha, beta):
+    def setDomainThresholds(self, alpha: float, beta: float): # type: ignore
         self.domain_threshold_alpha = alpha
         self.domain_threshold_beta = beta
         return self
 
-    def setAttrMaxNumToComputeDomains(self, max):
+    def setAttrMaxNumToComputeDomains(self, max: int): # type: ignore
         self.max_attrs_to_compute_domains = max
         return self
 
-    def setAttrStatSampleRatio(self, ratio):
+    def setAttrStatSampleRatio(self, ratio: float): # type: ignore
         self.attr_stat_sample_ratio = ratio
         return self
 
-    def setAttrStatThreshold(self, ratio):
+    def setAttrStatThreshold(self, ratio: float): # type: ignore
         self.attr_stat_threshold = ratio
         return self
 
-    def setTrainingDataSampleRatio(self, ratio):
+    def setTrainingDataSampleRatio(self, ratio: float): # type: ignore
         self.training_data_sample_ratio = ratio
         return self
 
-    def setMaxTrainingColumnNum(self, n):
+    def setMaxTrainingColumnNum(self, n: int): # type: ignore
         self.max_training_column_num = n
         return self
 
-    def setSmallDomainThreshold(self, thres):
+    def setSmallDomainThreshold(self, thres: int): # type: ignore
         self.small_domain_threshold = thres
         return self
 
-    def setInferenceOrder(self, inference_order):
+    def setInferenceOrder(self, inference_order: str): # type: ignore
         self.inference_order = inference_order
         return self
 
-    def setLGBNumLeaves(self, n):
+    def setLGBNumLeaves(self, n: int): # type: ignore
         self.lgb_num_leaves = n
         return self
 
-    def setLGBMaxDepth(self, n):
+    def setLGBMaxDepth(self, n: int): # type: ignore
         self.lgb_max_depth = n
         return self
 
-    def setRepairUpdates(self, repair_updates):
+    def setRepairUpdates(self, repair_updates: str): # type: ignore
         self.repair_updates = repair_updates
         return self
 
-    def setMaximalLikelihoodRepairEnabled(self, enabled):
+    def setMaximalLikelihoodRepairEnabled(self, enabled: bool): # type: ignore
         self.maximal_likelihood_repair_enabled = enabled
         return self
 
-    def setRepairDelta(self, delta):
-        if int(delta) <= 0:
+    def setRepairDelta(self, delta: int): # type: ignore
+        if delta <= 0:
             raise ValueError("Repair delta must be positive")
         self.repair_delta = delta
         return self
 
-    def __temp_name(self, prefix="temp"):
+    def __temp_name(self, prefix: str = "temp") -> str:
         return "%s_%s" % (prefix, datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
 
-    def __temp_view(self, df):
+    def __temp_view(self, df: DataFrame) -> str:
         temp_view = self.__temp_name()
         df.createOrReplaceTempView(temp_view)
         return temp_view
 
-    def __flatten(self, df):
+    def __flatten(self, df: DataFrame) -> DataFrame:
         temp_view = self.__temp_name()
         df.createOrReplaceTempView(temp_view)
         jdf = self.jvm.ScavengerMiscApi.flattenTable("", temp_view, self.row_id)
         return DataFrame(jdf, self.spark._wrapped)
 
-    def __start_spark_jobs(self, name, desc):
+    def __start_spark_jobs(self, name: str, desc: str) -> None:
         self.spark.sparkContext.setJobGroup(name, name)
         self.__timer_base = time.time()
         self.outputToConsole(desc)
 
-    def __clear_job_group(self):
+    def __clear_job_group(self) -> None:
         # TODO: Uses `SparkContext.clearJobGroup()` instead
         self.spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)
         self.spark.sparkContext.setLocalProperty("spark.job.description", None)
         self.spark.sparkContext.setLocalProperty("spark.job.interruptOnCancel", None)
 
-    def __end_spark_jobs(self):
-        self.outputToConsole("Elapsed time is %s(s)" % (time.time() - self.__timer_base))
+    def __end_spark_jobs(self) -> None:
+        self.outputToConsole("Elapsed time is %s(s)" % (time.time() - self.__timer_base)) # type: ignore
         self.__clear_job_group()
 
-    def __release_resources(self, env):
+    def __release_resources(self, env: Dict[str, str]) -> None:
         for t in list(filter(lambda x: x in self.__meta_view_names, env.values())):
             self.spark.sql("DROP VIEW IF EXISTS %s" % env[t])
 
-    def __check_input(self):
+    def __check_input(self) -> Tuple[Dict[str, str], str, List[str]]:
         env = json.loads(self.__svg_api.checkInputTable(self.db_name, self.table_name, self.row_id))
         continous_attrs = env["continous_attrs"].split(",")
         return env, self.spark.table(env["input_table"]), \
             continous_attrs if continous_attrs != [""] else []
 
-    def __detect_error_cells(self, input_table):
+    def __detect_error_cells(self, input_table: str) -> str:
         # Initializes the given error detectors with the input params
         for d in self.error_detectors:
-            d.setup(self.row_id, input_table)
+            d.setup(self.row_id, input_table) # type: ignore
 
         error_cells_dfs = [ d.detect() for d in self.error_detectors ]
 
@@ -238,7 +240,7 @@ class ScavengerRepairModel(ApiBase):
         err_cells_df.cache().createOrReplaceTempView(err_cells)
         return err_cells
 
-    def __detect_errors(self, env):
+    def __detect_errors(self, env: Dict[str, str]) -> str:
         # If `self.error_cells` provided, just uses it
         if self.error_cells is not None:
             df = self.error_cells if isinstance(self.error_cells, DataFrame) \
@@ -264,7 +266,7 @@ class ScavengerRepairModel(ApiBase):
 
         return self.spark.table(env["gray_cells"])
 
-    def __prepare_repair_base(self, env, gray_cells_df):
+    def __prepare_repair_base(self, env: Dict[str, str], gray_cells_df: DataFrame) -> str:
         # Sets NULL at the detected gray cells
         logging.info("%s/%s suspicious cells found, then converts them into NULL cells..." % \
             (gray_cells_df.count(), int(env["num_input_rows"]) * int(env["num_attrs"])))
@@ -274,7 +276,7 @@ class ScavengerRepairModel(ApiBase):
 
         return self.spark.table(env["repair_base"])
 
-    def __preprocess(self, env, continous_attrs):
+    def __preprocess(self, env: Dict[str, str], continous_attrs: List[str]) -> DataFrame:
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
         env.update(json.loads(self.__svg_api.convertToDiscreteFeatures(
@@ -293,7 +295,7 @@ class ScavengerRepairModel(ApiBase):
 
         return discrete_ft_df
 
-    def __analyze_error_cell_domain(self, env, gray_cells_df, continous_attrs):
+    def __analyze_error_cell_domain(self, env: Dict[str, str], gray_cells_df: DataFrame, continous_attrs: List[str]) -> str:
         # Checks if attributes are discrete or not, and discretizes continous ones
         discrete_ft_df = self.__preprocess(env, continous_attrs)
 
@@ -320,7 +322,8 @@ class ScavengerRepairModel(ApiBase):
 
         return self.spark.table(env["cell_domain"])
 
-    def __extract_error_cells(self, env, cell_domain_df, repair_base_df):
+    def __extract_error_cells(self, env: Dict[str, str], cell_domain_df: DataFrame,
+            repair_base_df: DataFrame) -> DataFrame:
         # Fixes cells if an inferred value is the same with an initial one
         fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) value"
         weak_df = cell_domain_df.selectExpr(self.row_id, "attribute", "current_value", fix_cells_expr).cache()
@@ -336,7 +339,7 @@ class ScavengerRepairModel(ApiBase):
 
         return error_cells_df
 
-    def __split_clean_and_dirty_rows(self, env, error_cells_df):
+    def __split_clean_and_dirty_rows(self, env: Dict, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame, List[Row]]:
         error_rows_df = error_cells_df.selectExpr(self.row_id).distinct().cache()
         fixed_df = self.spark.table(env["partial_repaired"]).join(error_rows_df, self.row_id, "left_anti").cache()
         dirty_df = self.spark.table(env["partial_repaired"]).join(error_rows_df, self.row_id, "left_semi").cache()
@@ -344,13 +347,13 @@ class ScavengerRepairModel(ApiBase):
         assert len(error_attrs) > 0
         return fixed_df, dirty_df, error_attrs
 
-    def __convert_to_histogram(self, df):
+    def __convert_to_histogram(self, df: DataFrame) -> DataFrame:
         temp_view = self.__temp_name()
         df.createOrReplaceTempView(temp_view)
         ret_as_json = self.__svg_api.convertToHistogram(temp_view, self.discrete_thres)
         return self.spark.table(json.loads(ret_as_json)["histogram"])
 
-    def __show_histogram(self, df):
+    def __show_histogram(self, df: DataFrame) -> None:
         import matplotlib.pyplot as plt
         fig = plt.figure()
         num_targets = df.count()
@@ -364,7 +367,7 @@ class ScavengerRepairModel(ApiBase):
         fig.tight_layout()
         fig.show()
 
-    def __select_training_rows(self, fixed_df):
+    def __select_training_rows(self, fixed_df: DataFrame) -> DataFrame:
         # Prepares training data to repair the remaining error cells
         # TODO: Needs more smart sampling, e.g., down-sampling
         train_df = fixed_df.sample(self.training_data_sample_ratio).drop(self.row_id).cache()
@@ -372,7 +375,7 @@ class ScavengerRepairModel(ApiBase):
             (train_df.count(), self.training_data_sample_ratio, fixed_df.count()))
         return train_df
 
-    def __error_num_based_order(self, error_attrs):
+    def __error_num_based_order(self, error_attrs: List[Row]) -> List[str]:
         # Sorts target columns by the number of errors
         error_num_map = {}
         for row in error_attrs:
@@ -385,7 +388,8 @@ class ScavengerRepairModel(ApiBase):
 
         return target_columns
 
-    def __domain_size_based_order(self, env, train_df, error_attrs):
+    def __domain_size_based_order(self, env: Dict[str, str], train_df: DataFrame,
+            error_attrs: List[Row]) -> List[str]:
         # Computes domain sizes for training data
         self.__start_spark_jobs("training data stat analysis",
             "[Repair Model Training Phase] Collecting training data stats before building ML models...")
@@ -402,14 +406,14 @@ class ScavengerRepairModel(ApiBase):
 
         return target_columns
 
-    def __entropy_based_order(self, env, train_df, error_attrs):
+    def __entropy_based_order(self, env: Dict[str, str], train_df: DataFrame, error_attrs: List[Row]) -> List[str]:
         # Sorts target columns by correlations
         target_columns = []
         error_attrs = list(map(lambda row: row.attribute, error_attrs))
 
         for index in range(len(error_attrs)):
             features = [ c for c in train_df.columns if c not in error_attrs ]
-            targets = []
+            targets = [] # type: ignore
             for c in error_attrs:
                 total_corr = 0.0
                 for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][c]):
@@ -425,7 +429,7 @@ class ScavengerRepairModel(ApiBase):
 
         return target_columns
 
-    def __compute_inference_order(self, env, train_df, error_attrs):
+    def __compute_inference_order(self, env: Dict[str, str], train_df: DataFrame, error_attrs: List[str]) -> List[str]:
         # Defines a inference order based on `train_df`.
         #
         # TODO: Needs to analyze more dependencies (e.g., based on graph algorithms) between
@@ -433,14 +437,16 @@ class ScavengerRepairModel(ApiBase):
         # For example, the SCARE paper [2] builds a dependency graph (a variant of graphical models)
         # to analyze the correlatioin of input data. But, the analysis is compute-intensive, so
         # we just use a naive approache to define the order now.
-        if self.inference_order == "entropy":
-            return self.__entropy_based_order(env, train_df, error_attrs)
-        elif self.inference_order == "domain":
+        if self.inference_order == "domain":
             return self.__domain_size_based_order(env, train_df, error_attrs)
         elif self.inference_order == "error":
             return self.__error_num_based_order(error_attrs)
 
-    def __select_features(self, env, input_columns, y, excluded_columns):
+        assert self.inference_order == "entropy"
+        return self.__entropy_based_order(env, train_df, error_attrs)
+
+    def __select_features(self, env: Dict[str, str], input_columns: List[str], y: pd.DataFrame,
+            excluded_columns: List[str]) -> List[str]:
         # All the available features
         features = [c for c in input_columns if c not in excluded_columns]
         excluded_columns.remove(y)
@@ -448,7 +454,7 @@ class ScavengerRepairModel(ApiBase):
         # Selects features if necessary
         if self.max_training_column_num is not None and \
                 int(self.max_training_column_num) < len(features):
-            fts = []
+            fts = [] # type: ignore
             for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][y]):
                 if f in features:
                    # Converts to a negative value for extracting higher values
@@ -461,7 +467,8 @@ class ScavengerRepairModel(ApiBase):
 
         return features
 
-    def __transform_features(self, env, X, features, continous_attrs):
+    def __transform_features(self, env: Dict[str, str], X: pd.DataFrame, features: List[str],
+            continous_attrs: List[str]) -> Tuple[pd.DataFrame, Any]:
         # Transforms discrete attributes with some categorical encoders if necessary
         import category_encoders as ce
         discrete_columns = [ c for c in features if c not in continous_attrs ]
@@ -474,7 +481,7 @@ class ScavengerRepairModel(ApiBase):
             # we can use `ce.OrdinalEncoder` for small domain features.
             # For the other category encoders, see https://github.com/scikit-learn-contrib/category_encoders
             small_domain_columns = [ c for c in discrete_columns \
-                if int(env["distinct_stats"][c]) < self.small_domain_threshold ]
+                if int(env["distinct_stats"][c]) < self.small_domain_threshold ] # type: ignore
             discrete_columns = [ c for c in discrete_columns \
                 if c not in small_domain_columns ]
             if len(small_domain_columns) > 0:
@@ -489,7 +496,7 @@ class ScavengerRepairModel(ApiBase):
 
         return X, transformers
 
-    def __build_model(self, X, y, is_discrete):
+    def __build_model(self, X: pd.DataFrame, y: pd.DataFrame, is_discrete: bool) -> pd.DataFrame:
         import lightgbm as lgb
         if is_discrete:
             clf = lgb.LGBMClassifier(
@@ -514,7 +521,8 @@ class ScavengerRepairModel(ApiBase):
             )
             return reg.fit(X, y)
 
-    def __build_repair_models(self, env, train_df, error_attrs, continous_attrs):
+    def __build_repair_models(self, env: Dict[str, str], train_df: DataFrame, error_attrs: List[Row],
+            continous_attrs: List[str]) -> Tuple[Dict[str, Any], List[str]]:
         # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
         # on Apache Spark. Given a database tuple t = ce (c: correct attribute values, e: error attribute values),
         # the conditional probability of each combination of the error attribute values c can be
@@ -549,7 +557,9 @@ class ScavengerRepairModel(ApiBase):
 
         return models, target_columns
 
-    def __repair(self, env, models, target_columns, continous_attrs, dirty_df, error_cells_df, compute_repair_candidate_prob):
+    def __repair(self, env: Dict[str, str], models: Dict[str, Any], target_columns: List[str],
+            continous_attrs: List[str], dirty_df: DataFrame, error_cells_df: DataFrame,
+            compute_repair_candidate_prob: bool) -> pd.DataFrame:
         # Shares all the variables for the learnt models in a Spark cluster
         broadcasted_target_columns = self.spark.sparkContext.broadcast(target_columns)
         broadcasted_continous_attrs = self.spark.sparkContext.broadcast(continous_attrs)
@@ -566,7 +576,7 @@ class ScavengerRepairModel(ApiBase):
         dirty_df = dirty_df.withColumn(grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
 
         @functions.pandas_udf(dirty_df.schema, functions.PandasUDFType.GROUPED_MAP)
-        def repair(pdf):
+        def repair(pdf): # type: ignore
             target_columns = broadcasted_target_columns.value
             continous_attrs = broadcasted_continous_attrs.value
             models = broadcasted_models.value
@@ -616,7 +626,7 @@ class ScavengerRepairModel(ApiBase):
         self.__end_spark_jobs()
         return repaired_df
 
-    def __compute_repair_pmf(self, repaired_df, error_cells_df):
+    def __compute_repair_pmf(self, repaired_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
         parse_pmf_json_expr = "from_json(value, 'classes array<string>, probs array<double>') pmf"
         to_pmf_expr = "arrays_zip(pmf.classes, pmf.probs) pmf"
         to_current_expr = "named_struct('value', current_value, 'prob', " \
@@ -631,7 +641,7 @@ class ScavengerRepairModel(ApiBase):
 
         return pmf_df
 
-    def __maximal_likelihood_repair(self, env, repaired_df, error_cells_df):
+    def __maximal_likelihood_repair(self, env: Dict[str, str], repaired_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
         # A “Maximal Likelihood Repair” problem defined in the SCARE [2] paper is as follows;
         # Given a scalar \delta and a database D = D_{e} \cup D_{c}, the problem is to
         # find another database instance D' = D'_{e} \cup D_{c} such that L(D'_{e} \| D_{c})
@@ -640,10 +650,10 @@ class ScavengerRepairModel(ApiBase):
         # (e.g., edit distances) between the two database instances D and D'.
         pmf_df = self.__compute_repair_pmf(repaired_df, error_cells_df)
 
-        broadcasted_distance = self.spark.sparkContext.broadcast(self.__distance)
+        broadcasted_distance = self.spark.sparkContext.broadcast(self.distance)
 
         @functions.pandas_udf("double", functions.PandasUDFType.SCALAR)
-        def distance(xs, ys):
+        def distance(xs, ys): # type: ignore
             distance = broadcasted_distance.value
             dists = [distance.compute(x, y) for x, y in zip(xs, ys)]
             return pd.Series(dists)
@@ -665,15 +675,16 @@ class ScavengerRepairModel(ApiBase):
             (score_df.where("score <= %s" % percentile.thres).count(), self.repair_delta, num_error_cells))
         return top_delta_repairs_df
 
-    def __run(self, env, input_df, continous_attrs, detect_errors_only, compute_training_target_hist,
-            compute_repair_candidate_prob, repair_data):
+    def __run(self, env: Dict[str, str], input_df: DataFrame, continous_attrs: List[str],
+            detect_errors_only: bool, compute_training_target_hist: bool,
+            compute_repair_candidate_prob: bool, repair_data: bool) -> DataFrame:
         #################################################################################
         # 1. Error Detection Phase
         #################################################################################
 
         # If no error found, it just returns the given table
         gray_cells_df = self.__detect_errors(env)
-        if gray_cells_df.count() == 0:
+        if gray_cells_df.count() == 0: # type: ignore
             self.outputToConsole("Any error cells not found, so returns the input as clean cells")
             self.__release_resources(env)
             return input_df
@@ -719,8 +730,8 @@ class ScavengerRepairModel(ApiBase):
         # predictable column as a staring feature.
         num_features = len(train_df.columns) - len(error_attrs)
         if num_features == 0:
-            raise ValueError("At least %s features needed to repair error cells, " \
-                "but %s features found" % num_features)
+            raise ValueError("At least one feature is needed to repair error cells, " \
+                "but no features found")
 
         models, target_columns = self.__build_repair_models(env, train_df, error_attrs, continous_attrs)
 
@@ -761,8 +772,8 @@ class ScavengerRepairModel(ApiBase):
             assert clean_df.count() == input_df.count()
             return clean_df
 
-    def run(self, detect_errors_only=False, compute_repair_candidate_prob=False,
-            compute_training_target_hist=False, repair_data=False):
+    def run(self, detect_errors_only: bool = False, compute_repair_candidate_prob: bool = False,
+            compute_training_target_hist: bool = False, repair_data: bool = False) -> DataFrame:
         if self.table_name is None or self.row_id is None:
             raise ValueError("`setTableName` and `setRowId` should be called before repairing")
         if self.maximal_likelihood_repair_enabled and self.repair_delta is None:
@@ -801,7 +812,7 @@ class ScavengerRepairModel(ApiBase):
         self.outputToConsole("!!!Total processing time is %s(s)!!!" % (time.time() - __start))
         return df
 
-    def version(self):
+    def version(self) -> str:
         # TODO: Extracts a version string from the root pom.xml
         return "0.1.0-spark3.0-EXPERIMENTAL"
 
