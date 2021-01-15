@@ -23,9 +23,7 @@ from typing import Optional
 from pyspark.sql import DataFrame, SparkSession
 
 
-class ErrorDetector:
-
-    __metaclass__ = ABCMeta
+class ErrorDetector(metaclass=ABCMeta):
 
     name: str
 

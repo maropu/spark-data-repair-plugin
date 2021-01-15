@@ -17,12 +17,13 @@
 # limitations under the License.
 #
 
+from abc import ABCMeta
 from typing import Any, Optional
 
 from pyspark.sql import SparkSession
 
 
-class ApiBase():
+class ApiBase(metaclass=ABCMeta):
 
     output: Optional[str] = None
     db_name: str = ""

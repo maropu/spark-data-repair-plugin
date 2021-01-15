@@ -20,9 +20,7 @@
 from abc import ABCMeta, abstractmethod
 from typing import Union
 
-class Distance:
-
-    __metaclass__ = ABCMeta
+class Distance(metaclass=ABCMeta):
 
     name: str
 
