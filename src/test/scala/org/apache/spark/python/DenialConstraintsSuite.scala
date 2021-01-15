@@ -34,17 +34,18 @@ class DenialConstraintsSuite extends SparkFunSuite {
     DenialConstraints.parse(constraintFilePath)
   }
 
+  val leftIdent = DenialConstraints.leftRelationIdent
+  val rightIdent = DenialConstraints.rightRelationIdent
+
   test("constraint parsing - adult") {
     val constraints = parseConstraints(
       s"""t1&EQ(t1.Sex,"Female")&EQ(t1.Relationship,"Husband")
          |t1&EQ(t1.Sex,"Male")&EQ(t1.Relationship,"Wife")
        """.stripMargin)
-    assert(constraints.leftTable === "t1")
-    assert(constraints.rightTable === "__auto_generated_2")
     assert(constraints.references.toSet === Set("Sex", "Relationship"))
     assert(constraints.predicates.map(_.map(_.toString).toSet).toSet === Set(
-      Set("""t1.Sex <=> "Female"""", """t1.Relationship <=> "Husband""""),
-      Set("""t1.Sex <=> "Male"""", """t1.Relationship <=> "Wife"""")))
+      Set(s"""$leftIdent.Sex <=> "Female"""", s"""$leftIdent.Relationship <=> "Husband""""),
+      Set(s"""$leftIdent.Sex <=> "Male"""", s"""$leftIdent.Relationship <=> "Wife"""")))
   }
 
   test("constraint parsing - hospital") {
@@ -65,29 +66,43 @@ class DenialConstraintsSuite extends SparkFunSuite {
          |t1&t2&EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.City,t2.City)
          |t1&t2&EQ(t1.MeasureName,t2.MeasureName)&IQ(t1.MeasureCode,t2.MeasureCode)
        """.stripMargin)
-    assert(constraints.leftTable === "t1")
-    assert(constraints.rightTable === "t2")
     assert(constraints.references.toSet === Set(
       "HospitalOwner", "MeasureName", "Condition", "PhoneNumber", "CountyName", "ProviderNumber",
       "HospitalName", "HospitalType", "EmergencyService", "City", "ZipCode", "Address1",
       "State", "Stateavg", "MeasureCode"))
     assert(constraints.predicates.map(_.map(_.toString).toSet).toSet === Set(
-      Set("t1.ProviderNumber <=> t2.ProviderNumber", "NOT(t1.HospitalName <=> t2.HospitalName)"),
-      Set("t1.Condition <=> t2.Condition", "t1.MeasureName <=> t2.MeasureName",
-        "NOT(t1.HospitalType <=> t2.HospitalType)"),
-      Set("t1.HospitalName <=> t2.HospitalName", "NOT(t1.Address1 <=> t2.Address1)"),
-      Set("t1.HospitalName <=> t2.HospitalName", "NOT(t1.PhoneNumber <=> t2.PhoneNumber)"),
-      Set("t1.HospitalName <=> t2.HospitalName", "NOT(t1.ProviderNumber <=> t2.ProviderNumber)"),
-      Set("t1.HospitalName <=> t2.HospitalName", "NOT(t1.ZipCode <=> t2.ZipCode)"),
-      Set("t1.HospitalName <=> t2.HospitalName", "t1.PhoneNumber <=> t2.PhoneNumber",
-        "t1.HospitalOwner <=> t2.HospitalOwner", "NOT(t1.State <=> t2.State)"),
-      Set("t1.HospitalName <=> t2.HospitalName", "NOT(t1.City <=> t2.City)"),
-      Set("t1.MeasureName <=> t2.MeasureName", "NOT(t1.MeasureCode <=> t2.MeasureCode)"),
-      Set("t1.MeasureCode <=> t2.MeasureCode", "NOT(t1.MeasureName <=> t2.MeasureName)"),
-      Set("t1.HospitalName <=> t2.HospitalName", "NOT(t1.HospitalOwner <=> t2.HospitalOwner)"),
-      Set("t1.MeasureCode <=> t2.MeasureCode", "NOT(t1.Condition <=> t2.Condition)"),
-      Set("t1.MeasureCode <=> t2.MeasureCode", "NOT(t1.Stateavg <=> t2.Stateavg)"),
-      Set("t1.ZipCode <=> t2.ZipCode", "NOT(t1.EmergencyService <=> t2.EmergencyService)"),
-      Set("t1.City <=> t2.City", "NOT(t1.CountyName <=> t2.CountyName)")))
+      Set(s"$leftIdent.ProviderNumber <=> $rightIdent.ProviderNumber",
+        s"NOT($leftIdent.HospitalName <=> $rightIdent.HospitalName)"),
+      Set(s"$leftIdent.Condition <=> $rightIdent.Condition",
+        s"$leftIdent.MeasureName <=> $rightIdent.MeasureName",
+        s"NOT($leftIdent.HospitalType <=> $rightIdent.HospitalType)"),
+      Set(s"$leftIdent.HospitalName <=> $rightIdent.HospitalName",
+        s"NOT($leftIdent.Address1 <=> $rightIdent.Address1)"),
+      Set(s"$leftIdent.HospitalName <=> $rightIdent.HospitalName",
+        s"NOT($leftIdent.PhoneNumber <=> $rightIdent.PhoneNumber)"),
+      Set(s"$leftIdent.HospitalName <=> $rightIdent.HospitalName",
+        s"NOT($leftIdent.ProviderNumber <=> $rightIdent.ProviderNumber)"),
+      Set(s"$leftIdent.HospitalName <=> $rightIdent.HospitalName",
+        s"NOT($leftIdent.ZipCode <=> $rightIdent.ZipCode)"),
+      Set(s"$leftIdent.HospitalName <=> $rightIdent.HospitalName",
+        s"$leftIdent.PhoneNumber <=> $rightIdent.PhoneNumber",
+        s"$leftIdent.HospitalOwner <=> $rightIdent.HospitalOwner",
+        s"NOT($leftIdent.State <=> $rightIdent.State)"),
+      Set(s"$leftIdent.HospitalName <=> $rightIdent.HospitalName",
+        s"NOT($leftIdent.City <=> $rightIdent.City)"),
+      Set(s"$leftIdent.MeasureName <=> $rightIdent.MeasureName",
+        s"NOT($leftIdent.MeasureCode <=> $rightIdent.MeasureCode)"),
+      Set(s"$leftIdent.MeasureCode <=> $rightIdent.MeasureCode",
+        s"NOT($leftIdent.MeasureName <=> $rightIdent.MeasureName)"),
+      Set(s"$leftIdent.HospitalName <=> $rightIdent.HospitalName",
+        s"NOT($leftIdent.HospitalOwner <=> $rightIdent.HospitalOwner)"),
+      Set(s"$leftIdent.MeasureCode <=> $rightIdent.MeasureCode",
+        s"NOT($leftIdent.Condition <=> $rightIdent.Condition)"),
+      Set(s"$leftIdent.MeasureCode <=> $rightIdent.MeasureCode",
+        s"NOT($leftIdent.Stateavg <=> $rightIdent.Stateavg)"),
+      Set(s"$leftIdent.ZipCode <=> $rightIdent.ZipCode",
+        s"NOT($leftIdent.EmergencyService <=> $rightIdent.EmergencyService)"),
+      Set(s"$leftIdent.City <=> $rightIdent.City",
+        s"NOT($leftIdent.CountyName <=> $rightIdent.CountyName)")))
   }
 }

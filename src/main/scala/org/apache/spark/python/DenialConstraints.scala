@@ -24,53 +24,42 @@ import scala.io.Source
 
 import org.apache.spark.internal.Logging
 
-case class Predicate(
-    genCmp: (String, String) => String,
-    leftTable: Option[String],
-    leftAttr: String,
-    rightTable: Option[String],
-    rightAttr: String) {
+sealed trait Expr
 
-  def references: Seq[String] = {
-    val left = if (leftTable.isDefined) leftAttr :: Nil else Nil
-    val right = if (rightTable.isDefined) rightAttr :: Nil else Nil
-    left ++ right
+case class AttrRef(ident: String) extends Expr {
+  override def toString: String = ident
+}
+
+case class Constant(value: String) extends Expr {
+  override def toString: String = value
+}
+
+case class Predicate(genCmp: (String, String) => String, leftExpr: Expr, rightExpr: Expr) {
+
+  def references: Seq[String] =  {
+    Seq(leftExpr, rightExpr).filter(_.isInstanceOf[AttrRef]).map(_.toString)
+  }
+
+  private def toStringWithQualifier(expr: Expr, qualifier: String): String  = expr match {
+    case ref: AttrRef => s"$qualifier.$ref"
+    case constant => s"$constant"
   }
 
   override def toString(): String = {
-    val left = leftTable.map(t => s"$t.$leftAttr").getOrElse(leftAttr)
-    val right = rightTable.map(t => s"$t.$rightAttr").getOrElse(rightAttr)
+    val left = toStringWithQualifier(leftExpr, DenialConstraints.leftRelationIdent)
+    val right = toStringWithQualifier(rightExpr, DenialConstraints.rightRelationIdent)
     genCmp(left, right)
   }
 }
 
-object Predicate {
-
-  def apply(genCmp: (String, String) => String, lt: String, la: String, rt: String, ra: String): Predicate = {
-    new Predicate(genCmp, Some(lt), la, Some(rt), ra)
-  }
-
-  def apply(genCmp: (String, String) => String, lt: String, la: String, constant: String): Predicate = {
-    new Predicate(genCmp, Some(lt), la, None, constant)
-  }
-}
-
-case class DenialConstraints(predicates: Seq[Seq[Predicate]], references: Seq[String]) {
-
-  lazy val leftTable: String = {
-    predicates.flatten.flatMap(_.leftTable).distinct.ensuring(_.size < 2)
-      .headOption.getOrElse("__auto_generated_1")
-  }
-
-  lazy val rightTable: String = {
-    predicates.flatten.flatMap(_.rightTable).distinct.ensuring(_.size < 2)
-      .headOption.getOrElse("__auto_generated_2")
-  }
-}
+case class DenialConstraints(predicates: Seq[Seq[Predicate]], references: Seq[String])
 
 object DenialConstraints extends Logging {
 
-  lazy val emptyConstraints = DenialConstraints(Nil, Nil)
+  val leftRelationIdent = "__generated_left"
+  val rightRelationIdent = "__generated_right"
+
+  val emptyConstraints = DenialConstraints(Nil, Nil)
 
   // TODO: These entries below must be synced with `IntegrityConstraintDiscovery`
   private val opSigns = Seq("EQ", "IQ", "LT", "GT")
@@ -92,7 +81,7 @@ object DenialConstraints extends Logging {
             val predicate = s"""(${opSigns.mkString("|")})\\($t1\\.(.*),$t2\\.(.*)\\)""".r
             val es = constraints.flatMap {
               case predicate(cmp, leftAttr, rightAttr) =>
-                Some(Predicate(signMap(cmp), Some(t1), leftAttr, Some(t2), rightAttr))
+                Some(Predicate(signMap(cmp), AttrRef(leftAttr), AttrRef(rightAttr)))
               case s =>
                 logWarning(s"Illegal predicate format found: $s")
                 None
@@ -104,8 +93,8 @@ object DenialConstraints extends Logging {
           case t1 +: constraints if isIdentifier(t1) =>
             val predicate = s"""(${opSigns.mkString("|")})\\($t1\\.(.*),(.*)\\)""".r
             val es = constraints.flatMap {
-              case predicate(cmp, leftAttr, constant) =>
-                Some(Predicate(signMap(cmp), Some(t1), leftAttr, None, constant))
+              case predicate(cmp, leftAttr, value) =>
+                Some(Predicate(signMap(cmp), AttrRef(leftAttr), Constant(value)))
               case s =>
                 logWarning(s"Illegal predicate format found: $s")
                 None

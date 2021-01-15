@@ -240,15 +240,15 @@ object ConstraintErrorDetector extends ErrorDetector {
 
           // Detects error erroneous cells in a given table
           val sqls = constraints.predicates.map { preds =>
-            val attrs = preds.flatMap(_.references)
+            import DenialConstraints._
+            val attrs = preds.flatMap(_.references).distinct
+            // TODO: Needs to look for a more smart logic to filter error cells
             s"""
                |SELECT DISTINCT $rowId, explode(array(${attrs.map(a => s"'$a'").mkString(",")})) attribute
                |FROM (
-               |  SELECT t1.$rowId
-               |  FROM $inputView AS ${constraints.leftTable}
+               |  SELECT $leftRelationIdent.$rowId FROM $inputView AS $leftRelationIdent
                |  WHERE EXISTS (
-               |    SELECT $rowId
-               |    FROM $inputView AS ${constraints.rightTable}
+               |    SELECT $rowId FROM $inputView AS $rightRelationIdent
                |    WHERE ${preds.mkString(" AND ")}
                |  )
                |)
@@ -269,6 +269,7 @@ object ConstraintErrorDetector extends ErrorDetector {
     }
   }
 
+  // TODO: Adds tests for this method
   private def loadConstraintsFromFile(
       constraintFilePath: String,
       inputName: String,
@@ -281,9 +282,12 @@ object ConstraintErrorDetector extends ErrorDetector {
     val absentAttrs = attrsInConstraints.filterNot(tableAttrSet.contains)
     if (absentAttrs.nonEmpty) {
       logWarning(s"Non-existent constraint attributes found in '$inputName': ${absentAttrs.mkString(", ")}")
-      val newPredEntries = allConstraints.predicates.filter { _.forall { p =>
-        tableAttrSet.contains(p.leftAttr) && tableAttrSet.contains(p.rightAttr)
-      }}
+      val absentAttrSet = absentAttrs.toSet
+      val newPredEntries = allConstraints.predicates.filterNot { preds =>
+        preds.exists { p =>
+          absentAttrSet.subsetOf(p.references.toSet)
+        }
+      }
       if (newPredEntries.nonEmpty) {
         allConstraints.copy(predicates = newPredEntries)
       } else {
