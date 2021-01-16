@@ -17,6 +17,10 @@
 
 package org.apache.spark.api.python
 
+import java.net.URI
+
+import scala.io.Source
+
 import org.apache.spark.python.DenialConstraints
 import org.apache.spark.sql._
 import org.apache.spark.sql.types.StringType
@@ -224,7 +228,18 @@ object ConstraintErrorDetector extends ErrorDetector {
       emptyTable(inputDf, rowId)
     } else {
       withTempView(inputDf, cache = true) { inputView =>
-        val constraints = loadConstraintsFromFile(constraintFilePath, tableName, inputDf.columns)
+        // Loads all the denial constraints from a given file path
+        var file: Source = null
+        val constraints = try {
+          file = Source.fromFile(new URI(constraintFilePath).getPath)
+          file.getLines()
+          DenialConstraints.parseAndVerifyConstraints(file.getLines(), qualifiedName, inputDf.columns)
+        } finally {
+          if (file != null) {
+            file.close()
+          }
+        }
+
         if (constraints.predicates.isEmpty) {
           emptyTable(inputDf, rowId)
         } else {
@@ -266,35 +281,6 @@ object ConstraintErrorDetector extends ErrorDetector {
           errCellDf
         }
       }
-    }
-  }
-
-  // TODO: Adds tests for this method
-  private def loadConstraintsFromFile(
-      constraintFilePath: String,
-      inputName: String,
-      tableAttrs: Seq[String]): DenialConstraints = {
-    // Loads all the denial constraints from a given file path
-    val allConstraints = DenialConstraints.parse(constraintFilePath)
-    // Checks if all the attributes contained in `constraintFilePath` exist in `table`
-    val attrsInConstraints = allConstraints.references
-    val tableAttrSet = tableAttrs.toSet
-    val absentAttrs = attrsInConstraints.filterNot(tableAttrSet.contains)
-    if (absentAttrs.nonEmpty) {
-      logWarning(s"Non-existent constraint attributes found in '$inputName': ${absentAttrs.mkString(", ")}")
-      val absentAttrSet = absentAttrs.toSet
-      val newPredEntries = allConstraints.predicates.filterNot { preds =>
-        preds.exists { p =>
-          absentAttrSet.subsetOf(p.references.toSet)
-        }
-      }
-      if (newPredEntries.nonEmpty) {
-        allConstraints.copy(predicates = newPredEntries)
-      } else {
-        DenialConstraints.emptyConstraints
-      }
-    } else {
-      allConstraints
     }
   }
 }
