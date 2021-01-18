@@ -20,16 +20,15 @@
 from abc import ABCMeta, abstractmethod
 from typing import Union
 
-class Distance(metaclass=ABCMeta):
 
-    name: str
+class Distance(metaclass=ABCMeta):
 
     def __init__(self, name: str) -> None:
         self.name: str = name
 
     @abstractmethod
     def _compute_impl(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
-        raise NotImplementedError
+        pass
 
     def compute(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
       distance = self._compute_impl(x, y)

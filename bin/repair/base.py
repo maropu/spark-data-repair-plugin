@@ -17,21 +17,20 @@
 # limitations under the License.
 #
 
-from abc import ABCMeta
 from typing import Any, Optional
 
 from pyspark.sql import SparkSession
 
 
-class ApiBase(metaclass=ABCMeta):
-
-    output: Optional[str] = None
-    db_name: str = ""
+class ApiBase():
 
     def __init__(self) -> None:
+        self.output: Optional[str] = None
+        self.db_name: str = ""
+
         # For Spark/JVM interactions
-        self.spark = SparkSession.builder.getOrCreate()
-        self.jvm = self.spark.sparkContext._active_spark_context._jvm
+        self._spark = SparkSession.builder.getOrCreate()
+        self._jvm = self._spark.sparkContext._active_spark_context._jvm
 
     def setOutput(self, output: str) -> Any:
         self.output = output
@@ -47,14 +46,11 @@ class ApiBase(metaclass=ABCMeta):
 
 class ResultBase():
 
-    output: Optional[str] = None
-
-    # TODO: Prohibit instantiation directly
     def __init__(self, output: str) -> None:
-        self.output = output
+        self.output: str = output
 
     def show(self) -> None:
         assert self.output is not None
         import webbrowser
-        webbrowser.open("file://%s/index.html" % self.output)
+        webbrowser.open(f"file://{self.output}/index.html")
 

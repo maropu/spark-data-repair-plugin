@@ -18,7 +18,7 @@
 #
 
 """
-A Scavenger API Set for Data Profiling & Cleaning
+A Scavenger API Set for Data Cleaning
 """
 
 from typing import Optional
@@ -37,10 +37,6 @@ class Scavenger(ApiBase):
         if cls.__instance == None:
             cls.__instance = super(Scavenger, cls).__new__(cls)
         return cls.__instance
-
-    # TODO: Prohibit instantiation directly
-    def __init__(self) -> None:
-        super().__init__()
 
     @staticmethod
     def getOrCreate() -> "Scavenger":

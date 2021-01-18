@@ -38,71 +38,66 @@ from repair.distances import *
 
 class ScavengerRepairModel(ApiBase):
 
-    # Basic parameters
-    table_name: Optional[str] = None
-    row_id: Optional[str] = None
-
-    # Parameters for error detection
-    error_cells: Optional[str] = None
-    # A set of error detectors
-    error_detectors: List[ErrorDetector] = []
-    discrete_thres: float = 80
-    min_corr_thres: float = 0.70
-    domain_threshold_alpha: float = 0.0
-    domain_threshold_beta: float = 0.70
-    max_attrs_to_compute_domains: int = 4
-    attr_stat_sample_ratio: float = 1.0
-    attr_stat_threshold: float = 0.0
-
-    # Parameters for repair model training
-    training_data_sample_ratio: float = 1.0
-    min_training_row_ratio: float = 0.10
-    max_training_column_num: Optional[int] = None
-    small_domain_threshold: int = 12
-    inference_order: str = "entropy"
-    lgb_num_leaves: int = 31
-    lgb_max_depth: int = -1
-
-    # Parameters for repairing
-    repair_updates: Optional[str] = None
-    maximal_likelihood_repair_enabled: bool = False
-    repair_delta: Optional[int] = None
-
-    # Defines a class to compute cost of updates.
-    #
-    # TODO: Needs a sophisticated way to compute distances between a current value and a repair candidate.
-    # For example, the HoloDetect paper [1] proposes a noisy channel model for the data augmentation methodology
-    # of training data. This model consists of transformation rules and and data augmentation policies
-    # (i.e., distribution over those data transformation). This model can be re-used to compute this cost.
-    # For more details, see the section 5, 'DATA AUGMENTATION LEARNING', in the paper.
-    distance: Distance = Levenshtein()
-
-    # Internally used to check elapsed time
-    __timer_base: Optional[float] = None
-
-    # Temporary views used in repairing processes
-    __meta_view_names: ClassVar[List[str]] = [
-        "discrete_features",
-        "gray_cells",
-        "repair_base",
-        "cell_domain",
-        "partial_repaired",
-        "repaired",
-        "dirty",
-        "weak",
-        "train",
-        "top_delta_repairs"
-    ]
-
-    # TODO: Prohibit instantiation directly
     def __init__(self) -> None:
         super().__init__()
+        # Basic parameters
+        self.table_name: Optional[str] = None
+        self.row_id: Optional[str] = None
 
+        # Parameters for error detection
+        self.error_cells: Optional[str] = None
         # To find error cells, the NULL detector is used by default
-        self.error_detectors.append(NullErrorDetector())
+        self.error_detectors: List[ErrorDetector] = [NullErrorDetector()]
+        self.discrete_thres: float = 80
+        self.min_corr_thres: float = 0.70
+        self.domain_threshold_alpha: float = 0.0
+        self.domain_threshold_beta: float = 0.70
+        self.max_attrs_to_compute_domains: int = 4
+        self.attr_stat_sample_ratio: float = 1.0
+        self.attr_stat_threshold: float = 0.0
+
+        # Parameters for repair model training
+        self.training_data_sample_ratio: float = 1.0
+        self.min_training_row_ratio: float = 0.10
+        self.max_training_column_num: Optional[int] = None
+        self.small_domain_threshold: int = 12
+        self.inference_order: str = "entropy"
+        self.lgb_num_leaves: int = 31
+        self.lgb_max_depth: int = -1
+
+        # Parameters for repairing
+        self.repair_updates: Optional[str] = None
+        self.maximal_likelihood_repair_enabled: bool = False
+        self.repair_delta: Optional[int] = None
+
+        # Defines a class to compute cost of updates.
+        #
+        # TODO: Needs a sophisticated way to compute distances between a current value and a repair candidate.
+        # For example, the HoloDetect paper [1] proposes a noisy channel model for the data augmentation methodology
+        # of training data. This model consists of transformation rules and and data augmentation policies
+        # (i.e., distribution over those data transformation). This model can be re-used to compute this cost.
+        # For more details, see the section 5, 'DATA AUGMENTATION LEARNING', in the paper.
+        self.distance: Distance = Levenshtein()
+
+        # Internally used to check elapsed time
+        self._timer_base: Optional[float] = None
+
+        # Temporary views used in repairing processes
+        self._meta_view_names: List[str] = [
+            "discrete_features",
+            "gray_cells",
+            "repair_base",
+            "cell_domain",
+            "partial_repaired",
+            "repaired",
+            "dirty",
+            "weak",
+            "train",
+            "top_delta_repairs"
+        ]
 
         # JVM interfaces for Scavenger APIs
-        self.__svg_api = self.jvm.ScavengerRepairApi
+        self._svg_api = self._jvm.ScavengerRepairApi
 
     def setDbName(self, db_name: str) -> "ScavengerRepairModel":
         self.db_name = db_name
@@ -208,32 +203,32 @@ class ScavengerRepairModel(ApiBase):
     def __flatten(self, df: DataFrame) -> DataFrame:
         temp_view = self.__temp_name()
         df.createOrReplaceTempView(temp_view)
-        jdf = self.jvm.ScavengerMiscApi.flattenTable("", temp_view, self.row_id)
-        return DataFrame(jdf, self.spark._wrapped)
+        jdf = self._jvm.ScavengerMiscApi.flattenTable("", temp_view, self.row_id)
+        return DataFrame(jdf, self._spark._wrapped)
 
     def __start_spark_jobs(self, name: str, desc: str) -> None:
-        self.spark.sparkContext.setJobGroup(name, name)
-        self.__timer_base = time.time()
+        self._spark.sparkContext.setJobGroup(name, name)
+        self._timer_base = time.time()
         self.outputToConsole(desc)
 
     def __clear_job_group(self) -> None:
         # TODO: Uses `SparkContext.clearJobGroup()` instead
-        self.spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)
-        self.spark.sparkContext.setLocalProperty("spark.job.description", None)
-        self.spark.sparkContext.setLocalProperty("spark.job.interruptOnCancel", None)
+        self._spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)
+        self._spark.sparkContext.setLocalProperty("spark.job.description", None)
+        self._spark.sparkContext.setLocalProperty("spark.job.interruptOnCancel", None)
 
     def __end_spark_jobs(self) -> None:
-        self.outputToConsole("Elapsed time is %s(s)" % (time.time() - self.__timer_base)) # type: ignore
+        self.outputToConsole("Elapsed time is %s(s)" % (time.time() - self._timer_base)) # type: ignore
         self.__clear_job_group()
 
     def __release_resources(self, env: Dict[str, str]) -> None:
-        for t in list(filter(lambda x: x in self.__meta_view_names, env.values())):
-            self.spark.sql("DROP VIEW IF EXISTS %s" % env[t])
+        for t in list(filter(lambda x: x in self._meta_view_names, env.values())):
+            self._spark.sql("DROP VIEW IF EXISTS %s" % env[t])
 
     def __check_input(self) -> Tuple[Dict[str, str], str, List[str]]:
-        env = json.loads(self.__svg_api.checkInputTable(self.db_name, self.table_name, self.row_id))
+        env = json.loads(self._svg_api.checkInputTable(self.db_name, self.table_name, self.row_id))
         continous_attrs = env["continous_attrs"].split(",")
-        return env, self.spark.table(env["input_table"]), \
+        return env, self._spark.table(env["input_table"]), \
             continous_attrs if continous_attrs != [""] else []
 
     def __detect_error_cells(self, input_table: str) -> str:
@@ -252,7 +247,7 @@ class ScavengerRepairModel(ApiBase):
         # If `self.error_cells` provided, just uses it
         if self.error_cells is not None:
             df = self.error_cells if isinstance(self.error_cells, DataFrame) \
-                else self.spark.table(self.error_cells)
+                else self._spark.table(self.error_cells)
             if not all(c in df.columns for c in (self.row_id, "attribute")):
                 raise ValueError("Error cells must have `%s` and `attribute` in columns" % self.row_id)
 
@@ -272,32 +267,32 @@ class ScavengerRepairModel(ApiBase):
             env["gray_cells"] = self.__detect_error_cells(env["input_table"])
             self.__end_spark_jobs()
 
-        return self.spark.table(env["gray_cells"])
+        return self._spark.table(env["gray_cells"])
 
     def __prepare_repair_base(self, env: Dict[str, str], gray_cells_df: DataFrame) -> str:
         # Sets NULL at the detected gray cells
         logging.info("%s/%s suspicious cells found, then converts them into NULL cells..." % \
             (gray_cells_df.count(), int(env["num_input_rows"]) * int(env["num_attrs"])))
-        env.update(json.loads(self.__svg_api.convertErrorCellsToNull(
+        env.update(json.loads(self._svg_api.convertErrorCellsToNull(
             env["input_table"], env["gray_cells"],
             self.row_id)))
 
-        return self.spark.table(env["repair_base"])
+        return self._spark.table(env["repair_base"])
 
     def __preprocess(self, env: Dict[str, str], continous_attrs: List[str]) -> DataFrame:
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
-        env.update(json.loads(self.__svg_api.convertToDiscreteFeatures(
+        env.update(json.loads(self._svg_api.convertToDiscreteFeatures(
             self.db_name, self.table_name, self.row_id,
             self.discrete_thres)))
 
-        discrete_ft_df = self.spark.table(env["discrete_features"])
+        discrete_ft_df = self._spark.table(env["discrete_features"])
         logging.info("Valid %s attributes (%s) found in the %s input attributes (%s) and " \
             "%s continous attributes (%s) included in them" % ( \
                 len(discrete_ft_df.columns), \
                 ",".join(discrete_ft_df.columns), \
-                len(self.spark.table(env["input_table"]).columns), \
-                ",".join(self.spark.table(env["input_table"]).columns), \
+                len(self._spark.table(env["input_table"]).columns), \
+                ",".join(self._spark.table(env["input_table"]).columns), \
                 len(continous_attrs), \
                 ",".join(continous_attrs)))
 
@@ -312,14 +307,14 @@ class ScavengerRepairModel(ApiBase):
         logging.info("Collecting and sampling attribute stats (ratio=%s threshold=%s) " \
                 "before computing error domains..." % \
                 (self.attr_stat_sample_ratio, self.attr_stat_threshold))
-        env.update(json.loads(self.__svg_api.computeAttrStats(
+        env.update(json.loads(self._svg_api.computeAttrStats(
             env["discrete_features"], env["gray_cells"], self.row_id,
             self.attr_stat_sample_ratio,
             self.attr_stat_threshold)))
 
         self.__start_spark_jobs("cell domains analysis",
             "[Error Detection Phase] Analyzing cell domains to fix error cells...")
-        env.update(json.loads(self.__svg_api.computeDomainInErrorCells(
+        env.update(json.loads(self._svg_api.computeDomainInErrorCells(
             env["discrete_features"], env["attr_stats"], env["gray_cells"], self.row_id,
             env["continous_attrs"],
             self.max_attrs_to_compute_domains,
@@ -328,7 +323,7 @@ class ScavengerRepairModel(ApiBase):
             self.domain_threshold_beta)))
         self.__end_spark_jobs()
 
-        return self.spark.table(env["cell_domain"])
+        return self._spark.table(env["cell_domain"])
 
     def __extract_error_cells(self, env: Dict[str, str], cell_domain_df: DataFrame,
             repair_base_df: DataFrame) -> DataFrame:
@@ -339,18 +334,18 @@ class ScavengerRepairModel(ApiBase):
         env["weak"] = self.__temp_name("weak")
         weak_df = weak_df.where("value IS NOT NULL").selectExpr(self.row_id, "attribute", "value repaired")
         weak_df.cache().createOrReplaceTempView(env["weak"])
-        ret_as_json = self.__svg_api.repairAttrsFrom(env["weak"], "", env["repair_base"], self.row_id)
+        ret_as_json = self._svg_api.repairAttrsFrom(env["weak"], "", env["repair_base"], self.row_id)
         env["partial_repaired"] = json.loads(ret_as_json)["repaired"]
 
         self.outputToConsole("[Error Detection Phase] %d suspicious cells fixed and %d error cells remaining..." % \
-            (self.spark.table(env["weak"]).count(), error_cells_df.count()))
+            (self._spark.table(env["weak"]).count(), error_cells_df.count()))
 
         return error_cells_df
 
     def __split_clean_and_dirty_rows(self, env: Dict, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame, List[Row]]:
         error_rows_df = error_cells_df.selectExpr(self.row_id).distinct().cache()
-        fixed_df = self.spark.table(env["partial_repaired"]).join(error_rows_df, self.row_id, "left_anti").cache()
-        dirty_df = self.spark.table(env["partial_repaired"]).join(error_rows_df, self.row_id, "left_semi").cache()
+        fixed_df = self._spark.table(env["partial_repaired"]).join(error_rows_df, self.row_id, "left_anti").cache()
+        dirty_df = self._spark.table(env["partial_repaired"]).join(error_rows_df, self.row_id, "left_semi").cache()
         error_attrs = error_cells_df.groupBy("attribute").agg(functions.count("attribute").alias("cnt")).collect()
         assert len(error_attrs) > 0
         return fixed_df, dirty_df, error_attrs
@@ -358,8 +353,8 @@ class ScavengerRepairModel(ApiBase):
     def __convert_to_histogram(self, df: DataFrame) -> DataFrame:
         temp_view = self.__temp_name()
         df.createOrReplaceTempView(temp_view)
-        ret_as_json = self.__svg_api.convertToHistogram(temp_view, self.discrete_thres)
-        return self.spark.table(json.loads(ret_as_json)["histogram"])
+        ret_as_json = self._svg_api.convertToHistogram(temp_view, self.discrete_thres)
+        return self._spark.table(json.loads(ret_as_json)["histogram"])
 
     def __show_histogram(self, df: DataFrame) -> None:
         import matplotlib.pyplot as plt
@@ -403,7 +398,7 @@ class ScavengerRepairModel(ApiBase):
             "[Repair Model Training Phase] Collecting training data stats before building ML models...")
         env["train"] = self.__temp_name("train")
         train_df.createOrReplaceTempView(env["train"])
-        env.update(json.loads(self.__svg_api.computeDomainSizes(env["train"])))
+        env.update(json.loads(self._svg_api.computeDomainSizes(env["train"])))
         self.__end_spark_jobs()
 
         # Sorts target columns by domain size
@@ -569,15 +564,15 @@ class ScavengerRepairModel(ApiBase):
             continous_attrs: List[str], dirty_df: DataFrame, error_cells_df: DataFrame,
             compute_repair_candidate_prob: bool) -> pd.DataFrame:
         # Shares all the variables for the learnt models in a Spark cluster
-        broadcasted_target_columns = self.spark.sparkContext.broadcast(target_columns)
-        broadcasted_continous_attrs = self.spark.sparkContext.broadcast(continous_attrs)
-        broadcasted_models = self.spark.sparkContext.broadcast(models)
-        broadcasted_compute_repair_candidate_prob = self.spark.sparkContext.broadcast(compute_repair_candidate_prob)
+        broadcasted_target_columns = self._spark.sparkContext.broadcast(target_columns)
+        broadcasted_continous_attrs = self._spark.sparkContext.broadcast(continous_attrs)
+        broadcasted_models = self._spark.sparkContext.broadcast(models)
+        broadcasted_compute_repair_candidate_prob = self._spark.sparkContext.broadcast(compute_repair_candidate_prob)
         broadcasted_maximal_likelihood_repair_enabled = \
-            self.spark.sparkContext.broadcast(self.maximal_likelihood_repair_enabled)
+            self._spark.sparkContext.broadcast(self.maximal_likelihood_repair_enabled)
 
         # Sets a grouping key for inference
-        num_parallelism = self.spark.sparkContext.defaultParallelism
+        num_parallelism = self._spark.sparkContext.defaultParallelism
         grouping_key = self.__temp_name("__grouping_key")
         env["dirty"] = self.__temp_name("dirty")
         dirty_df.createOrReplaceTempView(env["dirty"])
@@ -658,7 +653,7 @@ class ScavengerRepairModel(ApiBase):
         # (e.g., edit distances) between the two database instances D and D'.
         pmf_df = self.__compute_repair_pmf(repaired_df, error_cells_df)
 
-        broadcasted_distance = self.spark.sparkContext.broadcast(self.distance)
+        broadcasted_distance = self._spark.sparkContext.broadcast(self.distance)
 
         @functions.pandas_udf("double", functions.PandasUDFType.SCALAR)
         def distance(xs: pd.Series, ys: pd.Series) -> pd.Series:
@@ -764,8 +759,8 @@ class ScavengerRepairModel(ApiBase):
             # If `repair_data` is True, applys the selected repair updates into `dirty`
             env["top_delta_repairs"] = self.__temp_name("top_delta_repairs")
             top_delta_repairs_df.createOrReplaceTempView(env["top_delta_repairs"])
-            env.update(json.loads(self.__svg_api.repairAttrsFrom(env["top_delta_repairs"], "", env["dirty"], self.row_id)))
-            repaired_df = self.spark.table(env["repaired"])
+            env.update(json.loads(self._svg_api.repairAttrsFrom(env["top_delta_repairs"], "", env["dirty"], self.row_id)))
+            repaired_df = self._spark.table(env["repaired"])
 
         # If `repair_data` is False, returns repair candidates whoes
         # value is the same with `current_value`.
@@ -801,8 +796,8 @@ class ScavengerRepairModel(ApiBase):
         if self.repair_updates is not None:
             repair_updates_view = self.__temp_view(self.repair_updates) \
                 if isinstance(self.repair_updates, DataFrame) else str(self.repair_updates)
-            ret_as_json = self.__svg_api.repairAttrsFrom(repair_updates_view, self.db_name, self.table_name, self.row_id)
-            return self.spark.table(json.loads(ret_as_json)["repaired"])
+            ret_as_json = self._svg_api.repairAttrsFrom(repair_updates_view, self.db_name, self.table_name, self.row_id)
+            return self._spark.table(json.loads(ret_as_json)["repaired"])
 
         # Checks # of input rows and attributes
         env, input_df, continous_attrs = self.__check_input()

@@ -27,20 +27,18 @@ from repair.base import *
 
 class ScavengerRepairMisc(ApiBase):
 
-    table_name: Optional[str] = None
-    row_id: Optional[str] = None
-    target_attr_list: str = ""
-    k: Optional[int] = None
-    q: int = 2
-    clustering_alg: str = "bisect-kmeans"
-    null_ratio: float = 0.01
-
-    # TODO: Prohibit instantiation directly
     def __init__(self) -> None:
         super().__init__()
+        self.table_name: Optional[str] = None
+        self.row_id: Optional[str] = None
+        self.target_attr_list: str = ""
+        self.k: Optional[int] = None
+        self.q: int = 2
+        self.clustering_alg: str = "bisect-kmeans"
+        self.null_ratio: float = 0.01
 
         # JVM interfaces for Scavenger APIs
-        self.__svg_api = self.jvm.ScavengerMiscApi
+        self._svg_api = self._jvm.ScavengerMiscApi
 
     def setTableName(self, table_name: str) -> "ScavengerRepairMisc":
         self.table_name = table_name
@@ -74,37 +72,37 @@ class ScavengerRepairMisc(ApiBase):
         if self.table_name is None or self.row_id is None:
             raise ValueError("`setTableName` and `setRowId` should be called before flattening")
 
-        jdf = self.__svg_api.flattenTable(self.db_name, self.table_name, self.row_id)
-        return DataFrame(jdf, self.spark._wrapped)
+        jdf = self._svg_api.flattenTable(self.db_name, self.table_name, self.row_id)
+        return DataFrame(jdf, self._spark._wrapped)
 
     def splitInputTableInto(self) -> DataFrame:
         if self.table_name is None or self.row_id is None or self.k is None:
             raise ValueError("`setTableName`, `setRowId`, and `setK` should be called before computing row groups")
 
-        options = "q=%s,clusteringAlg=%s" % (self.q, self.clustering_alg)
-        jdf = self.__svg_api.splitInputTableInto(self.k, self.db_name, self.table_name, self.row_id, self.target_attr_list, options)
-        return DataFrame(jdf, self.spark._wrapped)
+        options = f"q={self.q},clusteringAlg={self.clustering_alg}"
+        jdf = self._svg_api.splitInputTableInto(self.k, self.db_name, self.table_name, self.row_id, self.target_attr_list, options)
+        return DataFrame(jdf, self._spark._wrapped)
 
     def injectNull(self) -> DataFrame:
         if self.table_name is None:
             raise ValueError("`setTableName` should be called before injecting NULL")
 
-        jdf = self.__svg_api.injectNullAt(self.db_name, self.table_name, self.target_attr_list, self.null_ratio)
-        return DataFrame(jdf, self.spark._wrapped)
+        jdf = self._svg_api.injectNullAt(self.db_name, self.table_name, self.target_attr_list, self.null_ratio)
+        return DataFrame(jdf, self._spark._wrapped)
 
     def computeAndGetStats(self) -> DataFrame:
         if self.table_name is None:
             raise ValueError("`setTableName` should be called before injecting NULL")
 
-        jdf = self.__svg_api.computeAndGetStats(self.db_name, self.table_name)
-        return DataFrame(jdf, self.spark._wrapped)
+        jdf = self._svg_api.computeAndGetStats(self.db_name, self.table_name)
+        return DataFrame(jdf, self._spark._wrapped)
 
     def toErrorMap(self, error_cells: str) -> DataFrame:
         if self.table_name is None or self.row_id is None:
             raise ValueError("`setTableName` and `setRowId` should be called before flattening")
 
-        jdf = self.__svg_api.toErrorMap(error_cells, self.db_name, self.table_name, self.row_id)
-        return DataFrame(jdf, self.spark._wrapped)
+        jdf = self._svg_api.toErrorMap(error_cells, self.db_name, self.table_name, self.row_id)
+        return DataFrame(jdf, self._spark._wrapped)
 
 
 class SchemaSpy(ApiBase):
@@ -116,9 +114,7 @@ class SchemaSpy(ApiBase):
             cls.__instance = super(SchemaSpy, cls).__new__(cls)
         return cls.__instance
 
-    # TODO: Prohibit instantiation directly
     def __init__(self) -> None:
-        super().__init__()
         self.driver_name: str = "sqlite"
         self.props: str = ""
 
@@ -139,7 +135,7 @@ class SchemaSpy(ApiBase):
 
     def catalogToDataFrame(self) -> DataFrame:
         jdf = self.spy_api.catalogToDataFrame(self.db_name, self.driver_name, self.props)
-        df = DataFrame(jdf, self.spark._wrapped)
+        df = DataFrame(jdf, self._spark._wrapped)
         return df
 
     def run(self) -> ResultBase:
