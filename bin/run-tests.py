@@ -27,14 +27,17 @@ import uuid
 
 from argparse import ArgumentParser
 
+
 def print_red(text):
     print('\033[31m' + text + '\033[0m')
+
 
 SCAVENGER_REPAIR_API_LIB = ""
 SCAVENGER_MODULE_PATH = ""
 SCAVENGER_TESTDATA = ""
 
 LOGGER = logging.getLogger()
+
 
 def run_individual_python_test(target_dir, test_name):
     env = dict(os.environ)
@@ -46,18 +49,18 @@ def run_individual_python_test(target_dir, test_name):
     })
 
     # Creates an unique temp directory under 'target/' for each test
-    tmp_dir = os.path.join(target_dir, "%s-%s" % (test_name, str(uuid.uuid4())))
+    tmp_dir = os.path.join(target_dir, "{}-{}".format(test_name, str(uuid.uuid4())))
     while os.path.isdir(tmp_dir):
-        tmp_dir = os.path.join(target_dir, "%s-%s" % (test_name, str(uuid.uuid4())))
+        tmp_dir = os.path.join(target_dir, "{}-{}".format(test_name, str(uuid.uuid4())))
     os.mkdir(tmp_dir)
 
     LOGGER.info("Starts running test: %s", test_name)
     start_time = time.time()
     try:
-        per_test_output = "%s/output-%s" % (tmp_dir, str(uuid.uuid4()))
+        per_test_output = "{}/output-{}".format(tmp_dir, str(uuid.uuid4()))
         with open(per_test_output, 'w') as f:
             retcode = subprocess.Popen(
-                ["python", "%s/tests/%s.py" % (os.path.dirname(__file__), test_name)],
+                ["python", "{}/tests/{}.py".format(os.path.dirname(__file__), test_name)],
                 stderr=f, stdout=f, env=env).wait()
     except:
         LOGGER.exception("Got exception while running test: %s", test_name)
@@ -75,7 +78,7 @@ def run_individual_python_test(target_dir, test_name):
         except:
             LOGGER.exception("Got an exception while trying to print failed test output")
         finally:
-            print_red("\nHad test failures in %s; see logs" % test_name)
+            print_red(f"\nHad test failures in {test_name}; see logs")
             # Here, we use os._exit() instead of sys.exit() in order to force Python to exit even if
             # this code is invoked from a thread other than the main thread.
             os._exit(-1)
@@ -107,4 +110,3 @@ if __name__ == "__main__":
 
     run_individual_python_test(target_dir, "test_model")
     run_individual_python_test(target_dir, "test_misc")
-

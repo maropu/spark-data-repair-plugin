@@ -41,7 +41,8 @@ class ShellCommandException(Exception):
 
 def _get_conda_env_name(conda_env_path, env_name_prefix):
     conda_env_contents = open(conda_env_path).read() if conda_env_path else ""
-    return "%s-%s" % (env_name_prefix, hashlib.sha1(conda_env_contents.encode("utf-8")).hexdigest())
+    return "{}-{}".format(env_name_prefix,
+                          hashlib.sha1(conda_env_contents.encode("utf-8")).hexdigest())
 
 
 def _exec_cmd(cmd, throw_on_error=True, env=None, stream_output=False, cwd=None, cmd_stdin=None,
@@ -73,7 +74,7 @@ def _exec_cmd(cmd, throw_on_error=True, env=None, stream_output=False, cwd=None,
         child.communicate(cmd_stdin)
         exit_code = child.wait()
         if throw_on_error and exit_code != 0:
-            raise ShellCommandException("Non-zero exitcode: %s" % (exit_code))
+            raise ShellCommandException("Non-zero exitcode: {}".format(exit_code))
         return exit_code
     else:
         child = subprocess.Popen(
@@ -99,7 +100,7 @@ def _get_conda_bin_executable(executable_name):
     """
     conda_home = os.environ.get(PYFUNC_JIT_BOOST_CONDA_HOME)
     if conda_home:
-        return os.path.join(conda_home, "bin/%s" % executable_name)
+        return os.path.join(conda_home, "bin/{}".format(executable_name))
     return executable_name
 
 
@@ -137,9 +138,9 @@ def _get_conda_command(conda_env_name):
     # in case os name is not 'nt', we are not running on windows. It introduces
     # bash command otherwise.
     if os.name != "nt":
-        return "source %s %s" % (activate_path, conda_env_name)
+        return "source {} {}".format(activate_path, conda_env_name)
     else:
-        return "conda %s %s" % (activate_path, conda_env_name)
+        return "conda {} {}".format(activate_path, conda_env_name)
 
 
 def _get_conda_env_home(conda_env_name):
@@ -150,7 +151,7 @@ def _get_conda_env_home(conda_env_name):
         if os.path.basename(env_home) == conda_env_name:
             return env_home
 
-    raise ExecutionException("Could not find Conda home for '%s'" % conda_env_name)
+    raise ExecutionException(f"Could not find Conda home for '{conda_env_name}'")
 
 
 if __name__ == "__main__":
@@ -173,8 +174,7 @@ if __name__ == "__main__":
     elif args.command == 'get_env_name':
         print(conda_env_name)
     elif args.command == 'create_env_only':
-        print("conda virtual env '%s' created." % conda_env_name)
+        print("conda virtual env '{}' created.".format(conda_env_name))
     else:
-        print("Unknown command: %s" % args.command)
+        print("Unknown command: {}".format(args.command))
         sys.exit(-1)
-

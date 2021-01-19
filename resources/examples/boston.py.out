@@ -105,19 +105,19 @@ Detecting errors in a table `default.boston` (506 rows x 14 cols)...
 >>> recall = rdf.where("repaired <=> correct_val").count() / rdf.count()
 >>> f1 = (2.0 * precision * recall) / (precision + recall)
 >>> 
->>> print("Precision=%s Recall=%s F1=%s" % (precision, recall, f1))
+>>> print("Precision={} Recall={} F1={}".format(precision, recall, f1))
 Precision=0.8733333333333333 Recall=0.5177865612648221 F1=0.6501240694789083
 >>> 
 >>> # Computes performance numbers for continous attributes (RMSE)
-... is_continous = "NOT(%s)" % is_discrete
+... is_continous = f"NOT({is_discrete)"
 >>> n = repaired_df.count()
 >>> rmse = repaired_df \
 ...   .where(is_continous) \
 ...   .join(spark.table("boston_clean"), ["tid", "attribute"], "inner") \
-...   .selectExpr("sqrt(sum(pow(correct_val - repaired, 2.0)) / %s) rmse" % n) \
+...   .selectExpr(f"sqrt(sum(pow(correct_val - repaired, 2.0)) / {n}) rmse") \
 ...   .collect()[0] \
 ...   .rmse
 >>> 
->>> print("RMSE=%s" % rmse)
+>>> print(f"RMSE={rmse}")
 RMSE=2.0626999993860706
 

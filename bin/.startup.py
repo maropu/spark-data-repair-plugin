@@ -47,10 +47,9 @@ spark.sql("SET spark.sql.statistics.histogram.numBins=254")
 # Tunes # shuffle partitions
 num_tasks_per_core = 1
 num_parallelism = spark.sparkContext.defaultParallelism
-spark.sql("SET spark.sql.shuffle.partitions=%s" % (num_parallelism * num_tasks_per_core))
+spark.sql(f"SET spark.sql.shuffle.partitions={num_parallelism * num_tasks_per_core}")
 
 # Defines an entrypoint for Scavenger APIs
 scavenger = Scavenger.getOrCreate()
 
-print("Scavenger APIs (version %s) available as 'scavenger'." % ("0.1.0-spark3.0-EXPERIMENTAL"))
-
+print(f"Scavenger APIs (version {ScavengerRepairModel.version()}) available as 'scavenger'.")

@@ -29,11 +29,13 @@ from pyspark.sql.functions import col, udf
 
 from repair.api import *
 
+
 def load_testdata(spark, filename):
     fmt = os.path.splitext(filename)[1][1:]
     return spark.read.format(fmt) \
         .option("header", True) \
-        .load("%s/%s" % (os.getenv("SCAVENGER_TESTDATA"), filename))
+        .load("{}/{}".format(os.getenv("SCAVENGER_TESTDATA"), filename))
+
 
 @unittest.skipIf(
     not have_pandas or not have_pyarrow,
@@ -55,7 +57,7 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
 
         # Tunes # shuffle partitions
         num_parallelism = cls.spark.sparkContext.defaultParallelism
-        cls.spark.sql("SET spark.sql.shuffle.partitions=%s" % num_parallelism)
+        cls.spark.sql(f"SET spark.sql.shuffle.partitions={num_parallelism}")
 
         # Loads test data
         load_testdata(cls.spark, "adult.csv").createOrReplaceTempView("adult")
@@ -67,6 +69,7 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
             df.selectExpr("k").distinct().orderBy("k").collect(),
             [Row(k=0), Row(k=1), Row(k=2)])
 
+
 if __name__ == "__main__":
     try:
         import xmlrunner
@@ -74,4 +77,3 @@ if __name__ == "__main__":
     except ImportError:
         testRunner = None
     unittest.main(testRunner=testRunner, verbosity=2)
-

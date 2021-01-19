@@ -31,12 +31,12 @@ from repair.model import *
 
 class Scavenger(ApiBase):
 
-    __instance: Any = None
+    _instance: Any = None
 
     def __new__(cls, *args: Any, **kwargs: Any) -> "Scavenger":
-        if cls.__instance == None:
-            cls.__instance = super(Scavenger, cls).__new__(cls)
-        return cls.__instance
+        if cls._instance is None:
+            cls._instance = super(Scavenger, cls).__new__(cls)
+        return cls._instance
 
     @staticmethod
     def getOrCreate() -> "Scavenger":
@@ -50,4 +50,3 @@ class Scavenger(ApiBase):
 
     def misc(self) -> ScavengerRepairMisc:
         return ScavengerRepairMisc().setDbName(self.db_name)
-

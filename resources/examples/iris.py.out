@@ -88,10 +88,10 @@ only showing top 1 row
 ... n = spark.table("iris_repaired").count()
 >>> rmse = repaired_df \
 ...   .join(spark.table("iris_clean"), ["tid", "attribute"], "inner") \
-...   .selectExpr("sqrt(sum(pow(correct_val - repaired, 2.0)) / %s) rmse" % n) \
+...   .selectExpr(f"sqrt(sum(pow(correct_val - repaired, 2.0)) / {n}) rmse") \
 ...   .collect()[0] \
 ...   .rmse
 >>> 
->>> print("RMSE=%s" % rmse)
+>>> print(f"RMSE={rmse}")
 RMSE=0.4064564495531232
 

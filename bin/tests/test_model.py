@@ -29,11 +29,13 @@ from pyspark.sql.functions import col, udf
 
 from repair.api import *
 
+
 def load_testdata(spark, filename):
     fmt = os.path.splitext(filename)[1][1:]
     return spark.read.format(fmt) \
         .option("header", True) \
-        .load("%s/%s" % (os.getenv("SCAVENGER_TESTDATA"), filename))
+        .load("{}/{}".format(os.getenv("SCAVENGER_TESTDATA"), filename))
+
 
 @unittest.skipIf(
     not have_pandas or not have_pyarrow,
@@ -55,7 +57,7 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
 
         # Tunes # shuffle partitions
         num_parallelism = cls.spark.sparkContext.defaultParallelism
-        cls.spark.sql("SET spark.sql.shuffle.partitions=%s" % num_parallelism)
+        cls.spark.sql(f"SET spark.sql.shuffle.partitions={num_parallelism}")
 
         # Loads test data
         load_testdata(cls.spark, "adult.csv").createOrReplaceTempView("adult")
@@ -73,13 +75,13 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
         self.assertRaisesRegexp(
             ValueError,
             "`setRepairDelta` should be called before maximal likelihood repairing",
-            lambda: ScavengerRepairModel().setTableName("dummyTab").setRowId("dummyId") \
-                .setMaximalLikelihoodRepairEnabled(True).run())
+            lambda: ScavengerRepairModel().setTableName("dummyTab").setRowId("dummyId")
+            .setMaximalLikelihoodRepairEnabled(True).run())
         self.assertRaisesRegexp(
             ValueError,
             "Inference order must be `error`, `domain`, or `entropy`",
-            lambda: ScavengerRepairModel().setTableName("dummyTab").setRowId("dummyId") \
-                .setInferenceOrder("invalid").run())
+            lambda: ScavengerRepairModel().setTableName("dummyTab").setRowId("dummyId")
+            .setInferenceOrder("invalid").run())
 
     def __assert_exclusive_params(self, func):
         self.assertRaisesRegexp(ValueError, "cannot be set to True simultaneously", func)
@@ -107,8 +109,8 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
             repair_expected_df.orderBy("tid", "attribute").collect())
 
     def test_version(self):
-        self.assertEqual(ScavengerRepairModel().version(), \
-            "0.1.0-spark3.0-EXPERIMENTAL")
+        self.assertEqual(ScavengerRepairModel().version(), "0.1.0-spark3.0-EXPERIMENTAL")
+
 
 if __name__ == "__main__":
     try:
@@ -117,4 +119,3 @@ if __name__ == "__main__":
     except ImportError:
         testRunner = None
     unittest.main(testRunner=testRunner, verbosity=2)
-

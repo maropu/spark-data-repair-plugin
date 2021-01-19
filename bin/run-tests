@@ -30,6 +30,11 @@ if [ -z "$CONDA_DISABLED" ]; then
   . ${ROOT_DIR}/bin/conda.sh && activate_conda_virtual_env "${ROOT_DIR}"
 fi
 
+if [ ! -z "$PYTHON_LINT_CHECK" ]; then
+  # Checks codestyle and format before running unit tests
+  ${ROOT_DIR}/bin/lint-python
+fi
+
 if [ ! -z "$STATIC_TYPE_CHECK" ]; then
   # Checks type constraints before running unit tests
   echo "Running static type checks..."

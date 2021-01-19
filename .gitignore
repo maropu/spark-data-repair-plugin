@@ -3,6 +3,7 @@ hs_err_pid*
 *.pyc
 .idea/
 .idea_modules/
+bin/pycodestyle-*
 build/*.jar
 build/apache-maven*
 build/scala*

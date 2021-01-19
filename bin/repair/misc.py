@@ -29,6 +29,7 @@ class ScavengerRepairMisc(ApiBase):
 
     def __init__(self) -> None:
         super().__init__()
+
         self.table_name: Optional[str] = None
         self.row_id: Optional[str] = None
         self.target_attr_list: str = ""
@@ -77,17 +78,20 @@ class ScavengerRepairMisc(ApiBase):
 
     def splitInputTableInto(self) -> DataFrame:
         if self.table_name is None or self.row_id is None or self.k is None:
-            raise ValueError("`setTableName`, `setRowId`, and `setK` should be called before computing row groups")
+            raise ValueError("`setTableName`, `setRowId`, and `setK` should be called "
+                             "before computing row groups")
 
         options = f"q={self.q},clusteringAlg={self.clustering_alg}"
-        jdf = self._svg_api.splitInputTableInto(self.k, self.db_name, self.table_name, self.row_id, self.target_attr_list, options)
+        jdf = self._svg_api.splitInputTableInto(
+            self.k, self.db_name, self.table_name, self.row_id, self.target_attr_list, options)
         return DataFrame(jdf, self._spark._wrapped)
 
     def injectNull(self) -> DataFrame:
         if self.table_name is None:
             raise ValueError("`setTableName` should be called before injecting NULL")
 
-        jdf = self._svg_api.injectNullAt(self.db_name, self.table_name, self.target_attr_list, self.null_ratio)
+        jdf = self._svg_api.injectNullAt(
+            self.db_name, self.table_name, self.target_attr_list, self.null_ratio)
         return DataFrame(jdf, self._spark._wrapped)
 
     def computeAndGetStats(self) -> DataFrame:
@@ -107,19 +111,19 @@ class ScavengerRepairMisc(ApiBase):
 
 class SchemaSpy(ApiBase):
 
-    __instance: Any = None
+    _instance: Any = None
 
     def __new__(cls, *args: Any, **kwargs: Any) -> "SchemaSpy":
-        if cls.__instance == None:
-            cls.__instance = super(SchemaSpy, cls).__new__(cls)
-        return cls.__instance
+        if cls._instance is None:
+            cls._instance = super(SchemaSpy, cls).__new__(cls)
+        return cls._instance
 
     def __init__(self) -> None:
         self.driver_name: str = "sqlite"
         self.props: str = ""
 
         # JVM interfaces for SchemaSpy APIs
-        self.spy_api = self.jvm.SchemaSpyApi
+        self.spy_api = self._jvm.SchemaSpyApi
 
     @staticmethod
     def getOrCreate() -> "SchemaSpy":
@@ -139,11 +143,11 @@ class SchemaSpy(ApiBase):
         return df
 
     def run(self) -> ResultBase:
-        result_path = self.spy_api.run(self.output, self.db_name, self.driver_name, self.props)
+        result_path = self.spy_api.run(
+            self.output, self.db_name, self.driver_name, self.props)
         return ResultBase(result_path)
 
 
 # This is a method to use SchemaSpy functionality directly
 def spySchema(args: str = "") -> None:
-    sc._jvm.SchemaSpyApi.run(args) # type: ignore
-
+    sc._jvm.SchemaSpyApi.run(args)  # type: ignore

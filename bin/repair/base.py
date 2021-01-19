@@ -53,4 +53,3 @@ class ResultBase():
         assert self.output is not None
         import webbrowser
         webbrowser.open(f"file://{self.output}/index.html")
-

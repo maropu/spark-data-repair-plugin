@@ -28,11 +28,11 @@ def require_minimum_pandas_version():
     except ImportError:
         have_pandas = False
     if not have_pandas:
-        raise ImportError("Pandas >= %s must be installed; however, "
-                          "it was not found." % minimum_pandas_version)
+        raise ImportError("Pandas >= {} must be installed; however, "
+                          "it was not found.".format(minimum_pandas_version))
     if LooseVersion(pandas.__version__) < LooseVersion(minimum_pandas_version):
-        raise ImportError("Pandas >= %s must be installed; however, "
-                          "your version was %s." % (minimum_pandas_version, pandas.__version__))
+        raise ImportError("Pandas >= {} must be installed; however, "
+                          "your version was {}.".format(minimum_pandas_version, pandas.__version__))
 
 
 pandas_requirement_message = None
@@ -56,11 +56,11 @@ def require_minimum_pyarrow_version():
     except ImportError:
         have_arrow = False
     if not have_arrow:
-        raise ImportError("PyArrow >= %s must be installed; however, "
-                          "it was not found." % minimum_pyarrow_version)
+        raise ImportError("PyArrow >= {} must be installed; however, "
+                          "it was not found.".format(minimum_pyarrow_version))
     if LooseVersion(pyarrow.__version__) < LooseVersion(minimum_pyarrow_version):
-        raise ImportError("PyArrow >= %s must be installed; however, "
-                          "your version was %s." % (minimum_pyarrow_version, pyarrow.__version__))
+        raise ImportError("PyArrow >= {} must be installed; however, your version was {}.".format(
+            minimum_pyarrow_version, pyarrow.__version__))
 
 
 pyarrow_requirement_message = None
@@ -74,4 +74,3 @@ except ImportError as e:
 
 have_pandas = pandas_requirement_message is None
 have_pyarrow = pyarrow_requirement_message is None
-

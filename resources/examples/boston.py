@@ -1,48 +1,50 @@
 # Loads a target data then defines tables for it
-boston_schema = "tid string, CRIM double, ZN string, INDUS string, CHAS string, NOX string, RM double, AGE string, DIS double, RAD string, TAX string, PTRATIO string, B double, LSTAT double"
+boston_schema = "tid string, CRIM double, ZN string, INDUS string, CHAS string, " \
+    "NOX string, RM double, AGE string, DIS double, RAD string, TAX string, " \
+    "PTRATIO string, B double, LSTAT double"
 spark.read \
-  .option("header", True) \
-  .schema(boston_schema) \
-  .csv("./testdata/boston.csv") \
-  .write \
-  .saveAsTable("boston")
+    .option("header", True) \
+    .schema(boston_schema) \
+    .csv("./testdata/boston.csv") \
+    .write \
+    .saveAsTable("boston")
 
 scavenger.misc() \
-  .setDbName("default") \
-  .setTableName("boston") \
-  .setRowId("tid") \
-  .flatten() \
-  .write \
-  .saveAsTable("boston_flatten")
+    .setDbName("default") \
+    .setTableName("boston") \
+    .setRowId("tid") \
+    .flatten() \
+    .write \
+    .saveAsTable("boston_flatten")
 
 spark.table("boston").show(1)
 spark.table("boston_flatten").show(1)
 
 # Loads a ground truth data then defines tables for it
 spark.read \
-  .option("header", True) \
-  .csv("./testdata/boston_clean.csv") \
-  .write \
-  .saveAsTable("boston_clean")
+    .option("header", True) \
+    .csv("./testdata/boston_clean.csv") \
+    .write \
+    .saveAsTable("boston_clean")
 
 spark.table("boston_flatten") \
-  .join(spark.table("boston_clean"), ["tid", "attribute"], "inner") \
-  .where("not(value <=> correct_val)") \
-  .write \
-  .saveAsTable("error_cells_ground_truth")
+    .join(spark.table("boston_clean"), ["tid", "attribute"], "inner") \
+    .where("not(value <=> correct_val)") \
+    .write \
+    .saveAsTable("error_cells_ground_truth")
 
 spark.table("boston_clean").show(1)
 spark.table("error_cells_ground_truth").show(1)
 
 # Detects error cells then repairs them
 repaired_df = scavenger.repair() \
-  .setDbName("default") \
-  .setTableName("boston") \
-  .setRowId("tid") \
-  .setDiscreteThreshold(30) \
-  .setMaxTrainingColumnNum(14) \
-  .setInferenceOrder("entropy") \
-  .run()
+    .setDbName("default") \
+    .setTableName("boston") \
+    .setRowId("tid") \
+    .setDiscreteThreshold(30) \
+    .setMaxTrainingColumnNum(14) \
+    .setInferenceOrder("entropy") \
+    .run()
 
 # Computes performance numbers for discrete attributes (precision & recall)
 #  - Precision: the fraction of correct repairs, i.e., repairs that match
@@ -58,17 +60,16 @@ precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
 recall = rdf.where("repaired <=> correct_val").count() / rdf.count()
 f1 = (2.0 * precision * recall) / (precision + recall)
 
-print("Precision=%s Recall=%s F1=%s" % (precision, recall, f1))
+print("Precision={} Recall={} F1={}".format(precision, recall, f1))
 
 # Computes performance numbers for continous attributes (RMSE)
-is_continous = "NOT(%s)" % is_discrete
+is_continous = f"NOT({is_discrete})"
 n = repaired_df.count()
 rmse = repaired_df \
-  .where(is_continous) \
-  .join(spark.table("boston_clean"), ["tid", "attribute"], "inner") \
-  .selectExpr("sqrt(sum(pow(correct_val - repaired, 2.0)) / %s) rmse" % n) \
-  .collect()[0] \
-  .rmse
+    .where(is_continous) \
+    .join(spark.table("boston_clean"), ["tid", "attribute"], "inner") \
+    .selectExpr(f"sqrt(sum(pow(correct_val - repaired, 2.0)) / {n}) rmse") \
+    .collect()[0] \
+    .rmse
 
-print("RMSE=%s" % rmse)
-
+print(f"RMSE={rmse}")

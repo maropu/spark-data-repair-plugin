@@ -99,6 +99,6 @@ Detecting errors in a table `default.hospital` (1000 rows x 20 cols)...
 >>> recall = rdf.where("repaired <=> correct_val").count() / rdf.count()        
 >>> f1 = (2.0 * precision * recall) / (precision + recall)
 >>> 
->>> print("Precision=%s Recall=%s F1=%s" % (precision, recall, f1))
+>>> print("Precision={} Recall={} F1={}".format(precision, recall, f1))
 Precision=0.7017543859649122 Recall=0.6584362139917695 F1=0.6794055201698513
 

@@ -31,9 +31,10 @@ class Distance(metaclass=ABCMeta):
         pass
 
     def compute(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
-      distance = self._compute_impl(x, y)
-      assert type(distance) is float
-      return distance
+        distance = self._compute_impl(x, y)
+        assert type(distance) is float
+        return distance
+
 
 class Levenshtein(Distance):
 
@@ -43,4 +44,3 @@ class Levenshtein(Distance):
     def _compute_impl(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
         import Levenshtein
         return float(Levenshtein.distance(str(x), str(y)))
-

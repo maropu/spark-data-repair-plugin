@@ -55,8 +55,8 @@ class NullErrorDetector(ErrorDetector):
         ErrorDetector.__init__(self, 'NullErrorDetector')
 
     def _detect_impl(self) -> DataFrame:
-        jdf = self.__api.detectNullCells('', self.input_table, self.row_id)
-        return DataFrame(jdf, self.__spark._wrapped)
+        jdf = self._api.detectNullCells('', self.input_table, self.row_id)
+        return DataFrame(jdf, self._spark._wrapped)
 
 
 class RegExErrorDetector(ErrorDetector):
@@ -67,9 +67,10 @@ class RegExErrorDetector(ErrorDetector):
         self.error_cells_as_string = error_cells_as_string
 
     def _detect_impl(self) -> DataFrame:
-        jdf = self.__api.detectErrorCellsFromRegEx(
-            '', self.input_table, self.row_id, self.error_pattern, self.error_cells_as_string)
-        return DataFrame(jdf, self.__spark._wrapped)
+        jdf = self._api.detectErrorCellsFromRegEx(
+            '', self.input_table, self.row_id, self.error_pattern,
+            self.error_cells_as_string)
+        return DataFrame(jdf, self._spark._wrapped)
 
 
 class ConstraintErrorDetector(ErrorDetector):
@@ -79,9 +80,9 @@ class ConstraintErrorDetector(ErrorDetector):
         self.constraint_path = constraint_path
 
     def _detect_impl(self) -> DataFrame:
-        jdf = self.__api.detectErrorCellsFromConstraints(
+        jdf = self._api.detectErrorCellsFromConstraints(
             '', self.input_table, self.row_id, self.constraint_path)
-        return DataFrame(jdf, self.__spark._wrapped)
+        return DataFrame(jdf, self._spark._wrapped)
 
 
 class OutlierErrorDetector(ErrorDetector):
@@ -91,7 +92,6 @@ class OutlierErrorDetector(ErrorDetector):
         self.approx_enabled = approx_enabled
 
     def _detect_impl(self) -> DataFrame:
-        jdf = self.__api.detectErrorCellsFromOutliers(
+        jdf = self._api.detectErrorCellsFromOutliers(
             '', self.input_table, self.row_id, self.approx_enabled)
-        return DataFrame(jdf, self.__spark._wrapped)
-
+        return DataFrame(jdf, self._spark._wrapped)
