@@ -18,14 +18,15 @@
 #
 
 import logging
+import warnings
 
 from pyspark.sql import SparkSession
 
-from repair.api import *
+from repair.api import Scavenger
+from repair.model import ScavengerRepairModel
 
 # Initializes a Spark session
-if not sc._jvm.SparkSession.getActiveSession().isDefined():
-    spark.sql("SELECT 1")
+spark = SparkSession.builder.getOrCreate()
 
 # Suppress warinig messages in PySpark
 warnings.simplefilter('ignore')

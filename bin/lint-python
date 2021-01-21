@@ -55,7 +55,6 @@ function compile_python_test {
         exit "$COMPILE_STATUS"
     else
         echo "python compilation succeeded."
-        echo
     fi
 }
 
@@ -114,7 +113,6 @@ function pycodestyle_test {
         exit "$PYCODESTYLE_STATUS"
     else
         echo "pycodestyle checks passed."
-        echo
     fi
 }
 
@@ -153,7 +151,6 @@ flake8 checks failed."
         exit "$FLAKE8_STATUS"
     else
         echo "flake8 checks passed."
-        echo
     fi
 }
 
@@ -164,11 +161,10 @@ pushd "$SCAVENGER_ROOT_DIR" &> /dev/null
 
 PYTHON_SOURCE="$(find . -name "*.py")"
 
+echo "$PYTHON_SOURCE"
+
 compile_python_test "$PYTHON_SOURCE"
 pycodestyle_test "$PYTHON_SOURCE"
 flake8_test
-
-echo
-echo "all lint-python tests passed!"
 
 popd &> /dev/null

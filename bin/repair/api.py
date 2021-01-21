@@ -21,12 +21,12 @@
 A Scavenger API Set for Data Cleaning
 """
 
-from typing import Optional
+from typing import Any
 
-from repair.base import *
-from repair.constraints import *
-from repair.misc import *
-from repair.model import *
+from repair.base import ApiBase
+from repair.constraints import ScavengerConstraints
+from repair.misc import ScavengerRepairMisc
+from repair.model import ScavengerRepairModel
 
 
 class Scavenger(ApiBase):

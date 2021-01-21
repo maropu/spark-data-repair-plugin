@@ -38,9 +38,10 @@ def require_minimum_pandas_version():
 pandas_requirement_message = None
 try:
     require_minimum_pandas_version()
+    have_pandas = True
 except ImportError as e:
-    # If Pandas version requirement is not satisfied, skip related tests.
-    pandas_requirement_message = _exception_message(e)
+    # If pandas version requirement is not satisfied, skip related tests.
+    have_pandas = False
 
 
 def require_minimum_pyarrow_version():
@@ -67,10 +68,7 @@ pyarrow_requirement_message = None
 try:
     from pyspark.sql.pandas.utils import require_minimum_pyarrow_version
     require_minimum_pyarrow_version()
+    have_pyarrow = True
 except ImportError as e:
     # If Arrow version requirement is not satisfied, skip related tests.
-    pyarrow_requirement_message = _exception_message(e)
-
-
-have_pandas = pandas_requirement_message is None
-have_pyarrow = pyarrow_requirement_message is None
+    have_pyarrow = False

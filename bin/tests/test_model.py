@@ -23,11 +23,8 @@ from requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
 
 from pyspark import SparkConf
-from pyspark.rdd import PythonEvalType
-from pyspark.sql import Row
-from pyspark.sql.functions import col, udf
 
-from repair.api import *
+from repair.model import ScavengerRepairModel
 
 
 def load_testdata(spark, filename):

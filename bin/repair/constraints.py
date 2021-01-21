@@ -19,7 +19,7 @@
 
 from typing import Optional
 
-from repair.base import *
+from repair.base import ApiBase, ResultBase
 
 
 class ScavengerConstraints(ApiBase):

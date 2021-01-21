@@ -23,7 +23,6 @@ Prepares a conda virtual env for Python JIT Booster
 
 import hashlib
 import json
-import logging
 import os
 import subprocess
 import sys
@@ -109,9 +108,9 @@ def _get_conda_path():
     try:
         _exec_cmd([conda_path, "--help"], throw_on_error=False)
     except EnvironmentError:
-        raise ExecutionException("Could not find Conda executable. "
-                                 "Ensure Conda is installed as per the instructions "
-                                 "at https://conda.io/docs/user-guide/install/index.html.")
+        raise RuntimeError("Could not find Conda executable. "
+                           "Ensure Conda is installed as per the instructions "
+                           "at https://conda.io/docs/user-guide/install/index.html.")
     return conda_path
 
 
@@ -151,7 +150,7 @@ def _get_conda_env_home(conda_env_name):
         if os.path.basename(env_home) == conda_env_name:
             return env_home
 
-    raise ExecutionException(f"Could not find Conda home for '{conda_env_name}'")
+    raise RuntimeError(f"Could not find Conda home for '{conda_env_name}'")
 
 
 if __name__ == "__main__":

@@ -17,12 +17,12 @@
 # limitations under the License.
 #
 
-import json
-from typing import Optional
+from typing import Any, Optional
 
+from pyspark import SparkContext
 from pyspark.sql import DataFrame
 
-from repair.base import *
+from repair.base import ApiBase, ResultBase
 
 
 class ScavengerRepairMisc(ApiBase):
@@ -150,4 +150,5 @@ class SchemaSpy(ApiBase):
 
 # This is a method to use SchemaSpy functionality directly
 def spySchema(args: str = "") -> None:
-    sc._jvm.SchemaSpyApi.run(args)  # type: ignore
+    sc = SparkContext._active_spark_contex
+    sc._jvm.SchemaSpyApi.run(args)
