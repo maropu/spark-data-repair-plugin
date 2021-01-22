@@ -33,6 +33,7 @@ spark.table("hospital_clean").show(1)
 spark.table("error_cells_ground_truth").show(1)
 
 # Detects error cells then repairs them
+from repair.detectors import ConstraintErrorDetector
 repaired_df = scavenger.repair() \
     .setDbName("default") \
     .setTableName("hospital") \

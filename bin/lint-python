@@ -161,8 +161,6 @@ pushd "$SCAVENGER_ROOT_DIR" &> /dev/null
 
 PYTHON_SOURCE="$(find . -name "*.py")"
 
-echo "$PYTHON_SOURCE"
-
 compile_python_test "$PYTHON_SOURCE"
 pycodestyle_test "$PYTHON_SOURCE"
 flake8_test

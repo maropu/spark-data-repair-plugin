@@ -87,7 +87,7 @@ class ConstraintErrorDetector(ErrorDetector):
 
 class OutlierErrorDetector(ErrorDetector):
 
-    def __init__(self, approx_enabled: bool) -> None:
+    def __init__(self, approx_enabled: bool = False) -> None:
         ErrorDetector.__init__(self, 'OutlierErrorDetector')
         self.approx_enabled = approx_enabled
 

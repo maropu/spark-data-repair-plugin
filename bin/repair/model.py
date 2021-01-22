@@ -243,7 +243,7 @@ class ScavengerRepairModel(ApiBase):
 
         err_cells = self._temp_name("gray_cells")
         err_cells_df = functools.reduce(lambda x, y: x.union(y), error_cells_dfs)
-        err_cells_df.cache().createOrReplaceTempView(err_cells)
+        err_cells_df.distinct().cache().createOrReplaceTempView(err_cells)
         return err_cells
 
     def _detect_errors(self, env: Dict[str, str]) -> str:

@@ -51,25 +51,43 @@ object ScavengerRepairApi extends ScavengerBase {
       val tableNode = df.queryExecution.optimizedPlan.collectLeaves().head.asInstanceOf[LeafNode]
       tableNode.computeStats()
     }
-    val statMap = tableStats.attributeStats.map { kv =>
+    tableStats.attributeStats.map { kv =>
       val stat = kv._2
       val distinctCount = stat.distinctCount.map(_.toLong)
       (kv._1.name, ColumnStat(distinctCount.get, stat.min, stat.max))
     }
-    assert(df.columns.forall(statMap.contains))
-    statMap
   }
 
   private[python] def computeAndGetTableStats(tableIdentifier: String): Map[String, ColumnStat] = {
     // For safe guards, just cache it for `ANALYZE TABLE`
-    spark.table(tableIdentifier).cache()
+    val df = spark.table(tableIdentifier)
+    df.cache().write.mode("overwrite").format("noop").save()
     spark.sql(
       s"""
          |ANALYZE TABLE $tableIdentifier COMPUTE STATISTICS
          |FOR ALL COLUMNS
        """.stripMargin)
 
-    getColumnStats(tableIdentifier)
+    // It seems to be possible that `getColumnStats` cannot collect column stats sometimes,
+    // so we will retry it if the method fails to collect the stats.
+    val maxRetry = 3
+    var retry = 0
+    var columnStats = Map.empty[String, ColumnStat]
+    while (columnStats.isEmpty && retry < maxRetry) {
+      if (retry > 0) {
+        logWarning(s"Retry#$retry: collecting column stats of '$tableIdentifier'")
+      }
+      columnStats = getColumnStats(tableIdentifier)
+      retry += 1
+    }
+    if (columnStats.isEmpty) {
+      throw new SparkException(
+        s"""Cannot collect column stats of '$tableIdentifier':
+           |${df.queryExecution.stringWithStats}
+         """.stripMargin)
+    }
+    assert(df.columns.forall(columnStats.contains))
+    columnStats
   }
 
   def computeDomainSizes(discreteAttrView: String): String = {
@@ -332,6 +350,12 @@ object ScavengerRepairApi extends ScavengerBase {
       s"domain_threshold=alpha:$domain_threshold_alpha,beta=$domain_threshold_beta")
 
     withSparkSession { sparkSession =>
+      // TODO: Needs more strict checks for input data, e.g., schema/data validation
+      assert({
+        val df = sparkSession.table(errCellView)
+        df.distinct().count() == df.count()
+      })
+
       val discreteAttrs = sparkSession.table(discreteAttrView).schema.map(_.name).filter(_ != rowId)
       val rowCnt = sparkSession.table(discreteAttrView).count()
 
@@ -595,8 +619,8 @@ object ScavengerRepairApi extends ScavengerBase {
       val cellDomainView = withJobDescription("compute domain values with posteriori probability") {
         createAndCacheTempView(cellDomainDf)
       }
-      // TODO: Checks if # of rows in `cellDomainView` is the same with # of error cells
-      // assert(cellDomainDf.count == sparkSession.table(errCellView).count)
+      // Checks if # of rows in `cellDomainView` is the same with # of error cells
+      assert(cellDomainDf.count == sparkSession.table(errCellView).count)
       Seq("cell_domain" -> cellDomainView,
         "pairwise_attr_stats" -> pairWiseStatMap.mapValues(seqToJson)
       ).asJson
