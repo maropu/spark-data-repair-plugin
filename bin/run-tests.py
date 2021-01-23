@@ -108,4 +108,5 @@ if __name__ == "__main__":
         os.mkdir(target_dir)
 
     run_individual_python_test(target_dir, "test_model")
+    run_individual_python_test(target_dir, "test_distances")
     run_individual_python_test(target_dir, "test_misc")
