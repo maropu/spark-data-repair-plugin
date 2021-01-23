@@ -9,7 +9,7 @@ spark.read \
     .write \
     .saveAsTable("boston")
 
-scavenger.misc() \
+scavenger.misc \
     .setDbName("default") \
     .setTableName("boston") \
     .setRowId("tid") \
@@ -37,7 +37,7 @@ spark.table("boston_clean").show(1)
 spark.table("error_cells_ground_truth").show(1)
 
 # Detects error cells then repairs them
-repaired_df = scavenger.repair() \
+repaired_df = scavenger.repair \
     .setDbName("default") \
     .setTableName("boston") \
     .setRowId("tid") \

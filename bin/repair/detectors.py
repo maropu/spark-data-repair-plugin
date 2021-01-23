@@ -32,7 +32,7 @@ class ErrorDetector(metaclass=ABCMeta):
 
         # For Spark/JVM interactions
         self._spark = SparkSession.builder.getOrCreate()
-        self._api = self._spark.sparkContext._active_spark_context._jvm.ScavengerErrorDetectorApi
+        self._api = self._spark.sparkContext._active_spark_context._jvm.ErrorDetectorApi
 
     def setup(self, row_id: str, input_table: str) -> None:
         self.row_id = row_id

@@ -29,10 +29,10 @@ import org.apache.spark.sql.catalyst.plans.logical.{Histogram, LeafNode}
 import org.apache.spark.sql.functions.{lit, udf}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.StructType
-import org.apache.spark.util.ScavengerUtils._
+import org.apache.spark.util.RepairUtils._
 import org.apache.spark.util.{Utils => SparkUtils}
 
-object ScavengerMiscApi extends ScavengerBase {
+object RepairMiscApi extends RepairBase {
 
   /**
    * To compare result rows easily, this method flattens an input table

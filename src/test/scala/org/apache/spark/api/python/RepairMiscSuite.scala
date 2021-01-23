@@ -21,9 +21,9 @@ import org.apache.spark.SparkException
 import org.apache.spark.sql.{QueryTest, Row}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
-import org.apache.spark.util.ScavengerUtils._
+import org.apache.spark.util.RepairUtils._
 
-class ScavengerMiscSuite extends QueryTest with SharedSparkSession {
+class RepairMiscSuite extends QueryTest with SharedSparkSession {
 
   protected override def beforeAll(): Unit = {
     super.beforeAll()
@@ -48,7 +48,7 @@ class ScavengerMiscSuite extends QueryTest with SharedSparkSession {
   }
 
   test("flattenTable") {
-    val df = ScavengerMiscApi.flattenTable("default", "t", "tid")
+    val df = RepairMiscApi.flattenTable("default", "t", "tid")
     val expectedSchema = "`tid` STRING,`attribute` STRING,`value` STRING"
     assert(df.schema.toDDL === expectedSchema)
     checkAnswer(df,
@@ -65,39 +65,39 @@ class ScavengerMiscSuite extends QueryTest with SharedSparkSession {
   }
 
   test("q-gram") {
-    val res1 = ScavengerMiscApi.computeQgram(2, Seq("abcdef", "ghijklm", "n", "op", "qrs", "tuvwxyz"))
+    val res1 = RepairMiscApi.computeQgram(2, Seq("abcdef", "ghijklm", "n", "op", "qrs", "tuvwxyz"))
     assert(res1 === Seq("ab", "bc", "cd", "de", "ef", "gh", "hi", "ij", "jk", "kl", "lm", "n",
       "op", "qr", "rs", "tu", "uv", "vw", "wx", "xy", "yz"))
-    val res2 = ScavengerMiscApi.computeQgram(3, Seq("abcdef", "ghijklm", "n", "op", "qrs", "tuvwxyz"))
+    val res2 = RepairMiscApi.computeQgram(3, Seq("abcdef", "ghijklm", "n", "op", "qrs", "tuvwxyz"))
     assert(res2 === Seq("abc", "bcd", "cde", "def", "ghi", "hij", "ijk", "jkl", "klm", "n",
       "op", "qrs", "tuv", "uvw", "vwx", "wxy", "xyz"))
-    val res3 = ScavengerMiscApi.computeQgram(4, Seq("abcdef", "ghijklm", "n", "op", "qrs", "tuvwxyz"))
+    val res3 = RepairMiscApi.computeQgram(4, Seq("abcdef", "ghijklm", "n", "op", "qrs", "tuvwxyz"))
     assert(res3 === Seq("abcd", "bcde", "cdef", "ghij", "hijk", "ijkl", "jklm", "n",
       "op", "qrs", "tuvw", "uvwx", "vwxy", "wxyz"))
 
     val errMsg = intercept[IllegalArgumentException] {
-      ScavengerMiscApi.computeQgram(0, Nil)
+      RepairMiscApi.computeQgram(0, Nil)
     }.getMessage
     assert(errMsg.contains("`q` must be positive, but 0 got"))
   }
 
   test("splitInputTableInto") {
-    val df1 = ScavengerMiscApi.splitInputTableInto(2, "default", "t", "tid", "", "")
+    val df1 = RepairMiscApi.splitInputTableInto(2, "default", "t", "tid", "", "")
     val expectedSchema = "`tid` STRING,`k` INT"
     assert(df1.schema.toDDL === expectedSchema)
     assert(df1.select("k").collect.map(_.getInt(0)).toSet === Set(0, 1))
-    val df2 = ScavengerMiscApi.splitInputTableInto(2, "default", "t", "tid", "v1", "")
+    val df2 = RepairMiscApi.splitInputTableInto(2, "default", "t", "tid", "v1", "")
     assert(df2.schema.toDDL === expectedSchema)
     assert(df2.select("k").collect.map(_.getInt(0)).toSet === Set(0, 1))
 
     val errMsg = intercept[SparkException] {
-      ScavengerMiscApi.splitInputTableInto(2, "default", "t", "tid", "non-existent", "")
+      RepairMiscApi.splitInputTableInto(2, "default", "t", "tid", "non-existent", "")
     }.getMessage
     assert(errMsg.contains("Columns 'non-existent' do not exist in 'default.t'"))
   }
 
   test("injectNullAt") {
-    val df1 = ScavengerMiscApi.injectNullAt("default", "t", "v1", 1.0)
+    val df1 = RepairMiscApi.injectNullAt("default", "t", "v1", 1.0)
     val expectedSchema = "`tid` STRING,`v1` INT,`v2` STRING"
     assert(df1.schema.toDDL === expectedSchema)
     checkAnswer(df1,
@@ -107,7 +107,7 @@ class ScavengerMiscSuite extends QueryTest with SharedSparkSession {
       Row("4", null, "test-4") ::
       Nil
     )
-    val df2 = ScavengerMiscApi.injectNullAt("default", "t", "v2", 0.0)
+    val df2 = RepairMiscApi.injectNullAt("default", "t", "v2", 0.0)
     assert(df2.schema.toDDL === expectedSchema)
     checkAnswer(df2,
       Row("1", 100000, "test-1") ::
@@ -118,7 +118,7 @@ class ScavengerMiscSuite extends QueryTest with SharedSparkSession {
     )
 
     val errMsg = intercept[SparkException] {
-      ScavengerMiscApi.injectNullAt("default", "t", "non-existent", 1.0)
+      RepairMiscApi.injectNullAt("default", "t", "non-existent", 1.0)
     }.getMessage
     assert(errMsg.contains("Columns 'non-existent' do not exist in 'default.t'"))
   }
@@ -128,7 +128,7 @@ class ScavengerMiscSuite extends QueryTest with SharedSparkSession {
       import testImplicits._
       Seq(("1", "v1"), ("2", "v1"), ("4", "v2")).toDF("tid", "attribute")
         .createOrReplaceTempView("errCellView")
-      val df = ScavengerMiscApi.toErrorMap("errCellView", "default", "t", "tid")
+      val df = RepairMiscApi.toErrorMap("errCellView", "default", "t", "tid")
       val expectedSchema = "`error_map` STRING"
       assert(df.schema.toDDL === expectedSchema)
       checkAnswer(df,
@@ -141,7 +141,7 @@ class ScavengerMiscSuite extends QueryTest with SharedSparkSession {
 
       val errMsg = intercept[SparkException] {
         createEmptyTable("tid STRING, illegal STRING").createOrReplaceTempView("IllegalView")
-        ScavengerMiscApi.toErrorMap("IllegalView", "default", "t", "tid")
+        RepairMiscApi.toErrorMap("IllegalView", "default", "t", "tid")
       }.getMessage
       assert(errMsg.contains("'IllegalView' must have 'tid', 'attribute' columns"))
     }

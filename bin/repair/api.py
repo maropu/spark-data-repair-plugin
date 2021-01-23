@@ -18,18 +18,16 @@
 #
 
 """
-A Scavenger API Set for Data Cleaning
+A Scavenger API Set for Data Repairing
 """
 
 from typing import Any
 
-from repair.base import ApiBase
-from repair.constraints import ScavengerConstraints
-from repair.misc import ScavengerRepairMisc
-from repair.model import ScavengerRepairModel
+from repair.misc import RepairMisc
+from repair.model import RepairModel
 
 
-class Scavenger(ApiBase):
+class Scavenger():
 
     _instance: Any = None
 
@@ -42,11 +40,10 @@ class Scavenger(ApiBase):
     def getOrCreate() -> "Scavenger":
         return Scavenger()
 
-    def constraints(self) -> ScavengerConstraints:
-        return ScavengerConstraints().setDbName(self.db_name).setOutput(self.output)
+    @property
+    def repair(self) -> RepairModel:
+        return RepairModel()
 
-    def repair(self) -> ScavengerRepairModel:
-        return ScavengerRepairModel().setDbName(self.db_name)
-
-    def misc(self) -> ScavengerRepairMisc:
-        return ScavengerRepairMisc().setDbName(self.db_name)
+    @property
+    def misc(self) -> RepairMisc:
+        return RepairMisc()

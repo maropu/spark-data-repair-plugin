@@ -25,9 +25,9 @@ import org.apache.spark.python.DenialConstraints
 import org.apache.spark.sql._
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.util.LoggingBasedOnLevel
-import org.apache.spark.util.ScavengerUtils._
+import org.apache.spark.util.RepairUtils._
 
-object ScavengerErrorDetectorApi extends LoggingBasedOnLevel {
+object ErrorDetectorApi extends LoggingBasedOnLevel {
 
   def detectNullCells(dbName: String, tableName: String, rowId: String): DataFrame = {
     logBasedOnLevel(s"detectNullCells called with: dbName=$dbName tableName=$tableName rowId=$rowId")
@@ -69,7 +69,7 @@ object ScavengerErrorDetectorApi extends LoggingBasedOnLevel {
   }
 }
 
-abstract class ErrorDetector extends ScavengerBase {
+abstract class ErrorDetector extends RepairBase {
 
   def detect(dbName: String, tableName: String, rowId: String, options: Map[String, Any]): DataFrame
 
@@ -287,7 +287,7 @@ object ConstraintErrorDetector extends ErrorDetector {
 
 // TODO: Needs to support more sophisticated outlier detectors, e.g., a nonparametric histogram
 // approach and a correlation based approach (named 'OD' in the HoloDetect paper [1]).
-// We might be able to compute outliers by reusing [[ScavengerRepairApi.computeDomainInErrorCells]].
+// We might be able to compute outliers by reusing [[RepairApi.computeDomainInErrorCells]].
 object GaussianOutlierErrorDetector extends ErrorDetector {
 
   override def detect(

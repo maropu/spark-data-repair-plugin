@@ -20,11 +20,11 @@ package org.apache.spark.api.python
 import org.apache.spark.SparkException
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.plans.logical.LeafNode
-import org.apache.spark.util.ScavengerUtils._
+import org.apache.spark.util.RepairUtils._
 import org.apache.spark.util.{Utils => SparkUtils}
 
 /** A Python API entry point for data cleaning. */
-object ScavengerRepairApi extends ScavengerBase {
+object RepairApi extends RepairBase {
 
   def checkInputTable(dbName: String, tableName: String, rowId: String): String = {
     val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)

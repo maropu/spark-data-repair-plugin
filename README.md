@@ -63,7 +63,7 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 
 # Runs jobs to compute repair updates for the seven NULL cells above in the `adult` table.
 # A 'repaired' column represents proposed updates to repiar them.
->>> repair_updates_df = scavenger.repair().setTableName("adult").setRowId("tid").run()
+>>> repair_updates_df = scavenger.repair.setTableName("adult").setRowId("tid").run()
 >>> repair_updates_df.show()
 +---+---------+-------------+-----------+
 |tid|attribute|current_value|   repaired|
@@ -78,7 +78,7 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 +---+---------+-------------+-----------+
 
 # You need to set `True` to `repair_data` for getting repaired data
->>> df = scavenger.repair().setTableName("adult").setRowId("tid").run(repair_data=True)
+>>> df = scavenger.repair.setTableName("adult").setRowId("tid").run(repair_data=True)
 >>> df.show()
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 |tid|  Age|   Education|       Occupation| Relationship|   Sex|      Country|     Income|
@@ -106,7 +106,7 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 
 # Or, you can apply the computed repair updates into the input directly
->>> df = scavenger.repair().setTableName("adult").setRowId("tid") \
+>>> df = scavenger.repair.setTableName("adult").setRowId("tid") \
 ...   .setRepairUpdates(repair_updates_df) \
 ...   .run()
 
@@ -134,7 +134,7 @@ t1&EQ(t1.Sex,"Male")&EQ(t1.Relationship,"Wife")
 # Use the constraints to detect errors then repair them.
 # Note that a process will return repair candidates instead of clean data
 # when setting `True` to `return_repair_candidates`.
->>> df = scavenger.repair().setTableName("adult").setRowId("tid") \
+>>> df = scavenger.repair.setTableName("adult").setRowId("tid") \
 ...   .setErrorDetector(ConstraintErrorDetector(constraint_path="./testdata/adult_constraints.txt")) \
 ...   .run(return_repair_candidates=True)
 
@@ -163,7 +163,7 @@ for getting them in pre-processing as follows;
 
 ```
 # Runs jobs to detect error cells
->>> df = scavenger.repair().setTableName("adult").setRowId("tid").run(detect_errors_only=True)
+>>> df = scavenger.repair.setTableName("adult").setRowId("tid").run(detect_errors_only=True)
 >>> df.show()
 +---+---------+-------------+
 |tid|attribute|current_value|
@@ -181,7 +181,7 @@ for getting them in pre-processing as follows;
 ## Configurations
 
 ```
-scavenger.repair()
+scavenger.repair
 
   // Basic Parameters
   .setDbName(str)                              // database name (default: 'default')

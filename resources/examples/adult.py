@@ -5,7 +5,7 @@ spark.read \
     .write \
     .saveAsTable("adult")
 
-scavenger.misc() \
+scavenger.misc \
     .setDbName("default") \
     .setTableName("adult") \
     .setRowId("tid") \
@@ -34,7 +34,7 @@ spark.table("error_cells_ground_truth").show(1)
 
 # Detects error cells then repairs them
 from repair.detectors import ConstraintErrorDetector
-repaired_df = scavenger.repair() \
+repaired_df = scavenger.repair \
     .setDbName("default") \
     .setTableName("adult") \
     .setRowId("tid") \

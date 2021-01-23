@@ -25,7 +25,7 @@ from requirements import have_pandas, have_pyarrow, \
 from pyspark import SparkConf
 from pyspark.sql import Row
 
-from repair.misc import ScavengerRepairMisc
+from repair.misc import RepairMisc
 
 
 def load_testdata(spark, filename):
@@ -38,7 +38,7 @@ def load_testdata(spark, filename):
 @unittest.skipIf(
     not have_pandas or not have_pyarrow,
     pandas_requirement_message or pyarrow_requirement_message)
-class ScavengerRepairModelTests(ReusedSQLTestCase):
+class RepairModelTests(ReusedSQLTestCase):
 
     @classmethod
     def conf(cls):
@@ -51,7 +51,7 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
 
     @classmethod
     def setUpClass(cls):
-        super(ScavengerRepairModelTests, cls).setUpClass()
+        super(RepairModelTests, cls).setUpClass()
 
         # Tunes # shuffle partitions
         num_parallelism = cls.spark.sparkContext.defaultParallelism
@@ -61,7 +61,7 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
         load_testdata(cls.spark, "adult.csv").createOrReplaceTempView("adult")
 
     def test_splitInputTableInto(self):
-        misc = ScavengerRepairMisc().setDbName("")
+        misc = RepairMisc().setDbName("")
         df = misc.setTableName("adult").setRowId("tid").setK(3).splitInputTableInto()
         self.assertEqual(
             df.selectExpr("k").distinct().orderBy("k").collect(),

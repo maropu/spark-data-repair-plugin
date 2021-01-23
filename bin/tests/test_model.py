@@ -24,7 +24,7 @@ from requirements import have_pandas, have_pyarrow, \
 
 from pyspark import SparkConf
 
-from repair.model import ScavengerRepairModel
+from repair.model import RepairModel
 
 
 def load_testdata(spark, filename):
@@ -37,7 +37,7 @@ def load_testdata(spark, filename):
 @unittest.skipIf(
     not have_pandas or not have_pyarrow,
     pandas_requirement_message or pyarrow_requirement_message)
-class ScavengerRepairModelTests(ReusedSQLTestCase):
+class RepairModelTests(ReusedSQLTestCase):
 
     @classmethod
     def conf(cls):
@@ -50,7 +50,7 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
 
     @classmethod
     def setUpClass(cls):
-        super(ScavengerRepairModelTests, cls).setUpClass()
+        super(RepairModelTests, cls).setUpClass()
 
         # Tunes # shuffle partitions
         num_parallelism = cls.spark.sparkContext.defaultParallelism
@@ -64,27 +64,27 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
         self.assertRaisesRegexp(
             ValueError,
             "`setTableName` and `setRowId` should be called before repairing",
-            lambda: ScavengerRepairModel().run())
+            lambda: RepairModel().run())
         self.assertRaisesRegexp(
             ValueError,
             "`setTableName` and `setRowId` should be called before repairing",
-            lambda: ScavengerRepairModel().setTableName("dummyTab").run())
+            lambda: RepairModel().setTableName("dummyTab").run())
         self.assertRaisesRegexp(
             ValueError,
             "`setRepairDelta` should be called before maximal likelihood repairing",
-            lambda: ScavengerRepairModel().setTableName("dummyTab").setRowId("dummyId")
+            lambda: RepairModel().setTableName("dummyTab").setRowId("dummyId")
             .setMaximalLikelihoodRepairEnabled(True).run())
         self.assertRaisesRegexp(
             ValueError,
             "Inference order must be `error`, `domain`, or `entropy`",
-            lambda: ScavengerRepairModel().setTableName("dummyTab").setRowId("dummyId")
+            lambda: RepairModel().setTableName("dummyTab").setRowId("dummyId")
             .setInferenceOrder("invalid").run())
 
     def __assert_exclusive_params(self, func):
         self.assertRaisesRegexp(ValueError, "cannot be set to True simultaneously", func)
 
     def test_exclusive_params(self):
-        test_model = ScavengerRepairModel()
+        test_model = RepairModel()
         api = test_model.setTableName("dummyTab").setRowId("dummyId")
         self.__assert_exclusive_params(
             lambda: api.run(detect_errors_only=True, compute_repair_candidate_prob=True))
@@ -98,7 +98,7 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
             lambda: api.run(compute_repair_candidate_prob=True, repair_data=True))
 
     def test_basic(self):
-        test_model = ScavengerRepairModel()
+        test_model = RepairModel()
         df = test_model.setTableName("adult").setRowId("tid").setErrorCells("adult_dirty").run()
         repair_expected_df = load_testdata(self.spark, "adult_repair_expected.csv")
         self.assertEqual(
@@ -106,7 +106,7 @@ class ScavengerRepairModelTests(ReusedSQLTestCase):
             repair_expected_df.orderBy("tid", "attribute").collect())
 
     def test_version(self):
-        self.assertEqual(ScavengerRepairModel().version(), "0.1.0-spark3.0-EXPERIMENTAL")
+        self.assertEqual(RepairModel().version(), "0.1.0-spark3.0-EXPERIMENTAL")
 
 
 if __name__ == "__main__":

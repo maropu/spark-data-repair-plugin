@@ -27,7 +27,7 @@ import org.apache.spark.sql.{AnalysisException, DataFrame, QueryTest, Row}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 
-class ScavengerErrorDetectorSuite extends QueryTest with SharedSparkSession {
+class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
 
   protected override def beforeAll(): Unit = {
     super.beforeAll()
@@ -39,10 +39,10 @@ class ScavengerErrorDetectorSuite extends QueryTest with SharedSparkSession {
   }
 
   test("Error detector - common error handling") {
-    Seq[String => DataFrame](ScavengerErrorDetectorApi.detectNullCells("", _, "tid"),
-      ScavengerErrorDetectorApi.detectErrorCellsFromRegEx("", _, "tid", null),
-      ScavengerErrorDetectorApi.detectErrorCellsFromConstraints("", _, "tid", null),
-      ScavengerErrorDetectorApi.detectErrorCellsFromOutliers("", _, "tid")
+    Seq[String => DataFrame](ErrorDetectorApi.detectNullCells("", _, "tid"),
+      ErrorDetectorApi.detectErrorCellsFromRegEx("", _, "tid", null),
+      ErrorDetectorApi.detectErrorCellsFromConstraints("", _, "tid", null),
+      ErrorDetectorApi.detectErrorCellsFromOutliers("", _, "tid")
     ).foreach { f =>
       val errMsg = intercept[AnalysisException] { f("nonexistent") }.getMessage()
       assert(errMsg.contains("Table or view not found: nonexistent"))
@@ -51,10 +51,10 @@ class ScavengerErrorDetectorSuite extends QueryTest with SharedSparkSession {
     withTempView("t") {
       spark.range(1).createOrReplaceTempView("t")
 
-      Seq[String => DataFrame](ScavengerErrorDetectorApi.detectNullCells("", "t", _),
-        ScavengerErrorDetectorApi.detectErrorCellsFromRegEx("", "t", _, null),
-        ScavengerErrorDetectorApi.detectErrorCellsFromConstraints("", "t", _, null),
-        ScavengerErrorDetectorApi.detectErrorCellsFromOutliers("", "t", _)
+      Seq[String => DataFrame](ErrorDetectorApi.detectNullCells("", "t", _),
+        ErrorDetectorApi.detectErrorCellsFromRegEx("", "t", _, null),
+        ErrorDetectorApi.detectErrorCellsFromConstraints("", "t", _, null),
+        ErrorDetectorApi.detectErrorCellsFromOutliers("", "t", _)
       ).foreach { f =>
         val errMsg1 = intercept[SparkException] { f("nonexistent") }.getMessage()
         assert(errMsg1.contains("Column 'nonexistent' does not exist in 't'"))
@@ -78,7 +78,7 @@ class ScavengerErrorDetectorSuite extends QueryTest with SharedSparkSession {
            |  ("4", 400000, NULL, "test-4")
          """.stripMargin)
 
-      val df = ScavengerErrorDetectorApi.detectNullCells("default", "t", "tid")
+      val df = ErrorDetectorApi.detectNullCells("default", "t", "tid")
       checkAnswer(df,
         Row("2", "v1") :: Row("3", "v3") :: Row("4", "v2") :: Nil)
     }
@@ -96,16 +96,16 @@ class ScavengerErrorDetectorSuite extends QueryTest with SharedSparkSession {
            |  ("4", 987654321,  NULL, "123-hij")
          """.stripMargin)
 
-      val df1 = ScavengerErrorDetectorApi
+      val df1 = ErrorDetectorApi
         .detectErrorCellsFromRegEx("default", "t", "tid", "123-hij", cellsAsString = false)
       checkAnswer(df1, Row("4", "v3"))
-      val df2 = ScavengerErrorDetectorApi
+      val df2 = ErrorDetectorApi
         .detectErrorCellsFromRegEx("default", "t", "tid", "123.*", cellsAsString = false)
       checkAnswer(df2,
         Row("1", "v3") ::
         Row("4", "v3") ::
         Nil)
-      val df3 = ScavengerErrorDetectorApi
+      val df3 = ErrorDetectorApi
         .detectErrorCellsFromRegEx("default", "t", "tid", "123.*", cellsAsString = true)
       checkAnswer(df3,
         Row("1", "v1") ::
@@ -121,11 +121,11 @@ class ScavengerErrorDetectorSuite extends QueryTest with SharedSparkSession {
   test("RegEx-based error detector - common error handling") {
     withTempView("t") {
       spark.range(1).selectExpr("id AS tid", "1 AS value").createOrReplaceTempView("t")
-      val df1 = ScavengerErrorDetectorApi.detectErrorCellsFromRegEx("", "t", "tid", null)
+      val df1 = ErrorDetectorApi.detectErrorCellsFromRegEx("", "t", "tid", null)
       checkAnswer(df1, Nil)
-      val df2 = ScavengerErrorDetectorApi.detectErrorCellsFromRegEx("", "t", "tid", "")
+      val df2 = ErrorDetectorApi.detectErrorCellsFromRegEx("", "t", "tid", "")
       checkAnswer(df2, Nil)
-      val df3 = ScavengerErrorDetectorApi.detectErrorCellsFromRegEx("", "t", "tid", "    ")
+      val df3 = ErrorDetectorApi.detectErrorCellsFromRegEx("", "t", "tid", "    ")
       checkAnswer(df3, Nil)
     }
   }
@@ -153,7 +153,7 @@ class ScavengerErrorDetectorSuite extends QueryTest with SharedSparkSession {
           new File(constraintFilePath),
           StandardCharsets.UTF_8)
 
-        val df = ScavengerErrorDetectorApi
+        val df = ErrorDetectorApi
           .detectErrorCellsFromConstraints("default", "t", "tid", constraintFilePath)
         checkAnswer(df,
           Row("1", "v1") ::
@@ -176,7 +176,7 @@ class ScavengerErrorDetectorSuite extends QueryTest with SharedSparkSession {
       val adultFilePath = resourcePath("adult.csv")
       spark.read.option("header", true).format("csv").load(adultFilePath).write.saveAsTable("adult")
       val constraintFilePath = resourcePath("adult_constraints.txt")
-      val df = ScavengerErrorDetectorApi
+      val df = ErrorDetectorApi
         .detectErrorCellsFromConstraints("default", "adult", "tid", constraintFilePath)
       checkAnswer(df,
         Row("4", "Relationship") ::
@@ -190,11 +190,11 @@ class ScavengerErrorDetectorSuite extends QueryTest with SharedSparkSession {
   test("Constraint-based error detector - common error handling") {
     withTempView("t") {
       spark.range(1).selectExpr("id AS tid", "1 AS value").createOrReplaceTempView("t")
-      val df1 = ScavengerErrorDetectorApi.detectErrorCellsFromConstraints("", "t", "tid", null)
+      val df1 = ErrorDetectorApi.detectErrorCellsFromConstraints("", "t", "tid", null)
       checkAnswer(df1, Nil)
-      val df2 = ScavengerErrorDetectorApi.detectErrorCellsFromConstraints("", "t", "tid", "")
+      val df2 = ErrorDetectorApi.detectErrorCellsFromConstraints("", "t", "tid", "")
       checkAnswer(df2, Nil)
-      val df3 = ScavengerErrorDetectorApi.detectErrorCellsFromConstraints("", "t", "tid", "    ")
+      val df3 = ErrorDetectorApi.detectErrorCellsFromConstraints("", "t", "tid", "    ")
       checkAnswer(df3, Nil)
     }
   }
@@ -205,7 +205,7 @@ class ScavengerErrorDetectorSuite extends QueryTest with SharedSparkSession {
       val df2 = spark.range(1).selectExpr("1000L AS tid", "double(0.0) AS value")
       df1.union(df2).createOrReplaceTempView("t")
       Seq(true, false).foreach { approxEnabled =>
-        val resultDf = ScavengerErrorDetectorApi
+        val resultDf = ErrorDetectorApi
           .detectErrorCellsFromOutliers("", "t", "tid", approxEnabled)
         checkAnswer(resultDf, Row(1000L, "value"))
       }

@@ -25,7 +25,7 @@ import org.apache.spark.SparkException
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 
-class ScavengerRepairSuite extends QueryTest with SharedSparkSession {
+class RepairSuite extends QueryTest with SharedSparkSession {
 
   protected override def beforeAll(): Unit = {
     super.beforeAll()
@@ -38,7 +38,7 @@ class ScavengerRepairSuite extends QueryTest with SharedSparkSession {
       withTable("t") {
         spark.sql(s"CREATE TABLE t(tid STRING, v $tpe) USING parquet")
         val errMsg = intercept[SparkException] {
-          ScavengerRepairApi.checkInputTable("default", "t", "tid")
+          RepairApi.checkInputTable("default", "t", "tid")
         }.getMessage
         assert(errMsg.contains("unsupported ones found"))
       }
@@ -49,7 +49,7 @@ class ScavengerRepairSuite extends QueryTest with SharedSparkSession {
     withTempView("t") {
       spark.range(1).selectExpr("CAST(id AS STRING) tid", "id AS v1", "CAST(id AS DOUBLE) v2")
         .createOrReplaceTempView("t")
-      val jsonString = ScavengerRepairApi.checkInputTable("", "t", "tid")
+      val jsonString = RepairApi.checkInputTable("", "t", "tid")
       val jsonObj = parse(jsonString)
       val data = jsonObj.asInstanceOf[JObject].values
       assert(data("input_table") === "t")
@@ -67,7 +67,7 @@ class ScavengerRepairSuite extends QueryTest with SharedSparkSession {
         "CAST(id % 8 AS DOUBLE) AS v2",
         "CAST(id % 6 AS STRING) AS v3"
       ).createOrReplaceTempView("t")
-      val statMap = ScavengerRepairApi.computeAndGetTableStats("t")
+      val statMap = RepairApi.computeAndGetTableStats("t")
       assert(statMap.mapValues(_.distinctCount) ===
         Map("v0" -> 2, "v1" -> 3, "v2" -> 8, "v3" -> 6))
     }
@@ -77,7 +77,7 @@ class ScavengerRepairSuite extends QueryTest with SharedSparkSession {
     withTempView("t") {
       spark.range(30).selectExpr("id % 3 AS v0", "id % 8 AS v1", "id % 6 AS v2", "id % 9 AS v3")
         .createOrReplaceTempView("t")
-      val jsonString = ScavengerRepairApi.computeDomainSizes("t")
+      val jsonString = RepairApi.computeDomainSizes("t")
       val jsonObj = parse(jsonString)
       val data = jsonObj.asInstanceOf[JObject].values
       assert(data("distinct_stats") === Map("v0" -> 3, "v1" -> 8, "v2" -> 6, "v3" -> 9))

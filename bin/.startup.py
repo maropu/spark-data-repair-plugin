@@ -23,7 +23,7 @@ import warnings
 from pyspark.sql import SparkSession
 
 from repair.api import Scavenger
-from repair.model import ScavengerRepairModel
+from repair.model import RepairModel
 
 # Initializes a Spark session
 spark = SparkSession.builder.getOrCreate()
@@ -53,4 +53,4 @@ spark.sql(f"SET spark.sql.shuffle.partitions={num_parallelism * num_tasks_per_co
 # Defines an entrypoint for Scavenger APIs
 scavenger = Scavenger.getOrCreate()
 
-print(f"Scavenger APIs (version {ScavengerRepairModel.version()}) available as 'scavenger'.")
+print(f"Scavenger APIs (version {RepairModel.version()}) available as 'scavenger'.")

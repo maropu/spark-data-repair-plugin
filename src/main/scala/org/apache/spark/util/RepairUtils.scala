@@ -23,7 +23,7 @@ import org.apache.spark.SparkException
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 
-object ScavengerUtils {
+object RepairUtils {
 
   def withSparkSession[T](f: SparkSession => T): T = {
     SparkSession.getActiveSession.map { sparkSession =>

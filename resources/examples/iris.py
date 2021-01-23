@@ -8,7 +8,7 @@ spark.read \
     .write \
     .saveAsTable("iris")
 
-scavenger.misc() \
+scavenger.misc \
     .setDbName("default") \
     .setTableName("iris") \
     .setRowId("tid") \
@@ -29,7 +29,7 @@ spark.read \
 spark.table("iris_clean").show(1)
 
 # Detects error cells then repairs them
-repaired_df = scavenger.repair() \
+repaired_df = scavenger.repair \
     .setDbName("default") \
     .setTableName("iris") \
     .setRowId("tid") \

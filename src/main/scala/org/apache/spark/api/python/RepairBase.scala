@@ -21,7 +21,7 @@ import org.apache.spark.SparkException
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.util.LoggingBasedOnLevel
-import org.apache.spark.util.ScavengerUtils._
+import org.apache.spark.util.RepairUtils._
 import org.apache.spark.sql.types._
 
 private[python] case class JsonEncoder(v: Seq[(String, AnyRef)]) {
@@ -34,7 +34,7 @@ private[python] case class JsonEncoder(v: Seq[(String, AnyRef)]) {
   }.mkString("{", ",", "}")
 }
 
-abstract class ScavengerBase extends LoggingBasedOnLevel {
+abstract class RepairBase extends LoggingBasedOnLevel {
 
   protected val continousTypes: Set[DataType] = Set(FloatType, DoubleType)
   protected val supportedType: Set[DataType] = Set(StringType, BooleanType, ByteType, ShortType,

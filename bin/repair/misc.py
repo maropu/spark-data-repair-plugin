@@ -17,19 +17,17 @@
 # limitations under the License.
 #
 
-from typing import Any, Optional
+from typing import Optional
 
-from pyspark import SparkContext
-from pyspark.sql import DataFrame
-
-from repair.base import ApiBase, ResultBase
+from pyspark.sql import DataFrame, SparkSession
 
 
-class ScavengerRepairMisc(ApiBase):
+class RepairMisc():
 
     def __init__(self) -> None:
         super().__init__()
 
+        self.db_name: str = ""
         self.table_name: Optional[str] = None
         self.row_id: Optional[str] = None
         self.target_attr_list: str = ""
@@ -38,34 +36,39 @@ class ScavengerRepairMisc(ApiBase):
         self.clustering_alg: str = "bisect-kmeans"
         self.null_ratio: float = 0.01
 
-        # JVM interfaces for Scavenger APIs
-        self._svg_api = self._jvm.ScavengerMiscApi
+        # JVM interfaces for Data Repair APIs
+        self._spark = SparkSession.builder.getOrCreate()
+        self._svg_api = self._spark.sparkContext._active_spark_context._jvm.RepairMiscApi
 
-    def setTableName(self, table_name: str) -> "ScavengerRepairMisc":
+    def setDbName(self, db_name: str) -> "RepairMisc":
+        self.db_name = db_name
+        return self
+
+    def setTableName(self, table_name: str) -> "RepairMisc":
         self.table_name = table_name
         return self
 
-    def setRowId(self, row_id: str) -> "ScavengerRepairMisc":
+    def setRowId(self, row_id: str) -> "RepairMisc":
         self.row_id = row_id
         return self
 
-    def setTargetAttrList(self, target_attr_list: str) -> "ScavengerRepairMisc":
+    def setTargetAttrList(self, target_attr_list: str) -> "RepairMisc":
         self.target_attr_list = target_attr_list
         return self
 
-    def setK(self, k: int) -> "ScavengerRepairMisc":
+    def setK(self, k: int) -> "RepairMisc":
         self.k = k
         return self
 
-    def setQ(self, q: int) -> "ScavengerRepairMisc":
+    def setQ(self, q: int) -> "RepairMisc":
         self.q = q
         return self
 
-    def setClusteringAlg(self, alg: str) -> "ScavengerRepairMisc":
+    def setClusteringAlg(self, alg: str) -> "RepairMisc":
         self.clustering_alg = alg
         return self
 
-    def setNullRatio(self, null_ratio: float) -> "ScavengerRepairMisc":
+    def setNullRatio(self, null_ratio: float) -> "RepairMisc":
         self.null_ratio = null_ratio
         return self
 
@@ -107,48 +110,3 @@ class ScavengerRepairMisc(ApiBase):
 
         jdf = self._svg_api.toErrorMap(error_cells, self.db_name, self.table_name, self.row_id)
         return DataFrame(jdf, self._spark._wrapped)
-
-
-class SchemaSpy(ApiBase):
-
-    _instance: Any = None
-
-    def __new__(cls, *args: Any, **kwargs: Any) -> "SchemaSpy":
-        if cls._instance is None:
-            cls._instance = super(SchemaSpy, cls).__new__(cls)
-        return cls._instance
-
-    def __init__(self) -> None:
-        self.driver_name: str = "sqlite"
-        self.props: str = ""
-
-        # JVM interfaces for SchemaSpy APIs
-        self.spy_api = self._jvm.SchemaSpyApi
-
-    @staticmethod
-    def getOrCreate() -> "SchemaSpy":
-        return SchemaSpy()
-
-    def setDriverName(self, driver_name: str) -> "SchemaSpy":
-        self.driver_name = driver_name
-        return self
-
-    def setProps(self, props: str) -> "SchemaSpy":
-        self.props = props
-        return self
-
-    def catalogToDataFrame(self) -> DataFrame:
-        jdf = self.spy_api.catalogToDataFrame(self.db_name, self.driver_name, self.props)
-        df = DataFrame(jdf, self._spark._wrapped)
-        return df
-
-    def run(self) -> ResultBase:
-        result_path = self.spy_api.run(
-            self.output, self.db_name, self.driver_name, self.props)
-        return ResultBase(result_path)
-
-
-# This is a method to use SchemaSpy functionality directly
-def spySchema(args: str = "") -> None:
-    sc = SparkContext._active_spark_contex
-    sc._jvm.SchemaSpyApi.run(args)

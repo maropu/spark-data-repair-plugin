@@ -22,7 +22,7 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 ...   .write \
 ...   .saveAsTable("iris")
 >>> 
->>> scavenger.repair().misc() \
+>>> scavenger.repair().misc \
 ...   .setDbName("default") \
 ...   .setTableName("iris") \
 ...   .setRowId("tid") \
@@ -78,7 +78,7 @@ only showing top 1 row
 
 >>> 
 >>> # Detects error cells then repairs them
-... val repaired_df = scavenger.repair() \
+... val repaired_df = scavenger.repair \
 ...   .setDbName("default") \
 ...   .setTableName("iris") \
 ...   .setRowId("tid") \

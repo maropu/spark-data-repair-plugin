@@ -18,7 +18,7 @@
 package org.apache.spark.util
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.python.ScavengerConf._
+import org.apache.spark.python.RepairConf._
 import org.apache.spark.sql.SparkSession
 
 trait LoggingBasedOnLevel extends Logging {

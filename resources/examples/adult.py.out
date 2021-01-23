@@ -20,7 +20,7 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 ...   .write \
 ...   .saveAsTable("adult")
 >>> 
->>> scavenger.repair().misc() \
+>>> scavenger.repair.misc() \
 ...   .setDbName("default") \
 ...   .setTableName("adult") \
 ...   .setRowId("tid") \
@@ -75,7 +75,7 @@ only showing top 1 row
 
 >>> # Detects error cells then repairs them
 ... from repair.detectors import ConstraintErrorDetector
-... repaired_df = scavenger.repair() \
+... repaired_df = scavenger.repair \
 ...   .setDbName("default") \
 ...   .setTableName("adult") \
 ...   .setRowId("tid") \
