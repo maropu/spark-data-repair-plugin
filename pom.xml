@@ -26,13 +26,13 @@
   </parent>
 
   <groupId>io.github.maropu</groupId>
-  <artifactId>scavenger-plugin_2.12</artifactId>
+  <artifactId>spark-data-repair-plugin_2.12</artifactId>
   <version>0.1.0-spark3.0-EXPERIMENTAL</version>
   <packaging>jar</packaging>
-  <name>Scavenger: Profile Relational Data in Spark Catalog Tables</name>
+  <name>A toolkit to provide data repair functinalities in Spark</name>
 
   <properties>
-    <project.package.name>scavenger-plugin</project.package.name>
+    <project.package.name>spark-data-repair-plugin</project.package.name>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
