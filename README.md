@@ -1,21 +1,21 @@
-[![License](http://img.shields.io/:license-Apache_v2-blue.svg)](https://github.com/maropu/scavenger/blob/master/LICENSE)
-[![Build and test](https://github.com/maropu/scavenger/workflows/Build%20and%20tests/badge.svg)](https://github.com/maropu/scavenger/actions?query=workflow%3A%22Build+and+tests%22)
+[![License](http://img.shields.io/:license-Apache_v2-blue.svg)](https://github.com/maropu/spark-data-repair-plugin/blob/master/LICENSE)
+[![Build and test](https://github.com/maropu/spark-data-repair-plugin/workflows/Build%20and%20tests/badge.svg)](https://github.com/maropu/spark-data-repair-plugin/actions?query=workflow%3A%22Build+and+tests%22)
 <!---
-[![Coverage Status](https://coveralls.io/repos/github/maropu/scavenger/badge.svg?branch=master)](https://coveralls.io/github/maropu/scavenger?branch=master)
+[![Coverage Status](https://coveralls.io/repos/github/maropu/spark-data-repair-plugin/badge.svg?branch=master)](https://coveralls.io/github/maropu/spark-data-repair-plugin?branch=master)
 -->
 
-This is an experimental prototype to provide data repair functinalites for Spark catalog tables.
-Clean and consistent data can have a positive impact on downstream anaysis;
+This is an experimental prototype to provide statistical data repair functinalites on Spark, a distributed computing framework.
+Clean and consistent data can have a positive impact on downstream processing;
 clean data make reporting and machine learning more accurate and
 consistent data with constraints (e.g., functional dependency) are important for efficient query plans.
-Therefore, data repairing is a first step in an anaysis pipeline and
+Therefore, data repairing to make data clean and consistent is a first step for an reliable anaysis pipeline and
 this plugin intends to implement a scalable repair algorithm on Spark.
 
 ## How to Repair Error Cells
 
 ```
-$ git clone https://github.com/maropu/scavenger.git
-$ cd scavenger
+$ git clone https://github.com/maropu/spark-data-repair-plugin.git
+$ cd spark-data-repair-plugin
 
 # This repository includes a simple wrapper script `bin/python` to create
 # a virtual environment to resolve the required dependencies (e.g., Python 3.6 and PySpark 3.0),
@@ -61,7 +61,7 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 | 19|31-50|     HS-grad|            Sales|      Husband|  Male|         Iran|MoreThan50K|
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 
-# Runs jobs to compute repair updates for the seven NULL cells in the `adult` table.
+# Runs jobs to compute repair updates for the seven NULL cells above in the `adult` table.
 # A 'repaired' column represents proposed updates to repiar them.
 >>> repair_updates_df = scavenger.repair().setTableName("adult").setRowId("tid").run()
 >>> repair_updates_df.show()
@@ -105,7 +105,7 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 | 19|31-50|     HS-grad|            Sales|      Husband|  Male|         Iran|MoreThan50K|
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 
-# Or, you can use a misc function to apply computed repair updates into the input
+# Or, you can apply the computed repair updates into the input directly
 >>> df = scavenger.repair().setTableName("adult").setRowId("tid") \
 ...   .setRepairUpdates(repair_updates_df) \
 ...   .run()
@@ -235,6 +235,6 @@ scavenger.repair()
 
 ## Bug reports
 
-If you hit some bugs and requests, please leave some comments on [Issues](https://github.com/maropu/scavenger/issues)
+If you hit some bugs and requests, please leave some comments on [Issues](https://github.com/maropu/spark-data-repair-plugin/issues)
 or Twitter([@maropu](http://twitter.com/#!/maropu)).
 
