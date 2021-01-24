@@ -112,6 +112,8 @@ class RepairModel():
         self.table_name = table_name
         return self
 
+    # TODO: Add `def setDf(self, df: DataFrame) -> "RepairModel"`
+
     def setRowId(self, row_id: str) -> "RepairModel":
         self.row_id = row_id
         return self

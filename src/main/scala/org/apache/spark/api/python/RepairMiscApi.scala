@@ -210,20 +210,18 @@ object RepairMiscApi extends RepairBase {
         def histogram2Seq(histOpt: Option[Histogram]): Option[Seq[Double]] = {
           histOpt.map { h =>
             val dist = h.bins.map { b => b.hi - b.lo }
-            val maxValue = dist.max
-            dist.map(_ / maxValue)
+            dist.map(_ / dist.sum)
           }
         }
-        val statNames = Seq(Seq("distinctCnt", "mix", "max", "nullCnt", "avgLen", "maxLen", "hist"))
-        val statSeq = (statNames ++ tableStats.attributeStats.map { case (_, stat) =>
-          Seq(stat.distinctCount, stat.min, stat.max, stat.nullCount, stat.avgLen,
-            stat.maxLen, histogram2Seq(stat.histogram)).map(_.map(_.toString).orNull)
-        }).transpose
-
-        val statRows = statSeq.map(Row.fromSeq).asJava
-        val statSchema = ("summary" +: tableStats.attributeStats.map(_._1.name).toSeq)
-          .map { n => s"$n STRING" }.mkString(", ")
-        sparkSession.createDataFrame(statRows, StructType.fromDDL(statSchema))
+        val statRows = tableStats.attributeStats.map { case (attr, stat) =>
+          Row.fromSeq(Seq(attr.name, stat.distinctCount.map(_.toLong), stat.min.map(_.toString),
+            stat.max.map(_.toString), stat.nullCount.map(_.toLong), stat.avgLen,
+            stat.maxLen, histogram2Seq(stat.histogram)))
+        }
+        sparkSession.createDataFrame(
+          statRows.toSeq.asJava,
+          StructType.fromDDL("attrName STRING, distinctCnt LONG, min STRING, max STRING, " +
+            "nullCnt LONG, avgLen LONG, maxLen LONG, hist ARRAY<DOUBLE>"))
       }
     }
   }
@@ -255,19 +253,19 @@ object RepairMiscApi extends RepairBase {
          """.stripMargin)
 
       withTempView(inputDf) { inputView =>
-        withTempView(errorDf) { repairView =>
-          val errorBitmapExprs = inputDf.columns.map {
+        withTempView(errorDf) { errorView =>
+          val errorBitmapExprs = inputDf.columns.flatMap {
             case attr if attrsToRepair.contains(attr) =>
-              s"IF(ISNOTNULL(errors['$attr']), '*', '-')"
-            case _ =>
-              "'-'"
+              Some(s"IF(ISNOTNULL(errors['$attr']), '*', '-')")
+            case attr if attr == rowId => None
+            case _ => Some("'-'")
           }
           sparkSession.sql(
             s"""
-               |SELECT ${errorBitmapExprs.mkString(" || ")} AS error_map
+               |SELECT $inputView.$rowId, ${errorBitmapExprs.mkString(" || ")} AS error_map
                |FROM $inputView
-               |LEFT OUTER JOIN $repairView
-               |ON $inputView.$rowId = $repairView.$rowId
+               |LEFT OUTER JOIN $errorView
+               |ON $inputView.$rowId = $errorView.$rowId
              """.stripMargin)
         }
       }

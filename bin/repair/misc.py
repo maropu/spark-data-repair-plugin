@@ -17,7 +17,7 @@
 # limitations under the License.
 #
 
-from typing import Optional
+from typing import Dict, List
 
 from pyspark.sql import DataFrame, SparkSession
 
@@ -27,86 +27,86 @@ class RepairMisc():
     def __init__(self) -> None:
         super().__init__()
 
-        self.db_name: str = ""
-        self.table_name: Optional[str] = None
-        self.row_id: Optional[str] = None
-        self.target_attr_list: str = ""
-        self.k: Optional[int] = None
-        self.q: int = 2
-        self.clustering_alg: str = "bisect-kmeans"
-        self.null_ratio: float = 0.01
+        self.opts: Dict[str, str] = {}
 
         # JVM interfaces for Data Repair APIs
         self._spark = SparkSession.builder.getOrCreate()
         self._svg_api = self._spark.sparkContext._active_spark_context._jvm.RepairMiscApi
 
-    def setDbName(self, db_name: str) -> "RepairMisc":
-        self.db_name = db_name
+    def options(self, options: Dict[str, str]) -> "RepairMisc":
+        """
+        Adds input options for the misc functions.
+        """
+        self.opts.update(options)
         return self
 
-    def setTableName(self, table_name: str) -> "RepairMisc":
-        self.table_name = table_name
-        return self
+    def _db_name(self) -> str:
+        if "db_name" in self.opts.keys():
+            return self.opts["db_name"]
+        else:
+            return ""
 
-    def setRowId(self, row_id: str) -> "RepairMisc":
-        self.row_id = row_id
-        return self
+    def _target_attr_list(self) -> str:
+        if "target_attr_list" in self.opts.keys():
+            return self.opts["target_attr_list"]
+        else:
+            return ""
 
-    def setTargetAttrList(self, target_attr_list: str) -> "RepairMisc":
-        self.target_attr_list = target_attr_list
-        return self
-
-    def setK(self, k: int) -> "RepairMisc":
-        self.k = k
-        return self
-
-    def setQ(self, q: int) -> "RepairMisc":
-        self.q = q
-        return self
-
-    def setClusteringAlg(self, alg: str) -> "RepairMisc":
-        self.clustering_alg = alg
-        return self
-
-    def setNullRatio(self, null_ratio: float) -> "RepairMisc":
-        self.null_ratio = null_ratio
-        return self
+    def _check_required_options(self, required: List[str]) -> None:
+        if not all(opt in self.opts.keys() for opt in required):
+            raise ValueError("Required options not found: {}".format(", ".join(required)))
 
     def flatten(self) -> DataFrame:
-        if self.table_name is None or self.row_id is None:
-            raise ValueError("`setTableName` and `setRowId` should be called before flattening")
-
-        jdf = self._svg_api.flattenTable(self.db_name, self.table_name, self.row_id)
+        self._check_required_options(["table_name", "row_id"])
+        jdf = self._svg_api.flattenTable(
+            self._db_name(), self.opts["table_name"], self.opts["row_id"])
         return DataFrame(jdf, self._spark._wrapped)
 
     def splitInputTableInto(self) -> DataFrame:
-        if self.table_name is None or self.row_id is None or self.k is None:
-            raise ValueError("`setTableName`, `setRowId`, and `setK` should be called "
-                             "before computing row groups")
+        self._check_required_options(["table_name", "row_id", "k"])
 
-        options = f"q={self.q},clusteringAlg={self.clustering_alg}"
+        if not self.opts["k"].isdigit():
+            raise ValueError(f"Option 'k' must be an integer, but '{self.opts['k']}' found")
+
+        param_q = self.opts["q"] if "q" in self.opts.keys() else "2"
+        param_alg = self.opts["clustering_alg"] if "clustering_alg" in self.opts.keys() \
+            else "bisect-kmeans"
+        param_options = f"q={param_q},clusteringAlg={param_alg}"
+
         jdf = self._svg_api.splitInputTableInto(
-            self.k, self.db_name, self.table_name, self.row_id, self.target_attr_list, options)
+            int(self.opts["k"]), self._db_name(), self.opts["table_name"], self.opts["row_id"],
+            self._target_attr_list(), param_options)
+
         return DataFrame(jdf, self._spark._wrapped)
 
     def injectNull(self) -> DataFrame:
-        if self.table_name is None:
-            raise ValueError("`setTableName` should be called before injecting NULL")
+        self._check_required_options(["table_name"])
+
+        if "null_ratio" in self.opts.keys():
+            try:
+                param_null_ratio = float(self.opts["null_ratio"])
+                is_float = True
+            except ValueError:
+                is_float = False
+            if not (is_float and 0.0 < param_null_ratio <= 1.0):
+                raise ValueError("Option 'null_ratio' must be a float in (0.0, 1.0], "
+                                 f"but '{self.opts['null_ratio']}' found")
+        else:
+            param_null_ratio = 0.01
 
         jdf = self._svg_api.injectNullAt(
-            self.db_name, self.table_name, self.target_attr_list, self.null_ratio)
+            self._db_name(), self.opts["table_name"], self._target_attr_list(),
+            param_null_ratio)
         return DataFrame(jdf, self._spark._wrapped)
 
     def computeAndGetStats(self) -> DataFrame:
-        if self.table_name is None:
-            raise ValueError("`setTableName` should be called before injecting NULL")
-
-        jdf = self._svg_api.computeAndGetStats(self.db_name, self.table_name)
+        self._check_required_options(["table_name"])
+        jdf = self._svg_api.computeAndGetStats(self._db_name(), self.opts["table_name"])
         return DataFrame(jdf, self._spark._wrapped)
 
-    def toErrorMap(self, error_cells: str) -> DataFrame:
-        if self.table_name is None or self.row_id is None:
-            raise ValueError("`setTableName` and `setRowId` should be called before flattening")
-
-        jdf = self._svg_api.toErrorMap(error_cells, self.db_name, self.table_name, self.row_id)
+    def toErrorMap(self) -> DataFrame:
+        self._check_required_options(["table_name", "row_id", "error_cells"])
+        jdf = self._svg_api.toErrorMap(
+            self.opts["error_cells"], self._db_name(), self.opts["table_name"],
+            self.opts["row_id"])
         return DataFrame(jdf, self._spark._wrapped)

@@ -19,8 +19,6 @@ import os
 import unittest
 
 from testutils import ReusedSQLTestCase, load_testdata
-from requirements import have_pandas, have_pyarrow, \
-    pandas_requirement_message, pyarrow_requirement_message
 
 from pyspark import SparkConf
 from pyspark.sql import Row
@@ -28,9 +26,6 @@ from pyspark.sql import Row
 from repair.misc import RepairMisc
 
 
-@unittest.skipIf(
-    not have_pandas or not have_pyarrow,
-    pandas_requirement_message or pyarrow_requirement_message)
 class RepairModelTests(ReusedSQLTestCase):
 
     @classmethod
@@ -53,12 +48,101 @@ class RepairModelTests(ReusedSQLTestCase):
         # Loads test data
         load_testdata(cls.spark, "adult.csv").createOrReplaceTempView("adult")
 
+    def test_flatten(self):
+        with self.tempView("tempView"):
+            self.spark.createDataFrame([(1, "a"), (2, "b"), (3, "c")], ["tid", "v"]) \
+                .createOrReplaceTempView("tempView")
+            misc = RepairMisc().options({"table_name": "tempView", "row_id": "tid"})
+            self.assertEqual(
+                misc.flatten().orderBy("tid").collect(), [
+                    Row(tid=1, attirubte="v", value="a"),
+                    Row(tid=2, attirubte="v", value="b"),
+                    Row(tid=3, attirubte="v", value="c")])
+
     def test_splitInputTableInto(self):
-        misc = RepairMisc().setDbName("")
-        df = misc.setTableName("adult").setRowId("tid").setK(3).splitInputTableInto()
+        misc = RepairMisc().options({"table_name": "adult", "row_id": "tid", "k": "3"})
         self.assertEqual(
-            df.selectExpr("k").distinct().orderBy("k").collect(),
+            misc.splitInputTableInto().selectExpr("k").distinct().orderBy("k").collect(),
             [Row(k=0), Row(k=1), Row(k=2)])
+
+    def test_splitInputTableInto_invalid_params(self):
+        self.assertRaisesRegexp(
+            ValueError,
+            "Required options not found: table_name, row_id, k",
+            lambda: RepairMisc().splitInputTableInto())
+        self.assertRaisesRegexp(
+            ValueError,
+            "Option 'k' must be an integer, but 'x' found",
+            lambda: RepairMisc().options({"table_name": "adult", "row_id": "tid", "k": "x"})
+                                .splitInputTableInto())
+
+    def test_injectNull(self):
+        with self.tempView("tempView"):
+            data = [(1, "a", 1), (2, "b", 1), (3, "c", 1), (4, "d", 2)]
+            self.spark.createDataFrame(data, ["tid", "v1", "v2"]) \
+                .createOrReplaceTempView("tempView")
+            misc = RepairMisc().options(
+                {"table_name": "tempView", "target_attr_list": "v1", "null_ratio": "1.0"})
+            self.assertEqual(
+                misc.injectNull().orderBy("tid").collect(), [
+                    Row(tid=1, v1=None, v2=1),
+                    Row(tid=2, v1=None, v2=1),
+                    Row(tid=3, v1=None, v2=1),
+                    Row(tid=4, v1=None, v2=2)])
+
+    def test_computeAndGetStats(self):
+        misc = RepairMisc().options({"table_name": "adult"})
+        self.assertEqual(
+            misc.computeAndGetStats().orderBy("attrName").collect(), [
+                Row(attrName="Age", distinctCnt=4, min=None, max=None, nullCnt=2,
+                    avgLen=5, maxLen=5, hist=None),
+                Row(attrName="Country", distinctCnt=3, min=None, max=None, nullCnt=0,
+                    avgLen=13, maxLen=13, hist=None),
+                Row(attrName="Education", distinctCnt=7, min=None, max=None, nullCnt=0,
+                    avgLen=9, maxLen=12, hist=None),
+                Row(attrName="Income", distinctCnt=2, min=None, max=None, nullCnt=2,
+                    avgLen=11, maxLen=11, hist=None),
+                Row(attrName="Occupation", distinctCnt=7, min=None, max=None, nullCnt=0,
+                    avgLen=13, maxLen=17, hist=None),
+                Row(attrName="Relationship", distinctCnt=4, min=None, max=None, nullCnt=0,
+                    avgLen=9, maxLen=13, hist=None),
+                Row(attrName="Sex", distinctCnt=2, min=None, max=None, nullCnt=3,
+                    avgLen=5, maxLen=6, hist=None),
+                Row(attrName="tid", distinctCnt=20, min=None, max=None, nullCnt=0,
+                    avgLen=2, maxLen=2, hist=None)])
+
+        with self.tempView("tempView"):
+            self.spark.range(100).selectExpr("STRING(id)", "id % 9 v1", "DOUBLE(id % 17) v2") \
+                .createOrReplaceTempView("tempView")
+            misc = RepairMisc().options({"table_name": "tempView"})
+            misc.computeAndGetStats().orderBy("attrName").show(truncate=False)
+            self.assertEqual(
+                misc.computeAndGetStats().orderBy("attrName").collect(), [
+                    Row(attrName="id", distinctCnt=100, min=None, max=None, nullCnt=0,
+                        avgLen=2, maxLen=2, hist=None),
+                    Row(attrName="v1", distinctCnt=9, min="0", max="8", nullCnt=0, avgLen=8,
+                        maxLen=8, hist=[0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125]),
+                    Row(attrName="v2", distinctCnt=17, min="0.0", max="16.0", nullCnt=0, avgLen=8,
+                        maxLen=8, hist=[0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125])])
+
+    def test_toErrormap(self):
+        with self.tempView("tempView", "errorCells"):
+            data = [(1, "a", 1), (2, "b", 1), (3, "c", 1), (4, "d", 2)]
+            self.spark.createDataFrame(data, ["tid", "v1", "v2"]) \
+                .createOrReplaceTempView("tempView")
+
+            error_cells = [(1, "v1"), (2, "v2"), (4, "v1"), (4, "v2")]
+            self.spark.createDataFrame(error_cells, ["tid", "attribute"]) \
+                .createOrReplaceTempView("errorCells")
+
+            misc = RepairMisc().options(
+                {"table_name": "tempView", "row_id": "tid", "error_cells": "errorCells"})
+            self.assertEqual(
+                misc.toErrorMap().orderBy("tid").collect(), [
+                    Row(tid=1, error_map="*-"),
+                    Row(tid=2, error_map="-*"),
+                    Row(tid=3, error_map="--"),
+                    Row(tid=4, error_map="**")])
 
 
 if __name__ == "__main__":
