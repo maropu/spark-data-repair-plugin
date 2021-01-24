@@ -31,7 +31,7 @@ def load_testdata(spark, filename):
     fmt = os.path.splitext(filename)[1][1:]
     return spark.read.format(fmt) \
         .option("header", True) \
-        .load("{}/{}".format(os.getenv("SCAVENGER_TESTDATA"), filename))
+        .load("{}/{}".format(os.getenv("REPAIR_TESTDATA"), filename))
 
 
 @unittest.skipIf(
@@ -42,7 +42,7 @@ class RepairModelTests(ReusedSQLTestCase):
     @classmethod
     def conf(cls):
         return SparkConf() \
-            .set("spark.jars", os.getenv("SCAVENGER_REPAIR_API_LIB")) \
+            .set("spark.jars", os.getenv("REPAIR_API_LIB")) \
             .set("spark.sql.crossJoin.enabled", "true") \
             .set("spark.sql.cbo.enabled", "true") \
             .set("spark.sql.statistics.histogram.enabled", "true") \

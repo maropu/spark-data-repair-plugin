@@ -22,8 +22,18 @@ import unittest
 from contextlib import contextmanager
 
 from pyspark import SparkContext, SparkConf
-from pyspark.sql import SparkSession
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.types import Row
+
+
+def load_testdata(spark: SparkSession, filename: str) -> DataFrame:
+    """
+    Load test data from a given file name and return it as 'DataFrame'
+    """
+    fmt = os.path.splitext(filename)[1][1:]
+    return spark.read.format(fmt) \
+        .option("header", True) \
+        .load("{}/{}".format(os.getenv("REPAIR_TESTDATA"), filename))
 
 
 class ReusedPySparkTestCase(unittest.TestCase):

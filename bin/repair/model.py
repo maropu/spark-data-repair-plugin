@@ -239,7 +239,7 @@ class RepairModel():
     def _detect_error_cells(self, input_table: str) -> str:
         # Initializes the given error detectors with the input params
         for d in self.error_detectors:
-            d.setup(self.row_id, input_table)  # type: ignore
+            d.setUp(self.row_id, input_table)  # type: ignore
 
         error_cells_dfs = [d.detect() for d in self.error_detectors]
 

@@ -34,9 +34,10 @@ class ErrorDetector(metaclass=ABCMeta):
         self._spark = SparkSession.builder.getOrCreate()
         self._api = self._spark.sparkContext._active_spark_context._jvm.ErrorDetectorApi
 
-    def setup(self, row_id: str, input_table: str) -> None:
+    def setUp(self, row_id: str, input_table: str) -> "ErrorDetector":
         self.row_id = row_id
         self.input_table = input_table
+        return self
 
     @abstractmethod
     def _detect_impl(self) -> DataFrame:

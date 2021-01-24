@@ -31,9 +31,9 @@ def print_red(text):
     print('\033[31m' + text + '\033[0m')
 
 
-SCAVENGER_REPAIR_API_LIB = ""
-SCAVENGER_MODULE_PATH = ""
-SCAVENGER_TESTDATA = ""
+REPAIR_API_LIB = ""
+REPAIR_MODULE_PATH = ""
+REPAIR_TESTDATA = ""
 
 LOGGER = logging.getLogger()
 
@@ -41,9 +41,9 @@ LOGGER = logging.getLogger()
 def run_individual_python_test(target_dir, test_name):
     env = dict(os.environ)
     env.update({
-        'PYTHONPATH': SCAVENGER_MODULE_PATH,
-        'SCAVENGER_REPAIR_API_LIB': SCAVENGER_REPAIR_API_LIB,
-        'SCAVENGER_TESTDATA': SCAVENGER_TESTDATA,
+        'PYTHONPATH': REPAIR_MODULE_PATH,
+        'REPAIR_API_LIB': REPAIR_API_LIB,
+        'REPAIR_TESTDATA': REPAIR_TESTDATA,
         'SPARK_TESTING': '1'
     })
 
@@ -95,9 +95,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Sets enveironmental variables for tests
-    SCAVENGER_REPAIR_API_LIB = args.package
-    SCAVENGER_MODULE_PATH = args.module
-    SCAVENGER_TESTDATA = args.data
+    REPAIR_API_LIB = args.package
+    REPAIR_MODULE_PATH = args.module
+    REPAIR_TESTDATA = args.data
 
     logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(message)s")
     LOGGER.info("Running Python tests...")
@@ -108,5 +108,6 @@ if __name__ == "__main__":
         os.mkdir(target_dir)
 
     run_individual_python_test(target_dir, "test_model")
+    run_individual_python_test(target_dir, "test_detectors")
     run_individual_python_test(target_dir, "test_distances")
     run_individual_python_test(target_dir, "test_misc")

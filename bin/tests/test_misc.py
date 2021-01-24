@@ -18,7 +18,7 @@
 import os
 import unittest
 
-from testutils import ReusedSQLTestCase
+from testutils import ReusedSQLTestCase, load_testdata
 from requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
 
@@ -26,13 +26,6 @@ from pyspark import SparkConf
 from pyspark.sql import Row
 
 from repair.misc import RepairMisc
-
-
-def load_testdata(spark, filename):
-    fmt = os.path.splitext(filename)[1][1:]
-    return spark.read.format(fmt) \
-        .option("header", True) \
-        .load("{}/{}".format(os.getenv("SCAVENGER_TESTDATA"), filename))
 
 
 @unittest.skipIf(
@@ -43,7 +36,7 @@ class RepairModelTests(ReusedSQLTestCase):
     @classmethod
     def conf(cls):
         return SparkConf() \
-            .set("spark.jars", os.getenv("SCAVENGER_REPAIR_API_LIB")) \
+            .set("spark.jars", os.getenv("REPAIR_API_LIB")) \
             .set("spark.sql.crossJoin.enabled", "true") \
             .set("spark.sql.cbo.enabled", "true") \
             .set("spark.sql.statistics.histogram.enabled", "true") \
