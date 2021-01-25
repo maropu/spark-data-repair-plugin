@@ -31,7 +31,7 @@ class RepairMisc():
 
         # JVM interfaces for Data Repair APIs
         self._spark = SparkSession.builder.getOrCreate()
-        self._svg_api = self._spark.sparkContext._active_spark_context._jvm.RepairMiscApi
+        self._misc_api_ = self._spark.sparkContext._active_spark_context._jvm.RepairMiscApi
 
     def options(self, options: Dict[str, str]) -> "RepairMisc":
         """
@@ -58,7 +58,7 @@ class RepairMisc():
 
     def flatten(self) -> DataFrame:
         self._check_required_options(["table_name", "row_id"])
-        jdf = self._svg_api.flattenTable(
+        jdf = self._misc_api_.flattenTable(
             self._db_name(), self.opts["table_name"], self.opts["row_id"])
         return DataFrame(jdf, self._spark._wrapped)
 
@@ -73,7 +73,7 @@ class RepairMisc():
             else "bisect-kmeans"
         param_options = f"q={param_q},clusteringAlg={param_alg}"
 
-        jdf = self._svg_api.splitInputTableInto(
+        jdf = self._misc_api_.splitInputTableInto(
             int(self.opts["k"]), self._db_name(), self.opts["table_name"], self.opts["row_id"],
             self._target_attr_list(), param_options)
 
@@ -94,19 +94,19 @@ class RepairMisc():
         else:
             param_null_ratio = 0.01
 
-        jdf = self._svg_api.injectNullAt(
+        jdf = self._misc_api_.injectNullAt(
             self._db_name(), self.opts["table_name"], self._target_attr_list(),
             param_null_ratio)
         return DataFrame(jdf, self._spark._wrapped)
 
     def computeAndGetStats(self) -> DataFrame:
         self._check_required_options(["table_name"])
-        jdf = self._svg_api.computeAndGetStats(self._db_name(), self.opts["table_name"])
+        jdf = self._misc_api_.computeAndGetStats(self._db_name(), self.opts["table_name"])
         return DataFrame(jdf, self._spark._wrapped)
 
     def toErrorMap(self) -> DataFrame:
         self._check_required_options(["table_name", "row_id", "error_cells"])
-        jdf = self._svg_api.toErrorMap(
+        jdf = self._misc_api_.toErrorMap(
             self.opts["error_cells"], self._db_name(), self.opts["table_name"],
             self.opts["row_id"])
         return DataFrame(jdf, self._spark._wrapped)

@@ -29,49 +29,46 @@ import org.apache.spark.util.RepairUtils._
 
 object ErrorDetectorApi extends LoggingBasedOnLevel {
 
-  def detectNullCells(dbName: String, tableName: String, rowId: String): DataFrame = {
-    logBasedOnLevel(s"detectNullCells called with: dbName=$dbName tableName=$tableName rowId=$rowId")
-    NullErrorDetector.detect(dbName, tableName, rowId)
+  def detectNullCells(qualifiedName: String, rowId: String): DataFrame = {
+    logBasedOnLevel(s"detectNullCells called with: qualifiedName=$qualifiedName rowId=$rowId")
+    NullErrorDetector.detect(qualifiedName, rowId)
   }
 
   def detectErrorCellsFromRegEx(
-      dbName: String,
-      tableName: String,
+      qualifiedName: String,
       rowId: String,
       regex: String,
       cellsAsString: Boolean = false): DataFrame = {
-    logBasedOnLevel(s"detectErrorCellsFromRegEx called with: dbName=$dbName tableName=$tableName " +
+    logBasedOnLevel(s"detectErrorCellsFromRegEx called with: qualifiedName=$qualifiedName " +
       s"rowId=$rowId, regex=$regex, cellAsString=$cellsAsString")
-    RegExErrorDetector.detect(dbName, tableName, rowId,
+    RegExErrorDetector.detect(qualifiedName, rowId,
       Map("regex" -> regex, "cellsAsString" -> cellsAsString))
   }
 
   def detectErrorCellsFromConstraints(
-      dbName: String,
-      tableName: String,
+      qualifiedName: String,
       rowId: String,
       constraintFilePath: String): DataFrame = {
-    logBasedOnLevel(s"detectErrorCellsFromConstraints called with: dbName=$dbName tableName=$tableName " +
+    logBasedOnLevel(s"detectErrorCellsFromConstraints called with: qualifiedName=$qualifiedName " +
       s"rowId=$rowId constraintFilePath=$constraintFilePath")
-    ConstraintErrorDetector.detect(dbName, tableName, rowId,
+    ConstraintErrorDetector.detect(qualifiedName, rowId,
       Map("constraintFilePath" -> constraintFilePath))
   }
 
   def detectErrorCellsFromOutliers(
-      dbName: String,
-      tableName: String,
+      qualifiedName: String,
       rowId: String,
       approxEnabled: Boolean = false): DataFrame = {
-    logBasedOnLevel(s"detectErrorCellsFromOutliers called with: dbName=$dbName tableName=$tableName " +
+    logBasedOnLevel(s"detectErrorCellsFromOutliers called with: qualifiedName=$qualifiedName " +
       s"rowId=$rowId approxEnabled=$approxEnabled")
-    GaussianOutlierErrorDetector.detect(dbName, tableName, rowId,
+    GaussianOutlierErrorDetector.detect(qualifiedName, rowId,
       Map("approxEnabled" -> approxEnabled))
   }
 }
 
 abstract class ErrorDetector extends RepairBase {
 
-  def detect(dbName: String, tableName: String, rowId: String, options: Map[String, Any]): DataFrame
+  def detect(qualifiedName: String, rowId: String, options: Map[String, Any]): DataFrame
 
   protected def emptyTable(df: DataFrame, rowId: String): DataFrame = {
     val rowIdType = df.schema.find(_.name == rowId).get.dataType.sql
@@ -118,12 +115,11 @@ abstract class ErrorDetector extends RepairBase {
 object NullErrorDetector extends ErrorDetector {
 
   override def detect(
-      dbName: String,
-      tableName: String,
+      qualifiedName: String,
       rowId: String,
       options: Map[String, Any] = Map.empty): DataFrame = {
 
-    val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
+    val inputDf = spark.table(qualifiedName)
 
     withTempView(inputDf, cache = true) { inputView =>
       // Detects error erroneous cells in a given table
@@ -156,12 +152,11 @@ object NullErrorDetector extends ErrorDetector {
 object RegExErrorDetector extends ErrorDetector {
 
   override def detect(
-      dbName: String,
-      tableName: String,
+      qualifiedName: String,
       rowId: String,
       options: Map[String, Any] = Map.empty): DataFrame = {
 
-    val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
+    val inputDf = spark.table(qualifiedName)
 
     // If `regex` not given, just returns an empty table
     val regex = getOptionValue[String]("regex", options)
@@ -215,12 +210,11 @@ object RegExErrorDetector extends ErrorDetector {
 object ConstraintErrorDetector extends ErrorDetector {
 
   override def detect(
-      dbName: String,
-      tableName: String,
+      qualifiedName: String,
       rowId: String,
       options: Map[String, Any] = Map.empty): DataFrame = {
 
-    val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
+    val inputDf = spark.table(qualifiedName)
 
     // If `constraintFilePath` not given, just returns an empty table
     val constraintFilePath = getOptionValue[String]("constraintFilePath", options)
@@ -291,12 +285,11 @@ object ConstraintErrorDetector extends ErrorDetector {
 object GaussianOutlierErrorDetector extends ErrorDetector {
 
   override def detect(
-      dbName: String,
-      tableName: String,
+      qualifiedName: String,
       rowId: String,
       options: Map[String, Any] = Map.empty): DataFrame = {
 
-    val (inputDf, qualifiedName) = checkAndGetInputTable(dbName, tableName, rowId)
+    val inputDf = spark.table(qualifiedName)
 
     val continousAttrs = inputDf.schema
       .filter(f => continousTypes.contains(f.dataType)).map(_.name)

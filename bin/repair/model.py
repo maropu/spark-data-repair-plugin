@@ -26,7 +26,7 @@ import logging
 import numpy as np
 import pandas as pd
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pyspark.sql import DataFrame, Row, SparkSession, functions
 from pyspark.sql.functions import col
@@ -42,11 +42,11 @@ class RepairModel():
 
         # Basic parameters
         self.db_name: str = ""
-        self.table_name: Optional[str] = None
+        self.input: Optional[Union[str, DataFrame]] = None
         self.row_id: Optional[str] = None
 
         # Parameters for error detection
-        self.error_cells: Optional[str] = None
+        self.error_cells: Optional[Union[str, DataFrame]] = None
         # To find error cells, the NULL detector is used by default
         self.error_detectors: List[ErrorDetector] = [NullErrorDetector()]
         self.discrete_thres: float = 80
@@ -67,7 +67,7 @@ class RepairModel():
         self.lgb_max_depth: int = -1
 
         # Parameters for repairing
-        self.repair_updates: Optional[str] = None
+        self.repair_updates: Optional[Union[str, DataFrame]] = None
         self.maximal_likelihood_repair_enabled: bool = False
         self.repair_delta: Optional[int] = None
 
@@ -84,41 +84,38 @@ class RepairModel():
         # Internally used to check elapsed time
         self._timer_base: Optional[float] = None
 
-        # Temporary views used in repairing processes
-        # TODO: Creates a temp database for these views then drop it finally
-        self._meta_view_names: List[str] = [
-            "discrete_features",
-            "gray_cells",
-            "repair_base",
-            "cell_domain",
-            "partial_repaired",
-            "repaired",
-            "dirty",
-            "weak",
-            "train",
-            "top_delta_repairs"
-        ]
+        # Temporary views to keep intermediate results; these views are automatically
+        # created when repairing data, and then dropped finally.
+        self._intermediate_views_on_runtime: List[str] = []
 
         # JVM interfaces for Data Repair APIs
         self._spark = SparkSession.builder.getOrCreate()
         self._jvm = self._spark.sparkContext._active_spark_context._jvm
-        self._svg_api = self._jvm.RepairApi
+        self._repair_api = self._jvm.RepairApi
 
     def setDbName(self, db_name: str) -> "RepairModel":
+        assert type(self.input) is not DataFrame
         self.db_name = db_name
         return self
 
     def setTableName(self, table_name: str) -> "RepairModel":
-        self.table_name = table_name
+        assert type(table_name) is str
+        self.input = table_name
         return self
 
-    # TODO: Add `def setDf(self, df: DataFrame) -> "RepairModel"`
+    def setInput(self, input: Any) -> "RepairModel":
+        assert type(input) is str or type(input) is DataFrame
+        if type(input) is DataFrame:
+            self.db_name = ""
+        self.input = input
+        return self
 
     def setRowId(self, row_id: str) -> "RepairModel":
         self.row_id = row_id
         return self
 
-    def setErrorCells(self, error_cells: str) -> "RepairModel":
+    def setErrorCells(self, error_cells: Any) -> "RepairModel":
+        assert type(error_cells) is str or type(error_cells) is DataFrame
         self.error_cells = error_cells
         return self
 
@@ -178,7 +175,8 @@ class RepairModel():
         self.lgb_max_depth = n
         return self
 
-    def setRepairUpdates(self, repair_updates: str) -> "RepairModel":
+    def setRepairUpdates(self, repair_updates: Any) -> "RepairModel":
+        assert type(repair_updates) is str or type(repair_updates) is DataFrame
         self.repair_updates = repair_updates
         return self
 
@@ -199,18 +197,18 @@ class RepairModel():
         self.distance = distance
         return self
 
-    def _temp_name(self, prefix: str = "temp") -> str:
-        return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
+    def _register_and_get_df(self, view_name: str) -> DataFrame:
+        self._intermediate_views_on_runtime.append(view_name)
+        return self._spark.table(view_name)
 
-    def _temp_view(self, df: DataFrame) -> str:
-        temp_view = self._temp_name()
-        df.createOrReplaceTempView(temp_view)
-        return temp_view
+    def _create_temp_view(self, df: DataFrame, prefix: str = "temp") -> str:
+        temp_name = f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
+        df.createOrReplaceTempView(temp_name)
+        self._intermediate_views_on_runtime.append(temp_name)
+        return temp_name
 
     def _flatten(self, df: DataFrame) -> DataFrame:
-        temp_view = self._temp_name()
-        df.createOrReplaceTempView(temp_view)
-        jdf = self._jvm.RepairMiscApi.flattenTable("", temp_view, self.row_id)
+        jdf = self._jvm.RepairMiscApi.flattenTable("", self._create_temp_view(df), self.row_id)
         return DataFrame(jdf, self._spark._wrapped)
 
     def _start_spark_jobs(self, name: str, desc: str) -> None:
@@ -228,15 +226,35 @@ class RepairModel():
         print(f"Elapsed time is {time.time() - self._timer_base}(s)")  # type: ignore
         self._clear_job_group()
 
-    def _release_resources(self, env: Dict[str, str]) -> None:
-        for t in list(filter(lambda x: x in self._meta_view_names, env.values())):
-            self._spark.sql(f"DROP VIEW IF EXISTS {env[t]}")
+    def _release_resources(self) -> None:
+        for t in self._intermediate_views_on_runtime:
+            self._spark.sql(f"DROP VIEW IF EXISTS {t}")
 
-    def _check_input(self) -> Tuple[Dict[str, str], str, List[str]]:
-        env = json.loads(self._svg_api.checkInputTable(self.db_name, self.table_name, self.row_id))
+    def _input_table(self) -> str:
+        return self._create_temp_view(self.input) if type(self.input) is DataFrame \
+            else str(self.input)
+
+    def _check_input_table(self, env: Dict[str, str]) -> Tuple[str, List[str]]:
+        ret_as_json = self._repair_api.checkInputTable(
+            self.db_name, self._input_table(), self.row_id)
+        env.update(json.loads(ret_as_json))
         continous_attrs = env["continous_attrs"].split(",")
-        return env, self._spark.table(env["input_table"]), \
+        return self._spark.table(env["input_table"]), \
             continous_attrs if continous_attrs != [""] else []
+
+    def _error_cells(self) -> str:
+        df = self.error_cells if type(self.error_cells) is DataFrame \
+            else self._spark.table(str(self.error_cells))
+        if not all(c in df.columns for c in (self.row_id, "attribute")):  # type: ignore
+            raise ValueError(f"Error cells must have `{self.row_id}` and "
+                             "`attribute` in columns")
+        return self._create_temp_view(df)
+
+    def _repair_updates(self) -> str:
+        df = self.repair_updates if type(self.repair_updates) is DataFrame \
+            else self._spark.table(str(self.repair_updates))
+        # TODO: Validates a schema of `self.repair_updates`
+        return self._create_temp_view(df)
 
     def _detect_error_cells(self, input_table: str) -> str:
         # Initializes the given error detectors with the input params
@@ -245,23 +263,15 @@ class RepairModel():
 
         error_cells_dfs = [d.detect() for d in self.error_detectors]
 
-        err_cells = self._temp_name("gray_cells")
         err_cells_df = functools.reduce(lambda x, y: x.union(y), error_cells_dfs)
-        err_cells_df.distinct().cache().createOrReplaceTempView(err_cells)
+        err_cells = self._create_temp_view(err_cells_df.distinct().cache())
         return err_cells
 
     def _detect_errors(self, env: Dict[str, str]) -> str:
         # If `self.error_cells` provided, just uses it
         if self.error_cells is not None:
-            df = self.error_cells if isinstance(self.error_cells, DataFrame) \
-                else self._spark.table(self.error_cells)
-            if not all(c in df.columns for c in (self.row_id, "attribute")):
-                raise ValueError(f"Error cells must have `{self.row_id}` and "
-                                 "`attribute` in columns")
-
-            env["gray_cells"] = self._temp_view(df) if isinstance(self.error_cells, DataFrame) \
-                else str(self.error_cells)
             print('[Error Detection Phase] Error cells provided by `{env["gray_cells"]}`')
+            env["gray_cells"] = self._error_cells()
 
             # We assume that the given error cells are true, so we skip computing error domains
             # with probability because the computational cost is much high.
@@ -277,24 +287,23 @@ class RepairModel():
 
         return self._spark.table(env["gray_cells"])
 
-    def _prepare_repair_base(self, env: Dict[str, str], gray_cells_df: DataFrame) -> str:
+    def _prepare_repair_base(self, env: Dict[str, str], gray_cells_df: DataFrame) -> DataFrame:
         # Sets NULL at the detected gray cells
         logging.info("{}/{} suspicious cells found, then converts them into NULL cells...".format(
             gray_cells_df.count(), int(env["num_input_rows"]) * int(env["num_attrs"])))
-        env.update(json.loads(self._svg_api.convertErrorCellsToNull(
+        env.update(json.loads(self._repair_api.convertErrorCellsToNull(
             env["input_table"], env["gray_cells"],
             self.row_id)))
 
-        return self._spark.table(env["repair_base"])
+        return self._register_and_get_df(env["repair_base"])
 
     def _preprocess(self, env: Dict[str, str], continous_attrs: List[str]) -> DataFrame:
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
-        env.update(json.loads(self._svg_api.convertToDiscreteFeatures(
-            self.db_name, self.table_name, self.row_id,
-            self.discrete_thres)))
+        env.update(json.loads(self._repair_api.convertToDiscreteFeatures(
+            env["input_table"], self.row_id, self.discrete_thres)))
 
-        discrete_ft_df = self._spark.table(env["discrete_features"])
+        discrete_ft_df = self._register_and_get_df(env["discrete_features"])
         logging.info("Valid {} attributes ({}) found in the {} input attributes ({}) and "
                      "{} continous attributes ({}) included in them".format(
                          len(discrete_ft_df.columns),
@@ -317,7 +326,7 @@ class RepairModel():
                      "before computing error domains...".format(
                          self.attr_stat_sample_ratio,
                          self.attr_stat_threshold))
-        env.update(json.loads(self._svg_api.computeAttrStats(
+        env.update(json.loads(self._repair_api.computeAttrStats(
             env["discrete_features"], env["gray_cells"], self.row_id,
             self.attr_stat_sample_ratio,
             self.attr_stat_threshold)))
@@ -325,7 +334,7 @@ class RepairModel():
         self._start_spark_jobs(
             "cell domains analysis",
             "[Error Detection Phase] Analyzing cell domains to fix error cells...")
-        env.update(json.loads(self._svg_api.computeDomainInErrorCells(
+        env.update(json.loads(self._repair_api.computeDomainInErrorCells(
             env["discrete_features"], env["attr_stats"], env["gray_cells"], self.row_id,
             env["continous_attrs"],
             self.max_attrs_to_compute_domains,
@@ -334,7 +343,7 @@ class RepairModel():
             self.domain_threshold_beta)))
         self._end_spark_jobs()
 
-        return self._spark.table(env["cell_domain"])
+        return self._register_and_get_df(env["cell_domain"])
 
     def _extract_error_cells(self, env: Dict[str, str], cell_domain_df: DataFrame,
                              repair_base_df: DataFrame) -> DataFrame:
@@ -343,13 +352,14 @@ class RepairModel():
         weak_df = cell_domain_df.selectExpr(
             self.row_id, "attribute", "current_value", fix_cells_expr).cache()
         error_cells_df = weak_df.where("value IS NULL").drop("value").cache()
-        env["weak"] = self._temp_name("weak")
         weak_df = weak_df.where("value IS NOT NULL") \
             .selectExpr(self.row_id, "attribute", "value repaired")
-        weak_df.cache().createOrReplaceTempView(env["weak"])
-        ret_as_json = self._svg_api.repairAttrsFrom(
-            env["weak"], "", env["repair_base"], self.row_id)
+        env["weak"] = self._create_temp_view(weak_df.cache())
+        ret_as_json = self._repair_api.repairAttrsFrom(
+            env["weak"], env["repair_base"], self.row_id)
         env["partial_repaired"] = json.loads(ret_as_json)["repaired"]
+
+        self._register_and_get_df(env["partial_repaired"])
 
         print('[Error Detection Phase] {} suspicious cells fixed and '
               '{} error cells remaining...'.format(
@@ -371,9 +381,8 @@ class RepairModel():
         return fixed_df, dirty_df, error_attrs
 
     def _convert_to_histogram(self, df: DataFrame) -> DataFrame:
-        temp_view = self._temp_name()
-        df.createOrReplaceTempView(temp_view)
-        ret_as_json = self._svg_api.convertToHistogram(temp_view, self.discrete_thres)
+        input_name = self._create_temp_view(df)
+        ret_as_json = self._repair_api.convertToHistogram(input_name, self.discrete_thres)
         return self._spark.table(json.loads(ret_as_json)["histogram"])
 
     def _show_histogram(self, df: DataFrame) -> None:
@@ -422,9 +431,8 @@ class RepairModel():
             "training data stat analysis",
             "[Repair Model Training Phase] Collecting training data stats before "
             "building ML models...")
-        env["train"] = self._temp_name("train")
-        train_df.createOrReplaceTempView(env["train"])
-        env.update(json.loads(self._svg_api.computeDomainSizes(env["train"])))
+        env["train"] = self._create_temp_view(train_df)
+        env.update(json.loads(self._repair_api.computeDomainSizes(env["train"])))
         self._end_spark_jobs()
 
         # Sorts target columns by domain size
@@ -610,9 +618,10 @@ class RepairModel():
 
         # Sets a grouping key for inference
         num_parallelism = self._spark.sparkContext.defaultParallelism
-        grouping_key = self._temp_name("__grouping_key")
-        env["dirty"] = self._temp_name("dirty")
-        dirty_df.createOrReplaceTempView(env["dirty"])
+        # TODO: Fix this
+        # grouping_key = self._temp_name("__grouping_key")
+        grouping_key = "__grouping_key"
+        env["dirty"] = self._create_temp_view(dirty_df)
         dirty_df = dirty_df.withColumn(
             grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
 
@@ -738,7 +747,6 @@ class RepairModel():
         gray_cells_df = self._detect_errors(env)
         if gray_cells_df.count() == 0:  # type: ignore
             print("Any error cells not found, so returns the input as clean cells")
-            self._release_resources(env)
             return input_df
 
         # Sets NULL to suspicious cells
@@ -750,12 +758,10 @@ class RepairModel():
         # If no error cell found, ready to return a clean table
         error_cells_df = self._extract_error_cells(env, cell_domain_df, repair_base_df)
         if error_cells_df.count() == 0:
-            self._release_resources(env)
             return input_df
 
         # If `detect_errors_only` is True, returns found error cells
         if detect_errors_only:
-            self._release_resources(env)
             return error_cells_df
 
         #################################################################################
@@ -812,11 +818,10 @@ class RepairModel():
                 return top_delta_repairs_df
 
             # If `repair_data` is True, applys the selected repair updates into `dirty`
-            env["top_delta_repairs"] = self._temp_name("top_delta_repairs")
-            top_delta_repairs_df.createOrReplaceTempView(env["top_delta_repairs"])
-            env.update(json.loads(self._svg_api.repairAttrsFrom(env["top_delta_repairs"],
-                                  "", env["dirty"], self.row_id)))
-            repaired_df = self._spark.table(env["repaired"])
+            env["top_delta_repairs"] = self._create_temp_view(top_delta_repairs_df)
+            env.update(json.loads(self._repair_api.repairAttrsFrom(env["top_delta_repairs"],
+                                  env["dirty"], self.row_id)))
+            repaired_df = self._register_and_get_df(env["repaired"])
 
         # If `repair_data` is False, returns repair candidates whoes
         # value is the same with `current_value`.
@@ -833,8 +838,8 @@ class RepairModel():
 
     def run(self, detect_errors_only: bool = False, compute_repair_candidate_prob: bool = False,
             compute_training_target_hist: bool = False, repair_data: bool = False) -> DataFrame:
-        if self.table_name is None or self.row_id is None:
-            raise ValueError("`setTableName` and `setRowId` should be called before repairing")
+        if self.input is None or self.row_id is None:
+            raise ValueError("`setInput` and `setRowId` should be called before repairing")
         if self.maximal_likelihood_repair_enabled and self.repair_delta is None:
             raise ValueError("`setRepairDelta` should be called before "
                              "maximal likelihood repairing")
@@ -850,29 +855,33 @@ class RepairModel():
                              "`compute_training_target_hist`, and `repair_data` cannot "
                              "be set to True simultaneously")
 
-        # If `self.repair_updates` specified, just applies repair updates
-        if self.repair_updates is not None:
-            repair_updates_view = self._temp_view(self.repair_updates) \
-                if isinstance(self.repair_updates, DataFrame) else str(self.repair_updates)
-            ret_as_json = self._svg_api.repairAttrsFrom(
-                repair_updates_view, self.db_name, self.table_name, self.row_id)
-            return self._spark.table(json.loads(ret_as_json)["repaired"])
+        # A holder to keep runtime variables
+        env: Dict[str, str] = {}
 
-        # Checks # of input rows and attributes
-        env, input_df, continous_attrs = self._check_input()
+        try:
+            # Validates input data
+            input_df, continous_attrs = self._check_input_table(env)
 
-        if compute_repair_candidate_prob and len(continous_attrs) != 0:
-            raise ValueError("Cannot compute probability mass function of repairs "
-                             "when continous attributes found")
-        if self.maximal_likelihood_repair_enabled and len(continous_attrs) != 0:
-            raise ValueError("Cannot enable maximal likelihood repair mode "
-                             "when continous attributes found")
+            # If `self.repair_updates` specified, just applies repair updates
+            if self.repair_updates is not None:
+                ret_as_json = self._repair_api.repairAttrsFrom(
+                    self._repair_updates(), env["input_name"], self.row_id)
+                return self._spark.table(json.loads(ret_as_json)["repaired"])
 
-        __start = time.time()
-        df = self._run(env, input_df, continous_attrs, detect_errors_only,
-                       compute_training_target_hist, compute_repair_candidate_prob, repair_data)
-        print(f"!!!Total processing time is {time.time() - __start}(s)!!!")
-        return df
+            if compute_repair_candidate_prob and len(continous_attrs) != 0:
+                raise ValueError("Cannot compute probability mass function of repairs "
+                                 "when continous attributes found")
+            if self.maximal_likelihood_repair_enabled and len(continous_attrs) != 0:
+                raise ValueError("Cannot enable maximal likelihood repair mode "
+                                 "when continous attributes found")
+
+            __start = time.time()
+            df = self._run(env, input_df, continous_attrs, detect_errors_only,
+                           compute_training_target_hist, compute_repair_candidate_prob, repair_data)
+            print(f"!!!Total processing time is {time.time() - __start}(s)!!!")
+            return df
+        finally:
+            self._release_resources()
 
     @staticmethod
     def version() -> str:

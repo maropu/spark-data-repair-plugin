@@ -63,11 +63,11 @@ class RepairModelTests(ReusedSQLTestCase):
     def test_invalid_params(self):
         self.assertRaisesRegexp(
             ValueError,
-            "`setTableName` and `setRowId` should be called before repairing",
+            "`setInput` and `setRowId` should be called before repairing",
             lambda: RepairModel().run())
         self.assertRaisesRegexp(
             ValueError,
-            "`setTableName` and `setRowId` should be called before repairing",
+            "`setInput` and `setRowId` should be called before repairing",
             lambda: RepairModel().setTableName("dummyTab").run())
         self.assertRaisesRegexp(
             ValueError,

@@ -129,13 +129,13 @@ class RepairMiscSuite extends QueryTest with SharedSparkSession {
       Seq(("1", "v1"), ("2", "v1"), ("4", "v2")).toDF("tid", "attribute")
         .createOrReplaceTempView("errCellView")
       val df = RepairMiscApi.toErrorMap("errCellView", "default", "t", "tid")
-      val expectedSchema = "`error_map` STRING"
+      val expectedSchema = "`tid` STRING,`error_map` STRING"
       assert(df.schema.toDDL === expectedSchema)
-      checkAnswer(df,
-        Row("-*-") ::
-        Row("-*-") ::
-        Row("--*") ::
-        Row("---") ::
+      checkAnswer(df.selectExpr("error_map"),
+        Row("*-") ::
+        Row("*-") ::
+        Row("-*") ::
+        Row("--") ::
         Nil
       )
 

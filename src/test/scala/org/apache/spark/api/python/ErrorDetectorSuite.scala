@@ -39,30 +39,13 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
   }
 
   test("Error detector - common error handling") {
-    Seq[String => DataFrame](ErrorDetectorApi.detectNullCells("", _, "tid"),
-      ErrorDetectorApi.detectErrorCellsFromRegEx("", _, "tid", null),
-      ErrorDetectorApi.detectErrorCellsFromConstraints("", _, "tid", null),
-      ErrorDetectorApi.detectErrorCellsFromOutliers("", _, "tid")
+    Seq[String => DataFrame](ErrorDetectorApi.detectNullCells(_, "tid"),
+      ErrorDetectorApi.detectErrorCellsFromRegEx( _, "tid", null),
+      ErrorDetectorApi.detectErrorCellsFromConstraints(_, "tid", null),
+      ErrorDetectorApi.detectErrorCellsFromOutliers(_, "tid")
     ).foreach { f =>
       val errMsg = intercept[AnalysisException] { f("nonexistent") }.getMessage()
       assert(errMsg.contains("Table or view not found: nonexistent"))
-    }
-
-    withTempView("t") {
-      spark.range(1).createOrReplaceTempView("t")
-
-      Seq[String => DataFrame](ErrorDetectorApi.detectNullCells("", "t", _),
-        ErrorDetectorApi.detectErrorCellsFromRegEx("", "t", _, null),
-        ErrorDetectorApi.detectErrorCellsFromConstraints("", "t", _, null),
-        ErrorDetectorApi.detectErrorCellsFromOutliers("", "t", _)
-      ).foreach { f =>
-        val errMsg1 = intercept[SparkException] { f("nonexistent") }.getMessage()
-        assert(errMsg1.contains("Column 'nonexistent' does not exist in 't'"))
-
-        val errMsg2 = intercept[SparkException] { f("id") }.getMessage()
-        assert(errMsg2.contains("At least one valid column needs to exist, " +
-          "but only one column 'id' exists"))
-      }
     }
   }
 
@@ -78,7 +61,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
            |  ("4", 400000, NULL, "test-4")
          """.stripMargin)
 
-      val df = ErrorDetectorApi.detectNullCells("default", "t", "tid")
+      val df = ErrorDetectorApi.detectNullCells("default.t", "tid")
       checkAnswer(df,
         Row("2", "v1") :: Row("3", "v3") :: Row("4", "v2") :: Nil)
     }
@@ -97,16 +80,16 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
          """.stripMargin)
 
       val df1 = ErrorDetectorApi
-        .detectErrorCellsFromRegEx("default", "t", "tid", "123-hij", cellsAsString = false)
+        .detectErrorCellsFromRegEx("default.t", "tid", "123-hij", cellsAsString = false)
       checkAnswer(df1, Row("4", "v3"))
       val df2 = ErrorDetectorApi
-        .detectErrorCellsFromRegEx("default", "t", "tid", "123.*", cellsAsString = false)
+        .detectErrorCellsFromRegEx("default.t", "tid", "123.*", cellsAsString = false)
       checkAnswer(df2,
         Row("1", "v3") ::
         Row("4", "v3") ::
         Nil)
       val df3 = ErrorDetectorApi
-        .detectErrorCellsFromRegEx("default", "t", "tid", "123.*", cellsAsString = true)
+        .detectErrorCellsFromRegEx("default.t", "tid", "123.*", cellsAsString = true)
       checkAnswer(df3,
         Row("1", "v1") ::
         Row("1", "v3") ::
@@ -121,11 +104,11 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
   test("RegEx-based error detector - common error handling") {
     withTempView("t") {
       spark.range(1).selectExpr("id AS tid", "1 AS value").createOrReplaceTempView("t")
-      val df1 = ErrorDetectorApi.detectErrorCellsFromRegEx("", "t", "tid", null)
+      val df1 = ErrorDetectorApi.detectErrorCellsFromRegEx("t", "tid", null)
       checkAnswer(df1, Nil)
-      val df2 = ErrorDetectorApi.detectErrorCellsFromRegEx("", "t", "tid", "")
+      val df2 = ErrorDetectorApi.detectErrorCellsFromRegEx("t", "tid", "")
       checkAnswer(df2, Nil)
-      val df3 = ErrorDetectorApi.detectErrorCellsFromRegEx("", "t", "tid", "    ")
+      val df3 = ErrorDetectorApi.detectErrorCellsFromRegEx("t", "tid", "    ")
       checkAnswer(df3, Nil)
     }
   }
@@ -154,7 +137,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
           StandardCharsets.UTF_8)
 
         val df = ErrorDetectorApi
-          .detectErrorCellsFromConstraints("default", "t", "tid", constraintFilePath)
+          .detectErrorCellsFromConstraints("default.t", "tid", constraintFilePath)
         checkAnswer(df,
           Row("1", "v1") ::
           Row("1", "v2") ::
@@ -177,7 +160,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
       spark.read.option("header", true).format("csv").load(adultFilePath).write.saveAsTable("adult")
       val constraintFilePath = resourcePath("adult_constraints.txt")
       val df = ErrorDetectorApi
-        .detectErrorCellsFromConstraints("default", "adult", "tid", constraintFilePath)
+        .detectErrorCellsFromConstraints("default.adult", "tid", constraintFilePath)
       checkAnswer(df,
         Row("4", "Relationship") ::
         Row("4", "Sex") ::
@@ -190,11 +173,11 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
   test("Constraint-based error detector - common error handling") {
     withTempView("t") {
       spark.range(1).selectExpr("id AS tid", "1 AS value").createOrReplaceTempView("t")
-      val df1 = ErrorDetectorApi.detectErrorCellsFromConstraints("", "t", "tid", null)
+      val df1 = ErrorDetectorApi.detectErrorCellsFromConstraints("t", "tid", null)
       checkAnswer(df1, Nil)
-      val df2 = ErrorDetectorApi.detectErrorCellsFromConstraints("", "t", "tid", "")
+      val df2 = ErrorDetectorApi.detectErrorCellsFromConstraints("t", "tid", "")
       checkAnswer(df2, Nil)
-      val df3 = ErrorDetectorApi.detectErrorCellsFromConstraints("", "t", "tid", "    ")
+      val df3 = ErrorDetectorApi.detectErrorCellsFromConstraints("t", "tid", "    ")
       checkAnswer(df3, Nil)
     }
   }
@@ -206,7 +189,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
       df1.union(df2).createOrReplaceTempView("t")
       Seq(true, false).foreach { approxEnabled =>
         val resultDf = ErrorDetectorApi
-          .detectErrorCellsFromOutliers("", "t", "tid", approxEnabled)
+          .detectErrorCellsFromOutliers("t", "tid", approxEnabled)
         checkAnswer(resultDf, Row(1000L, "value"))
       }
     }

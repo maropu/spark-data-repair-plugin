@@ -99,19 +99,19 @@ abstract class RepairBase extends LoggingBasedOnLevel {
     }
   }
 
-  def checkAndGetInputTable(dbName: String, tableName: String, rowId: String = "")
+  protected def checkAndGetQualifiedInputName(dbName: String, tableName: String, rowId: String = "")
     : (DataFrame, String) = {
-    val inputName = if (dbName.nonEmpty) s"$dbName.$tableName" else tableName
-    val inputDf = spark.table(inputName)
+    val qualifiedInputName = if (dbName.nonEmpty) s"$dbName.$tableName" else tableName
+    val inputDf = spark.table(qualifiedInputName)
     // Checks if the given table has a column named `rowId`
     if (rowId.nonEmpty && !inputDf.columns.contains(rowId)) {
       // TODO: Implicitly adds unique row IDs if they don't exist in a given table
-      throw new SparkException(s"Column '$rowId' does not exist in '$inputName'.")
+      throw new SparkException(s"Column '$rowId' does not exist in '$qualifiedInputName'.")
     }
     if (inputDf.columns.length <= 1) {
       throw new SparkException(
         s"At least one valid column needs to exist, but only one column '$rowId' exists.")
     }
-    (inputDf, inputName)
+    (inputDf, qualifiedInputName)
   }
 }
