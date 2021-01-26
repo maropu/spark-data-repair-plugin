@@ -26,6 +26,7 @@ import logging
 import numpy as np
 import pandas as pd
 import time
+from functools import wraps
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pyspark.sql import DataFrame, Row, SparkSession, functions
@@ -198,6 +199,38 @@ class RepairModel():
         self.distance = distance
         return self
 
+    def _clear_job_group(self) -> None:
+        # TODO: Uses `SparkContext.clearJobGroup()` instead
+        self._spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)
+        self._spark.sparkContext.setLocalProperty("spark.job.description", None)
+        self._spark.sparkContext.setLocalProperty("spark.job.interruptOnCancel", None)
+
+    def _spark_job_group(name: str):  # type: ignore
+        def decorator(f):  # type: ignore
+            @wraps(f)
+            def wrapper(self, *args, **kwargs):  # type: ignore
+                self._spark.sparkContext.setJobGroup(name, name)
+                start_time = time.time()
+                ret = f(self, *args, **kwargs)
+                logging.info(f"Elapsed time (name: {name}) is {time.time() - start_time}(s)")
+                self._clear_job_group()
+
+                return ret
+            return wrapper
+        return decorator
+
+    def _elapsed_time(name: str):  # type: ignore
+        def decorator(f):  # type: ignore
+            @wraps(f)
+            def wrapper(self, *args, **kwargs):  # type: ignore
+                start_time = time.time()
+                ret = f(self, *args, **kwargs)
+                logging.info(f"!!!Elapsed time (name: {name}) is {time.time() - start_time}(s)!!!")
+
+                return ret
+            return wrapper
+        return decorator
+
     def _register_and_get_df(self, view_name: str) -> DataFrame:
         self._intermediate_views_on_runtime.append(view_name)
         return self._spark.table(view_name)
@@ -211,21 +244,6 @@ class RepairModel():
     def _flatten(self, df: DataFrame) -> DataFrame:
         jdf = self._jvm.RepairMiscApi.flattenTable("", self._create_temp_view(df), self.row_id)
         return DataFrame(jdf, self._spark._wrapped)
-
-    def _start_spark_jobs(self, name: str, desc: str) -> None:
-        self._spark.sparkContext.setJobGroup(name, name)
-        self._timer_base = time.time()
-        print(desc)
-
-    def _clear_job_group(self) -> None:
-        # TODO: Uses `SparkContext.clearJobGroup()` instead
-        self._spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)
-        self._spark.sparkContext.setLocalProperty("spark.job.description", None)
-        self._spark.sparkContext.setLocalProperty("spark.job.interruptOnCancel", None)
-
-    def _end_spark_jobs(self) -> None:
-        print(f"Elapsed time is {time.time() - self._timer_base}(s)")  # type: ignore
-        self._clear_job_group()
 
     def _release_resources(self) -> None:
         while self._intermediate_views_on_runtime:
@@ -269,29 +287,28 @@ class RepairModel():
         err_cells = self._create_temp_view(err_cells_df.distinct().cache())
         return err_cells
 
+    @_spark_job_group(name="error detection")
     def _detect_errors(self, env: Dict[str, str]) -> str:
         # If `self.error_cells` provided, just uses it
         if self.error_cells is not None:
-            print('[Error Detection Phase] Error cells provided by `{env["gray_cells"]}`')
             env["gray_cells"] = self._error_cells()
+            logging.info(f'[Error Detection Phase] Error cells provided by `{env["gray_cells"]}`')
 
             # We assume that the given error cells are true, so we skip computing error domains
             # with probability because the computational cost is much high.
             self.domain_threshold_beta = 1.0
         else:
             # Applys error detectors to get gray cells
-            self._start_spark_jobs(
-                "error detection",
-                f'[Error Detection Phase] Detecting errors in a table `{env["input_table"]}` '
-                f'({env["num_attrs"]} cols x {env["num_input_rows"]} rows)...')
             env["gray_cells"] = self._detect_error_cells(env["input_table"])
-            self._end_spark_jobs()
+            logging.info(f'[Error Detection Phase] Detecting errors '
+                         f'in a table `{env["input_table"]}` '
+                         f'({env["num_attrs"]} cols x {env["num_input_rows"]} rows)...')
 
         return self._spark.table(env["gray_cells"])
 
     def _prepare_repair_base(self, env: Dict[str, str], gray_cells_df: DataFrame) -> DataFrame:
         # Sets NULL at the detected gray cells
-        logging.info("{}/{} suspicious cells found, then converts them into NULL cells...".format(
+        logging.debug("{}/{} suspicious cells found, then converts them into NULL cells...".format(
             gray_cells_df.count(), int(env["num_input_rows"]) * int(env["num_attrs"])))
         env.update(json.loads(self._repair_api.convertErrorCellsToNull(
             env["input_table"], env["gray_cells"],
@@ -306,17 +323,18 @@ class RepairModel():
             env["input_table"], self.row_id, self.discrete_thres)))
 
         discrete_ft_df = self._register_and_get_df(env["discrete_features"])
-        logging.info("Valid {} attributes ({}) found in the {} input attributes ({}) and "
-                     "{} continous attributes ({}) included in them".format(
-                         len(discrete_ft_df.columns),
-                         ",".join(discrete_ft_df.columns),
-                         len(self._spark.table(env["input_table"]).columns),
-                         ",".join(self._spark.table(env["input_table"]).columns),
-                         len(continous_attrs),
-                         ",".join(continous_attrs)))
+        logging.debug("Valid {} attributes ({}) found in the {} input attributes ({}) and "
+                      "{} continous attributes ({}) included in them".format(
+                          len(discrete_ft_df.columns),
+                          ",".join(discrete_ft_df.columns),
+                          len(self._spark.table(env["input_table"]).columns),
+                          ",".join(self._spark.table(env["input_table"]).columns),
+                          len(continous_attrs),
+                          ",".join(continous_attrs)))
 
         return discrete_ft_df
 
+    @_spark_job_group(name="cell domain analysis")
     def _analyze_error_cell_domain(self, env: Dict[str, str], gray_cells_df: DataFrame,
                                    continous_attrs: List[str]) -> str:
         # Checks if attributes are discrete or not, and discretizes continous ones
@@ -324,18 +342,16 @@ class RepairModel():
 
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
-        logging.info("Collecting and sampling attribute stats (ratio={} threshold={}) "
-                     "before computing error domains...".format(
-                         self.attr_stat_sample_ratio,
-                         self.attr_stat_threshold))
+        logging.debug("Collecting and sampling attribute stats (ratio={} threshold={}) "
+                      "before computing error domains...".format(
+                          self.attr_stat_sample_ratio,
+                          self.attr_stat_threshold))
         env.update(json.loads(self._repair_api.computeAttrStats(
             env["discrete_features"], env["gray_cells"], self.row_id,
             self.attr_stat_sample_ratio,
             self.attr_stat_threshold)))
 
-        self._start_spark_jobs(
-            "cell domains analysis",
-            "[Error Detection Phase] Analyzing cell domains to fix error cells...")
+        logging.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
         env.update(json.loads(self._repair_api.computeDomainInErrorCells(
             env["discrete_features"], env["attr_stats"], env["gray_cells"], self.row_id,
             env["continous_attrs"],
@@ -343,7 +359,6 @@ class RepairModel():
             self.min_corr_thres,
             self.domain_threshold_alpha,
             self.domain_threshold_beta)))
-        self._end_spark_jobs()
 
         return self._register_and_get_df(env["cell_domain"])
 
@@ -363,10 +378,10 @@ class RepairModel():
 
         self._register_and_get_df(env["partial_repaired"])
 
-        print('[Error Detection Phase] {} suspicious cells fixed and '
-              '{} error cells remaining...'.format(
-                  self._spark.table(env["weak"]).count(),
-                  error_cells_df.count()))
+        logging.info('[Error Detection Phase] {} suspicious cells fixed and '
+                     '{} error cells remaining...'.format(
+                         self._spark.table(env["weak"]).count(),
+                         error_cells_df.count()))
 
         return error_cells_df
 
@@ -406,11 +421,11 @@ class RepairModel():
         # Prepares training data to repair the remaining error cells
         # TODO: Needs more smart sampling, e.g., down-sampling
         train_df = fixed_df.sample(self.training_data_sample_ratio).drop(self.row_id).cache()
-        print("[Repair Model Training Phase] Sampling {} training data (ratio={}) "
-              "from {} clean rows...".format(
-                  train_df.count(),
-                  self.training_data_sample_ratio,
-                  fixed_df.count()))
+        logging.info("[Repair Model Training Phase] Sampling {} training data (ratio={}) "
+                     "from {} clean rows...".format(
+                         train_df.count(),
+                         self.training_data_sample_ratio,
+                         fixed_df.count()))
         return train_df
 
     def _error_num_based_order(self, error_attrs: List[Row]) -> List[str]:
@@ -422,20 +437,18 @@ class RepairModel():
         target_columns = list(map(lambda row: row.attribute,
                               sorted(error_attrs, key=lambda row: row.cnt, reverse=False)))
         for y in target_columns:
-            logging.info(f"{y}: #errors={error_num_map[y]}")
+            logging.debug(f"{y}: #errors={error_num_map[y]}")
 
         return target_columns
 
+    @_spark_job_group(name="training data stat analysis")
     def _domain_size_based_order(self, env: Dict[str, str], train_df: DataFrame,
                                  error_attrs: List[Row]) -> List[str]:
         # Computes domain sizes for training data
-        self._start_spark_jobs(
-            "training data stat analysis",
-            "[Repair Model Training Phase] Collecting training data stats before "
-            "building ML models...")
+        logging.info("[Repair Model Training Phase] Collecting training data stats before "
+                     "building ML models...")
         env["train"] = self._create_temp_view(train_df)
         env.update(json.loads(self._repair_api.computeDomainSizes(env["train"])))
-        self._end_spark_jobs()
 
         # Sorts target columns by domain size
         target_columns = list(map(lambda row: row.attribute,
@@ -443,7 +456,7 @@ class RepairModel():
                                      key=lambda row: int(env["distinct_stats"][row.attribute]),
                                      reverse=False)))
         for y in target_columns:
-            logging.info(f'{y}: |domain|={env["distinct_stats"][y]}')
+            logging.debug(f'{y}: |domain|={env["distinct_stats"][y]}')
 
         return target_columns
 
@@ -466,7 +479,7 @@ class RepairModel():
 
             t = heapq.heappop(targets)
             target_columns.append(t[1])
-            logging.info("corr={}, y({})<=X({})".format(-t[0], t[1], ",".join(features)))
+            logging.debug("corr={}, y({})<=X({})".format(-t[0], t[1], ",".join(features)))
             error_attrs.remove(t[1])
 
         return target_columns
@@ -504,7 +517,7 @@ class RepairModel():
                     heapq.heappush(heap, (-float(corr), f))
 
             fts = [heapq.heappop(heap)[1] for i in range(int(self.max_training_column_num))]
-            logging.info("Select {} relevant features ({}) from available ones ({})".format(
+            logging.debug("Select {} relevant features ({}) from available ones ({})".format(
                 len(fts), ",".join(fts), ",".join(features)))
             features = fts
 
@@ -537,7 +550,7 @@ class RepairModel():
             # TODO: Needs to include `dirty_df` in this transformation
             for transformer in transformers:
                 X = transformer.fit_transform(X)
-            logging.info("{} encoders transform ({})=>({})".format(
+            logging.debug("{} encoders transform ({})=>({})".format(
                 len(transformers), ",".join(features), ",".join(X.columns)))
 
         return X, transformers
@@ -567,6 +580,7 @@ class RepairModel():
             )
             return reg.fit(X, y)
 
+    @_spark_job_group(name="repair model training")
     def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame, error_attrs: List[Row],
                              continous_attrs: List[str]) -> Tuple[Dict[str, Any], List[str]]:
         # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
@@ -586,10 +600,8 @@ class RepairModel():
         target_columns = self._compute_inference_order(env, train_df, error_attrs)
 
         # Builds multiple ML models to repair error cells
-        self._start_spark_jobs(
-            "repair model training",
-            f"[Repair Model Training Phase] Building {len(target_columns)} ML models "
-            "to repair the error cells...")
+        logging.info(f"[Repair Model Training Phase] Building {len(target_columns)} ML models "
+                     "to repair the error cells...")
         models = {}
         train_pdf = train_df.toPandas()
         excluded_columns = copy.deepcopy(target_columns)
@@ -599,13 +611,13 @@ class RepairModel():
                 env, train_pdf[features], features, continous_attrs)
             is_discrete = y not in continous_attrs
             models[y] = (self._build_model(X, train_pdf[y], is_discrete), features, transformers)
-            logging.info("{}[{}]: #features={}, y({})<=X({})".format(
+            logging.debug("{}[{}]: #features={}, y({})<=X({})".format(
                 "Classifier" if is_discrete else "Regressor", index, len(X.columns), y,
                 ",".join(features)))
-        self._end_spark_jobs()
 
         return models, target_columns
 
+    @_spark_job_group(name="repairing")
     def _repair(self, env: Dict[str, str], models: Dict[str, Any], target_columns: List[str],
                 continous_attrs: List[str], dirty_df: DataFrame, error_cells_df: DataFrame,
                 compute_repair_candidate_prob: bool) -> pd.DataFrame:
@@ -672,13 +684,10 @@ class RepairModel():
         # Predicts the remaining error cells based on the trained models.
         # TODO: Might need to compare repair costs (cost of an update, c) to
         # the likelihood benefits of the updates (likelihood benefit of an update, l).
-        self._start_spark_jobs(
-            "repairing",
-            f"[Repairing Phase] Computing {error_cells_df.count()} repair updates in "
-            f"{dirty_df.count()} rows...")
+        logging.info(f"[Repairing Phase] Computing {error_cells_df.count()} repair updates in "
+                     f"{dirty_df.count()} rows...")
         repaired_df = dirty_df.groupBy(grouping_key).apply(repair).drop(grouping_key).cache()
         repaired_df.write.format("noop").mode("overwrite").save()
-        self._end_spark_jobs()
         return repaired_df
 
     def _compute_repair_pmf(self, repaired_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
@@ -730,14 +739,15 @@ class RepairModel():
         top_delta_repairs_expr = \
             f"IF(score <= {percentile.thres}, repaired, current_value) repaired"
         top_delta_repairs_df = score_df.selectExpr(self.row_id, "attribute", top_delta_repairs_expr)
-        print("[Repairing Phase] {} repair updates (delta={}) selected "
-              "among {} candidates...".format(
-                  score_df.where(f"score <= {percentile.thres}").count(),
-                  self.repair_delta,
-                  num_error_cells))
+        logging.info("[Repairing Phase] {} repair updates (delta={}) selected "
+                     "among {} candidates...".format(
+                         score_df.where(f"score <= {percentile.thres}").count(),
+                         self.repair_delta,
+                         num_error_cells))
 
         return top_delta_repairs_df
 
+    @_elapsed_time(name="total processing time")
     def _run(self, env: Dict[str, str], input_df: DataFrame, continous_attrs: List[str],
              detect_errors_only: bool, compute_training_target_hist: bool,
              compute_repair_candidate_prob: bool, repair_data: bool) -> DataFrame:
@@ -748,7 +758,7 @@ class RepairModel():
         # If no error found, it just returns the given table
         gray_cells_df = self._detect_errors(env)
         if gray_cells_df.count() == 0:  # type: ignore
-            print("Any error cells not found, so returns the input as clean cells")
+            logging.info("Any error cells not found, so returns the input as clean cells")
             return input_df
 
         # Sets NULL to suspicious cells
@@ -877,11 +887,9 @@ class RepairModel():
                 raise ValueError("Cannot enable maximal likelihood repair mode "
                                  "when continous attributes found")
 
-            __start = time.time()
-            df = self._run(env, input_df, continous_attrs, detect_errors_only,
-                           compute_training_target_hist, compute_repair_candidate_prob, repair_data)
-            print(f"!!!Total processing time is {time.time() - __start}(s)!!!")
-            return df
+            return self._run(env, input_df, continous_attrs, detect_errors_only,
+                             compute_training_target_hist, compute_repair_candidate_prob,
+                             repair_data)
         finally:
             self._release_resources()
 
