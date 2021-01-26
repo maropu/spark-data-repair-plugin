@@ -10,9 +10,7 @@ spark.read \
     .saveAsTable("boston")
 
 scavenger.misc \
-    .setDbName("default") \
-    .setTableName("boston") \
-    .setRowId("tid") \
+    .options({"db_name": "default", "table_name": "boston", "row_id": "tid"}) \
     .flatten() \
     .write \
     .saveAsTable("boston_flatten")

@@ -21,9 +21,7 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 ...   .saveAsTable("hospital")
 >>> 
 >>> scavenger.repair().misc \
-...   .setDbName("default") \
-...   .setTableName("hospital") \
-...   .setRowId("tid") \
+...   .options({"db_name": "default", "table_name": "hospital", "row_id": "tid"}) \
 ...   .flatten() \
 ...   .write \
 ...   .saveAsTable("hospital_flatten")

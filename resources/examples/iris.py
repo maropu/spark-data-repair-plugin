@@ -9,9 +9,7 @@ spark.read \
     .saveAsTable("iris")
 
 scavenger.misc \
-    .setDbName("default") \
-    .setTableName("iris") \
-    .setRowId("tid") \
+    .options({"db_name": "default", "table_name": "iris", "row_id": "tid"}) \
     .flatten() \
     .write \
     .saveAsTable("iris_flatten")

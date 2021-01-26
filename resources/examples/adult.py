@@ -6,9 +6,7 @@ spark.read \
     .saveAsTable("adult")
 
 scavenger.misc \
-    .setDbName("default") \
-    .setTableName("adult") \
-    .setRowId("tid") \
+    .options({"db_name": "default", "table_name": "adult", "row_id": "tid"}) \
     .flatten() \
     .write \
     .saveAsTable("adult_flatten")
