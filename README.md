@@ -33,9 +33,9 @@ Using Python version 3.6.8 (default, Dec 29 2018 19:04:46)
 SparkSession available as 'spark'.
 Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 
-# Loads CSV data and defines a table in a catalog
->>> spark.read.option("header", True).csv("./testdata/adult.csv").write.saveAsTable("adult")
->>> spark.table("adult").show()
+# Loads CSV data having seven NULL cells
+>>> dirty_df = spark.read.option("header", True).csv("./testdata/adult.csv")
+>>> dirty_df.show()
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 |tid|  Age|   Education|       Occupation| Relationship|   Sex|      Country|     Income|
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
@@ -61,9 +61,9 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 | 19|31-50|     HS-grad|            Sales|      Husband|  Male|         Iran|MoreThan50K|
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 
-# Runs jobs to compute repair updates for the seven NULL cells above in the `adult` table.
-# A 'repaired' column represents proposed updates to repiar them.
->>> repair_updates_df = scavenger.repair.setTableName("adult").setRowId("tid").run()
+# Runs jobs to compute repair updates for the seven NULL cells above in `dirty_df`
+# A `repaired` column represents proposed updates to repiar them.
+>>> repair_updates_df = scavenger.repair.setInput(dirty_df).setRowId("tid").run()
 >>> repair_updates_df.show()
 +---+---------+-------------+-----------+
 |tid|attribute|current_value|   repaired|
@@ -78,8 +78,8 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 +---+---------+-------------+-----------+
 
 # You need to set `True` to `repair_data` for getting repaired data
->>> df = scavenger.repair.setTableName("adult").setRowId("tid").run(repair_data=True)
->>> df.show()
+>>> clean_df = scavenger.repair.setInput(dirty_df).setRowId("tid").run(repair_data=True)
+>>> clean_df.show()
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 |tid|  Age|   Education|       Occupation| Relationship|   Sex|      Country|     Income|
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
@@ -106,11 +106,11 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 
 # Or, you can apply the computed repair updates into the input directly
->>> df = scavenger.repair.setTableName("adult").setRowId("tid") \
+>>> clean_df = scavenger.repair.setInput(dirty_df).setRowId("tid") \
 ...   .setRepairUpdates(repair_updates_df) \
 ...   .run()
 
->>> df.show()
+>>> clean_df.show()
 <the same output above>
 ```
 
@@ -132,15 +132,13 @@ t1&EQ(t1.Sex,"Female")&EQ(t1.Relationship,"Husband")
 t1&EQ(t1.Sex,"Male")&EQ(t1.Relationship,"Wife")
 
 # Use the constraints to detect errors then repair them.
-# Note that a process will return repair candidates instead of clean data
-# when setting `True` to `return_repair_candidates`.
->>> df = scavenger.repair.setTableName("adult").setRowId("tid") \
+>>> repair_updates_df = scavenger.repair.setInput(dirty_df).setRowId("tid") \
 ...   .setErrorDetector(ConstraintErrorDetector(constraint_path="./testdata/adult_constraints.txt")) \
-...   .run(return_repair_candidates=True)
+...   .run()
 
 # Changes values from `Female` to `Male` in the `Sex` cells
 # of the 4th and 11th rows.
->>> df.show()
+>>> repair_updates_df.show()
 +---+------------+-------------+-----------+
 |tid|   attribute|current_value|   repaired|
 +---+------------+-------------+-----------+
@@ -163,8 +161,8 @@ for getting them in pre-processing as follows;
 
 ```
 # Runs jobs to detect error cells
->>> df = scavenger.repair.setTableName("adult").setRowId("tid").run(detect_errors_only=True)
->>> df.show()
+>>> error_cells_df = scavenger.repair.setInput(dirty_df).setRowId("tid").run(detect_errors_only=True)
+>>> error_cells_df.show()
 +---+---------+-------------+
 |tid|attribute|current_value|
 +---+---------+-------------+
@@ -184,8 +182,8 @@ for getting them in pre-processing as follows;
 scavenger.repair
 
   // Basic Parameters
-  .setDbName(str)                              // database name (default: 'default')
-  .setTableName(str)                           // table name
+  .setDbName(str)                              // database name (default: '')
+  .setInput(str)                               // table name or `DataFrame`
   .setRowId(str)                               // unique column name in table
 
   // Parameters for Error Detection
