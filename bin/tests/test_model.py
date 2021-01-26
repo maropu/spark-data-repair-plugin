@@ -240,6 +240,43 @@ class RepairModelTests(ReusedSQLTestCase):
                 Row(tid="4", attribute="Relationship", current_value="Husband"),
                 Row(tid="4", attribute="Sex", current_value="Female")])
 
+    def test_repair_data(self):
+        expected_result = self.spark.table("adult_clean") \
+            .orderBy("tid").collect()
+        test_model = RepairModel() \
+            .setTableName("adult") \
+            .setRowId("tid")
+        self.assertEqual(
+            test_model.run(repair_data=True).orderBy("tid").collect(),
+            expected_result)
+
+    def test_setRepairUpdates(self):
+        expected_result = self.spark.table("adult_clean") \
+            .orderBy("tid").collect()
+        repair_updates_df = RepairModel() \
+            .setTableName("adult") \
+            .setRowId("tid") \
+            .run()
+        df = RepairModel() \
+            .setTableName("adult") \
+            .setRowId("tid") \
+            .setRepairUpdates(repair_updates_df) \
+            .run()
+        self.assertEqual(
+            df.orderBy("tid").collect(),
+            expected_result)
+
+        with self.tempView("repair_updates_view"):
+            repair_updates_df.createOrReplaceTempView("repair_updates_view")
+            df = RepairModel() \
+                .setTableName("adult") \
+                .setRowId("tid") \
+                .setRepairUpdates("repair_updates_view") \
+                .run()
+            self.assertEqual(
+                df.orderBy("tid").collect(),
+                expected_result)
+
     def test_version(self):
         self.assertEqual(RepairModel().version(), "0.1.0-spark3.0-EXPERIMENTAL")
 

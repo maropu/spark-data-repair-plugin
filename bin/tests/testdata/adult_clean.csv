@@ -1,3 +1,4 @@
+tid,Age,Education,Occupation,Relationship,Sex,Country,Income
 0,31-50,Some-college,Craft-repair,Husband,Male,United-States,LessThan50K
 1,>50,Some-college,Exec-managerial,Own-child,Female,United-States,LessThan50K
 2,31-50,Bachelors,Sales,Husband,Male,United-States,LessThan50K

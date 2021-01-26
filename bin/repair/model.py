@@ -398,8 +398,8 @@ class RepairModel():
         return fixed_df, dirty_df, error_attrs
 
     def _convert_to_histogram(self, df: DataFrame) -> DataFrame:
-        input_name = self._create_temp_view(df)
-        ret_as_json = self._repair_api.convertToHistogram(input_name, self.discrete_thres)
+        input_table = self._create_temp_view(df)
+        ret_as_json = self._repair_api.convertToHistogram(input_table, self.discrete_thres)
         return self._spark.table(json.loads(ret_as_json)["histogram"])
 
     def _show_histogram(self, df: DataFrame) -> None:
@@ -877,7 +877,7 @@ class RepairModel():
             # If `self.repair_updates` specified, just applies repair updates
             if self.repair_updates is not None:
                 ret_as_json = self._repair_api.repairAttrsFrom(
-                    self._repair_updates(), env["input_name"], self.row_id)
+                    self._repair_updates(), env["input_table"], self.row_id)
                 return self._spark.table(json.loads(ret_as_json)["repaired"])
 
             if compute_repair_candidate_prob and len(continous_attrs) != 0:
