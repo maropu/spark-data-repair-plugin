@@ -85,6 +85,8 @@ def run_individual_python_test(target_dir, test_name):
         LOGGER.info("Passed (%is)", duration)
 
 
+# TODO: Brush up this test runner by referring to the PySpark code:
+#  - https://github.com/apache/spark/blob/master/python/run-tests.py
 if __name__ == "__main__":
 
     # Parses command-line arguments
