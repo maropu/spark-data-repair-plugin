@@ -35,8 +35,8 @@ warnings.simplefilter('ignore')
 spark.sparkContext.setLogLevel("ERROR")
 
 # For debugging
-spark.sql("SET spark.scavenger.logLevel=TRACE")
-# logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO)
+# spark.sql("SET spark.scavenger.logLevel=TRACE")
 logging.basicConfig(level=logging.WARN)
 
 # Since 3.0, `spark.sql.crossJoin.enabled` is set to true by default

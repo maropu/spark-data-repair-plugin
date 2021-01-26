@@ -94,7 +94,8 @@ class RepairModel():
         self._repair_api = self._jvm.RepairApi
 
     def setDbName(self, db_name: str) -> "RepairModel":
-        assert type(self.input) is not DataFrame
+        if type(self.input) is DataFrame:
+            raise ValueError("Can not specify a database name when input is `DataFrame`")
         self.db_name = db_name
         return self
 
@@ -227,8 +228,9 @@ class RepairModel():
         self._clear_job_group()
 
     def _release_resources(self) -> None:
-        for t in self._intermediate_views_on_runtime:
-            self._spark.sql(f"DROP VIEW IF EXISTS {t}")
+        while self._intermediate_views_on_runtime:
+            v = self._intermediate_views_on_runtime.pop()
+            self._spark.sql(f"DROP VIEW IF EXISTS {v}")
 
     def _input_table(self) -> str:
         return self._create_temp_view(self.input) if type(self.input) is DataFrame \

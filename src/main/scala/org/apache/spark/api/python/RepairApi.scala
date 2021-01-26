@@ -37,9 +37,11 @@ object RepairApi extends RepairBase {
     }
 
     // Checks if `row_id` is unique
-    if (inputDf.selectExpr(rowId).distinct().count() != inputDf.count()) {
+    val rowCnt = inputDf.count()
+    val distinctCnt = inputDf.selectExpr(rowId).distinct().count()
+    if (distinctCnt != rowCnt) {
       throw new SparkException(s"Uniqueness does not hold in column '$rowId' " +
-        s"of table '$qualifiedName'.")
+        s"of table '$qualifiedName' (# of distinct '$rowId': $distinctCnt, # of rows: $rowCnt)")
     }
 
     val continousAttrs = inputDf.schema.filter(f => continousTypes.contains(f.dataType))
@@ -164,13 +166,6 @@ object RepairApi extends RepairBase {
     require(rowId.nonEmpty, s"$rowId should be a non-empty string.")
     logBasedOnLevel(s"convertToDiscreteFeatures called with: qualifiedName=$qualifiedName " +
       s"rowId=$rowId discreteThres=$discreteThres")
-    val inputDf = spark.table(qualifiedName)
-    val rowCnt = inputDf.count()
-    // TODO: This check needs to be moved into `checkInputTable`
-    if (inputDf.selectExpr(rowId).distinct().count() != rowCnt) {
-      throw new SparkException(s"Uniqueness does not hold in column '$rowId' " +
-        s"of table '$qualifiedName'.")
-    }
     val (discreteDf, statMap) = doConvertToDiscreteFeatures(qualifiedName, discreteThres, Set(rowId))
     val distinctStats = statMap.mapValues(_.distinctCount.toString)
     Seq("discrete_features" -> createAndCacheTempView(discreteDf),
