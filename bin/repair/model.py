@@ -199,6 +199,27 @@ class RepairModel():
         self.distance = distance
         return self
 
+    @property
+    def _input_table(self) -> str:
+        return self._create_temp_view(self.input) if type(self.input) is DataFrame \
+            else str(self.input)
+
+    @property
+    def _error_cells(self) -> str:
+        df = self.error_cells if type(self.error_cells) is DataFrame \
+            else self._spark.table(str(self.error_cells))
+        if not all(c in df.columns for c in (self.row_id, "attribute")):  # type: ignore
+            raise ValueError(f"Error cells must have `{self.row_id}` and "
+                             "`attribute` in columns")
+        return self._create_temp_view(df)
+
+    @property
+    def _repair_updates(self) -> str:
+        df = self.repair_updates if type(self.repair_updates) is DataFrame \
+            else self._spark.table(str(self.repair_updates))
+        # TODO: Validates a schema of `self.repair_updates`
+        return self._create_temp_view(df)
+
     def _clear_job_group(self) -> None:
         # TODO: Uses `SparkContext.clearJobGroup()` instead
         self._spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)
@@ -250,31 +271,13 @@ class RepairModel():
             v = self._intermediate_views_on_runtime.pop()
             self._spark.sql(f"DROP VIEW IF EXISTS {v}")
 
-    def _input_table(self) -> str:
-        return self._create_temp_view(self.input) if type(self.input) is DataFrame \
-            else str(self.input)
-
     def _check_input_table(self, env: Dict[str, str]) -> Tuple[str, List[str]]:
         ret_as_json = self._repair_api.checkInputTable(
-            self.db_name, self._input_table(), self.row_id)
+            self.db_name, self._input_table, self.row_id)
         env.update(json.loads(ret_as_json))
         continous_attrs = env["continous_attrs"].split(",")
         return self._spark.table(env["input_table"]), \
             continous_attrs if continous_attrs != [""] else []
-
-    def _error_cells(self) -> str:
-        df = self.error_cells if type(self.error_cells) is DataFrame \
-            else self._spark.table(str(self.error_cells))
-        if not all(c in df.columns for c in (self.row_id, "attribute")):  # type: ignore
-            raise ValueError(f"Error cells must have `{self.row_id}` and "
-                             "`attribute` in columns")
-        return self._create_temp_view(df)
-
-    def _repair_updates(self) -> str:
-        df = self.repair_updates if type(self.repair_updates) is DataFrame \
-            else self._spark.table(str(self.repair_updates))
-        # TODO: Validates a schema of `self.repair_updates`
-        return self._create_temp_view(df)
 
     def _detect_error_cells(self, input_table: str) -> str:
         # Initializes the given error detectors with the input params
@@ -291,7 +294,7 @@ class RepairModel():
     def _detect_errors(self, env: Dict[str, str]) -> str:
         # If `self.error_cells` provided, just uses it
         if self.error_cells is not None:
-            env["gray_cells"] = self._error_cells()
+            env["gray_cells"] = self._error_cells
             logging.info(f'[Error Detection Phase] Error cells provided by `{env["gray_cells"]}`')
 
             # We assume that the given error cells are true, so we skip computing error domains
@@ -877,7 +880,7 @@ class RepairModel():
             # If `self.repair_updates` specified, just applies repair updates
             if self.repair_updates is not None:
                 ret_as_json = self._repair_api.repairAttrsFrom(
-                    self._repair_updates(), env["input_table"], self.row_id)
+                    self._repair_updates, env["input_table"], self.row_id)
                 return self._spark.table(json.loads(ret_as_json)["repaired"])
 
             if compute_repair_candidate_prob and len(continous_attrs) != 0:
