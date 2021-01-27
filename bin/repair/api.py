@@ -17,10 +17,6 @@
 # limitations under the License.
 #
 
-"""
-A Scavenger API Set for Data Repairing
-"""
-
 from typing import Any
 
 from repair.misc import RepairMisc
@@ -28,6 +24,15 @@ from repair.model import RepairModel
 
 
 class Scavenger():
+    """A Scavenger API set for data repairing.
+
+    A :class:`Scavenger` has two types of API groups:
+
+    * ``repair``: Detect errors in input data and infer correct ones from clean data.
+    * ``misc``: Provide helper functionalities.
+
+    .. versionchanged:: 0.1.0
+    """
 
     _instance: Any = None
 
@@ -42,8 +47,17 @@ class Scavenger():
 
     @property
     def repair(self) -> RepairModel:
+        """Returns :class:`RepairModel` to repair input data.
+        """
         return RepairModel()
 
     @property
     def misc(self) -> RepairMisc:
+        """Returns :class:`RepairMisc` for misc helper functions.
+        """
         return RepairMisc()
+
+    @staticmethod
+    def version() -> str:
+        # TODO: Extracts a version string from the root pom.xml
+        return "0.1.0-spark3.0-EXPERIMENTAL"

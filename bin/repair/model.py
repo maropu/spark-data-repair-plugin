@@ -37,6 +37,12 @@ from repair.distances import Distance, Levenshtein
 
 
 class RepairModel():
+    """
+    Interface to detect error cells in given input data and build a statistical
+    model to repair them.
+
+    .. versionchanged:: 0.1.0
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -50,7 +56,7 @@ class RepairModel():
         self.error_cells: Optional[Union[str, DataFrame]] = None
         # To find error cells, the NULL detector is used by default
         self.error_detectors: List[ErrorDetector] = [NullErrorDetector()]
-        self.discrete_thres: float = 80
+        self.discrete_thres: int = 80
         self.min_corr_thres: float = 0.70
         self.domain_threshold_alpha: float = 0.0
         self.domain_threshold_beta: float = 0.70
@@ -82,9 +88,6 @@ class RepairModel():
         # 'DATA AUGMENTATION LEARNING', in the paper.
         self.distance: Distance = Levenshtein()
 
-        # Internally used to check elapsed time
-        self._timer_base: Optional[float] = None
-
         # Temporary views to keep intermediate results; these views are automatically
         # created when repairing data, and then dropped finally.
         self._intermediate_views_on_runtime: List[str] = []
@@ -95,108 +98,304 @@ class RepairModel():
         self._repair_api = self._jvm.RepairApi
 
     def setDbName(self, db_name: str) -> "RepairModel":
+        """Specifies the database name for an input table.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        db_name : str
+            database name (default: '').
+        """
         if type(self.input) is DataFrame:
-            raise ValueError("Can not specify a database name when input is `DataFrame`")
+            raise TypeError("Can not specify a database name when input is `DataFrame`")
         self.db_name = db_name
         return self
 
     def setTableName(self, table_name: str) -> "RepairModel":
-        assert type(table_name) is str
+        """Specifies the table or view name to repair data.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        table_name : str
+            table or view name.
+        """
+        if type(table_name) is not str:
+            raise TypeError("table name must be str")
         self.input = table_name
         return self
 
-    def setInput(self, input: Any) -> "RepairModel":
-        assert type(input) is str or type(input) is DataFrame
+    def setInput(self, input: Union[str, DataFrame]) -> "RepairModel":
+        """Specifies the table/view name or :class:`DataFrame` to repair data.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        input: str, :class:`DataFrame`
+            table/view name or :class:`DataFrame`.
+        """
+        if type(input) is not str and type(input) is not DataFrame:
+            raise TypeError("input must be str or `DataFrame`")
         if type(input) is DataFrame:
             self.db_name = ""
         self.input = input
         return self
 
     def setRowId(self, row_id: str) -> "RepairModel":
+        """Specifies the table name or :class:`DataFrame` to repair data.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        input: str
+            the column where all values are different.
+        """
         self.row_id = row_id
         return self
 
-    def setErrorCells(self, error_cells: Any) -> "RepairModel":
-        assert type(error_cells) is str or type(error_cells) is DataFrame
+    def setErrorCells(self, error_cells: Union[str, DataFrame]) -> "RepairModel":
+        """Specifies the table/view name or :class:`DataFrame` defining where error cells are.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        input: str, :class:`DataFrame`
+            table/view name or :class:`DataFrame`.
+
+        Examples
+        --------
+        >>> spark.table("error_cells").show()
+        +---+---------+
+        |tid|attribute|
+        +---+---------+
+        |  3|      Sex|
+        | 12|      Age|
+        | 16|   Income|
+        +---+---------+
+
+        >>> df = scavenger.repair.setInput("adult").setRowId("tid")
+        ...     .setErrorCells("error_cells").run()
+        >>> df.show()
+        +---+---------+-------------+-----------+
+        |tid|attribute|current_value|   repaired|
+        +---+---------+-------------+-----------+
+        |  3|      Sex|         null|     Female|
+        | 12|      Age|         null|      18-21|
+        | 16|   Income|         null|MoreThan50K|
+        +---+---------+-------------+-----------+
+        """
+        if type(error_cells) is not str and type(error_cells) is not DataFrame:
+            raise TypeError("error cells must be str or `DataFrame`")
         self.error_cells = error_cells
         return self
 
     def setErrorDetector(self, detector: ErrorDetector) -> "RepairModel":
+        """
+        Specifies the :class:`ErrorDetector` derived class to implement
+        a logic to detect error cells.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        detector: derived class of :class:`ErrorDetector`
+            specifies how to detect error cells. Available classes are as follows:
+
+            * :class:`RegExErrorDetector`: detects error cells based on a regular expresson.
+            * :class:`OutlierErrorDetector`: detects error cells based on the Gaussian distribution.
+            * :class:`ConstraintErrorDetector`: detects error cells based on integrity rules
+              defined by denial constraints.
+        """
         if not isinstance(detector, ErrorDetector):
-            raise ValueError("Error detector must derive a base class "
-                             "`repair.detectors.ErrorDetector`")
+            raise TypeError("Error detector must derive a base class "
+                            "`repair.detectors.ErrorDetector`")
         self.error_detectors.append(detector)
         return self
 
-    def setDiscreteThreshold(self, thres: float) -> "RepairModel":
-        self.discrete_thres = thres
+    def setDiscreteThreshold(self, thres: int) -> "RepairModel":
+        """Specifies max domain size of discrete values.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        thres: int
+            max domain size of discrete values. The values must be bigger than 1 and
+            the default value is 80.
+        """
+        if int(thres) < 2:
+            raise ValueError("threshold must be bigger than 1")
+        self.discrete_thres = int(thres)
         return self
 
     def setMinCorrThreshold(self, thres: float) -> "RepairModel":
-        self.min_corr_thres = thres
+        """Specifies a threshold to decide which columns are used to compute domains.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        thres: float
+           threshold value. The value must be in [0.0, 1.0] and
+           the default value is 0.7.0.
+        """
+        self.min_corr_thres = float(thres)
         return self
 
     def setDomainThresholds(self, alpha: float, beta: float) -> "RepairModel":
-        self.domain_threshold_alpha = alpha
-        self.domain_threshold_beta = beta
+        """Specifies a thresholds to reduce domain size.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        thres: float
+           threshold values. The values must be in [0.0, 1.0] and
+           the default values of alpha and beta are 0.0 and 0.70, respectively.
+        """
+        self.domain_threshold_alpha = float(alpha)
+        self.domain_threshold_beta = float(beta)
         return self
 
     def setAttrMaxNumToComputeDomains(self, max: int) -> "RepairModel":
-        self.max_attrs_to_compute_domains = max
+        """
+        Specifies the max number of attributes to compute posterior probabiity
+        based on the Naive Bayes assumption.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        thres: int
+            the max number of attributes (default: 4).
+        """
+        self.max_attrs_to_compute_domains = int(max)
         return self
 
     def setAttrStatSampleRatio(self, ratio: float) -> "RepairModel":
-        self.attr_stat_sample_ratio = ratio
+        """Specifies a sample ratio for table used to compute co-occurrence frequency.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        ratio: float
+            sampling ratio (default: 1.0).
+        """
+        self.attr_stat_sample_ratio = float(ratio)
         return self
 
     def setAttrStatThreshold(self, ratio: float) -> "RepairModel":
-        self.attr_stat_threshold = ratio
+        """Specifies a threshold for filtering out low frequency.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        ratio: float
+            threshold value (default: 0.0).
+        """
+        self.attr_stat_threshold = float(ratio)
         return self
 
     def setTrainingDataSampleRatio(self, ratio: float) -> "RepairModel":
-        self.training_data_sample_ratio = ratio
+        """Specifies a sample ratio for table used to build statistical models.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        ratio: float
+            sampling ratio (default: 1.0).
+        """
+        self.training_data_sample_ratio = float(ratio)
         return self
 
     def setMaxTrainingColumnNum(self, n: int) -> "RepairModel":
-        self.max_training_column_num = n
+        """Specifies the max number of columns used to build models.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        n: int
+            the max number of columns (default: None).
+        """
+        self.max_training_column_num = int(n)
         return self
 
     def setSmallDomainThreshold(self, thres: int) -> "RepairModel":
-        self.small_domain_threshold = thres
+        """Specifies max domain size for low-cardinality catogory encoding.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        thres: int
+            threshold value (default: 12).
+        """
+        self.small_domain_threshold = int(thres)
         return self
 
     def setInferenceOrder(self, inference_order: str) -> "RepairModel":
-        self.inference_order = inference_order
-        return self
+        """Specifies how to order target columns when building models.
 
-    def setLGBNumLeaves(self, n: int) -> "RepairModel":
-        self.lgb_num_leaves = n
-        return self
+        .. versionchanged:: 0.1.0
 
-    def setLGBMaxDepth(self, n: int) -> "RepairModel":
-        self.lgb_max_depth = n
+        Parameters
+        ----------
+        inference_order: str
+            built-in logic name (default: 'entropy').
+        """
+        self.inference_order = str(inference_order)
         return self
 
     def setRepairUpdates(self, repair_updates: Any) -> "RepairModel":
-        assert type(repair_updates) is str or type(repair_updates) is DataFrame
+        """Specifies repair updates for input data.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        repair_updates: str, :class:`DataFrame`
+            user-specified repair updates.
+        """
+        if type(repair_updates) is not str and type(repair_updates) is not DataFrame:
+            raise TypeError("repair updates must be str or `DataFrame`")
         self.repair_updates = repair_updates
         return self
 
     def setMaximalLikelihoodRepairEnabled(self, enabled: bool) -> "RepairModel":
-        self.maximal_likelihood_repair_enabled = enabled
+        """Specifies whether to enable maximal likelihood repair.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        enabled: bool
+            If set to ``True``, uses maximal likelihood repair (default: ``False``).
+        """
+        self.maximal_likelihood_repair_enabled = bool(enabled)
         return self
 
     def setRepairDelta(self, delta: int) -> "RepairModel":
+        """Specifies the max number of applied repairs.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        delta: int
+            delta value (default: None). The value must be positive.
+        """
         if delta <= 0:
             raise ValueError("Repair delta must be positive")
-        self.repair_delta = delta
-        return self
-
-    def setDistance(self, distance: Distance) -> "RepairModel":
-        if not isinstance(distance, Distance):
-            raise ValueError("Distance function must derive a base class "
-                             "`repair.distances.Distance`")
-        self.distance = distance
+        self.repair_delta = int(delta)
         return self
 
     @property
@@ -853,6 +1052,39 @@ class RepairModel():
 
     def run(self, detect_errors_only: bool = False, compute_repair_candidate_prob: bool = False,
             compute_training_target_hist: bool = False, repair_data: bool = False) -> DataFrame:
+        """
+        Starts processing to detect error cells in given input data and build a statistical
+        model to repair them.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        detect_errors_only : bool
+            If set to ``True``, returns detected error cells (default: ``False``).
+        compute_repair_candidate_prob : bool
+            If set to ``True``, returns probabiity mass function of repairs (default: ``False``).
+        compute_training_target_hist: bool
+            If set to ``True``, returns a histogram to analyze training data (default: ``False``).
+        repair_data : bool
+            If set to ``True``, returns repaired data (default: False).
+
+        Examples
+        --------
+        >>> df = scavenger.repair.setInput(spark.table("adult")).setRowId("tid").run()
+        >>> df.show()
+        +---+---------+-------------+-----------+
+        |tid|attribute|current_value|   repaired|
+        +---+---------+-------------+-----------+
+        | 12|      Age|         null|      18-21|
+        | 12|      Sex|         null|     Female|
+        |  7|      Sex|         null|     Female|
+        |  3|      Sex|         null|     Female|
+        |  5|      Age|         null|      18-21|
+        |  5|   Income|         null|MoreThan50K|
+        | 16|   Income|         null|MoreThan50K|
+        +---+---------+-------------+-----------+
+        """
         if self.input is None or self.row_id is None:
             raise ValueError("`setInput` and `setRowId` should be called before repairing")
         if self.maximal_likelihood_repair_enabled and self.repair_delta is None:
@@ -878,6 +1110,7 @@ class RepairModel():
             input_df, continous_attrs = self._check_input_table(env)
 
             # If `self.repair_updates` specified, just applies repair updates
+            # TODO: Move this part into `scavenger.misc`
             if self.repair_updates is not None:
                 ret_as_json = self._repair_api.repairAttrsFrom(
                     self._repair_updates, env["input_table"], self.row_id)
@@ -895,8 +1128,3 @@ class RepairModel():
                              repair_data)
         finally:
             self._release_resources()
-
-    @staticmethod
-    def version() -> str:
-        # TODO: Extracts a version string from the root pom.xml
-        return "0.1.0-spark3.0-EXPERIMENTAL"

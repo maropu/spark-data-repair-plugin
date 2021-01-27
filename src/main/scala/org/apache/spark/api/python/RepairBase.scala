@@ -108,7 +108,7 @@ abstract class RepairBase extends LoggingBasedOnLevel {
       // TODO: Implicitly adds unique row IDs if they don't exist in a given table
       throw new SparkException(s"Column '$rowId' does not exist in '$qualifiedInputName'.")
     }
-    if (inputDf.columns.length <= 1) {
+    if (rowId.nonEmpty && inputDf.columns.length <= 1) {
       throw new SparkException(
         s"At least one valid column needs to exist, but only one column '$rowId' exists.")
     }

@@ -198,7 +198,7 @@ scavenger.repair
 
   // Parameters for Repair Model Training
   .setTrainingDataSampleRatio(float)           // sample ratio for table used to build statistical models (default: 1.0)
-  .setMaxTrainingColumnNum(int)                // max number of columns used to build models
+  .setMaxTrainingColumnNum(int)                // max number of columns used when building models
   .setSmallDomainThreshold(int)                // max domain size for low-cardinality catogory encoding (default: 12)
   .setInferenceOrder(str)                      // how to order target columns to build models (default: 'entropy')
 

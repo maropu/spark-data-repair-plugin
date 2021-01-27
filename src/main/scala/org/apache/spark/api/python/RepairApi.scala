@@ -332,8 +332,8 @@ object RepairApi extends RepairBase {
 
     require(0 < maxAttrsToComputeDomains, "maxAttrsToComputeDomains should be greater than 0.")
     require(0.0 <= minCorrThres && minCorrThres < 1.0, "minCorrThres should be in [0.0, 1.0).")
-    require(0.0 <= domain_threshold_alpha && domain_threshold_alpha < 1.0,
-      "domain_threashold_alpha should be in [0.0, 1.0).")
+    require(0.0 <= domain_threshold_alpha && domain_threshold_alpha <= 1.0,
+      "domain_threashold_alpha should be in [0.0, 1.0].")
     require(0.0 <= domain_threshold_beta && domain_threshold_beta <= 1.0,
       "domain_threashold_beta should be in [0.0, 1.0].")
 

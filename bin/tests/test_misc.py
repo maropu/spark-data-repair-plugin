@@ -114,7 +114,7 @@ class RepairModelTests(ReusedSQLTestCase):
         with self.tempView("tempView"):
             self.spark.range(100).selectExpr("STRING(id)", "id % 9 v1", "DOUBLE(id % 17) v2") \
                 .createOrReplaceTempView("tempView")
-            misc = RepairMisc().options({"table_name": "tempView"})
+            misc = RepairMisc().option("table_name", "tempView")
             misc.computeAndGetStats().orderBy("attrName").show(truncate=False)
             self.assertEqual(
                 misc.computeAndGetStats().orderBy("attrName").collect(), [
