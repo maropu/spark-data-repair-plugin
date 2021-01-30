@@ -25,13 +25,6 @@ ROOT_DIR="$(cd "`dirname $0`"/..; pwd)"
 # Loads some variables from `pom.xml`
 . ${ROOT_DIR}/bin/package.sh && get_package_variables_from_pom "${ROOT_DIR}"
 
-# Installs required binaries if necessary
-`${ROOT_DIR}/libs/install.sh`
-
-# Defines required enveironment variables
-SCHEMASPY_PACKAGE="${ROOT_DIR}/libs/schemaspy-${SCHEMASPY_VERSION}.jar"
-JDBC_DRIVERS="${ROOT_DIR}/libs"
-
 # Splits input arguments into two parts: pyspark confs and args
 parse_args_for_pyspark() {
   SPARK_CONF=()
@@ -76,9 +69,5 @@ find_package
 # Then, launches a pyspark with given arguments
 PYTHONPATH="${ROOT_DIR}/bin" \
 PYTHONSTARTUP="${ROOT_DIR}/bin/.startup.py" \
-  SCHEMASPY_PACKAGE_PATH=${SCHEMASPY_PACKAGE} \
-  JDBC_DRIVERS_HOME=${JDBC_DRIVERS} \
-  JDBC_SQLITE_VERSION=${SQLITE_JDBC_VERSION} \
-  JDBC_POSTGRESQL_VERSION=${POSTGRESQL_JDBC_VERSION} \
   exec pyspark --jars=${PACKAGE} $(join_by " " ${SPARK_CONF[@]}) $(join_by " " ${ARGS[@]})
 
