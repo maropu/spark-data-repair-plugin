@@ -18,13 +18,12 @@
 import os
 import unittest
 
-from testutils import ReusedSQLTestCase, load_testdata
-
 from pyspark import SparkConf
 from pyspark.sql import Row
 
 from repair.detectors import ConstraintErrorDetector, NullErrorDetector, \
     OutlierErrorDetector, RegExErrorDetector
+from repair.tests.testutils import ReusedSQLTestCase, load_testdata
 
 
 class ErrorDetectorTests(ReusedSQLTestCase):

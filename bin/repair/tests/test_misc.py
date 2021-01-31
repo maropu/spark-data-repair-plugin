@@ -18,12 +18,11 @@
 import os
 import unittest
 
-from testutils import ReusedSQLTestCase, load_testdata
-
 from pyspark import SparkConf
 from pyspark.sql import Row
 
 from repair.misc import RepairMisc
+from repair.tests.testutils import ReusedSQLTestCase, load_testdata
 
 
 class RepairModelTests(ReusedSQLTestCase):

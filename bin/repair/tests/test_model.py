@@ -18,15 +18,14 @@
 import os
 import unittest
 
-from testutils import ReusedSQLTestCase, load_testdata
-from requirements import have_pandas, have_pyarrow, \
-    pandas_requirement_message, pyarrow_requirement_message
-
 from pyspark import SparkConf
 from pyspark.sql import Row
 
 from repair.model import RepairModel
 from repair.detectors import ConstraintErrorDetector, RegExErrorDetector
+from repair.tests.requirements import have_pandas, have_pyarrow, \
+    pandas_requirement_message, pyarrow_requirement_message
+from repair.tests.testutils import ReusedSQLTestCase, load_testdata
 
 
 @unittest.skipIf(

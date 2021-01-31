@@ -1,0 +1,11 @@
+RepairModelTest (unittest.loader._FailedTest) ... ERROR
+
+======================================================================
+ERROR: RepairModelTest (unittest.loader._FailedTest)
+----------------------------------------------------------------------
+AttributeError: module '__main__' has no attribute 'RepairModelTest'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+FAILED (errors=1)

@@ -17,34 +17,40 @@
 # limitations under the License.
 #
 
-set -e -o pipefail
 
-# Sets the root directory
-ROOT_DIR="$(cd "`dirname $0`"/..; pwd)"
+FWDIR="$(cd "`dirname $0`"/..; pwd)"
+cd "$FWDIR"
+
+PYTHON_VERSION_CHECK=$(python3 -c 'import sys; print(sys.version_info < (3, 6, 0))')
+if [[ "$PYTHON_VERSION_CHECK" == "True" ]]; then
+  echo "Python versions prior to 3.6 are not supported."
+  exit -1
+fi
 
 # Loads some variables from `pom.xml`
-. ${ROOT_DIR}/bin/package.sh && get_package_variables_from_pom "${ROOT_DIR}"
+. ./bin/package.sh && get_package_variables_from_pom "${FWDIR}"
 
 if [ -z "$CONDA_DISABLED" ]; then
   # Activate a conda virtual env
-  . ${ROOT_DIR}/bin/conda.sh && activate_conda_virtual_env "${ROOT_DIR}"
+  . ./bin/conda.sh && activate_conda_virtual_env "${FWDIR}"
 fi
 
 # Checks codestyle and format before running unit tests
-${ROOT_DIR}/bin/lint-python
+./bin/lint-python
 
 # Checks type constraints before running unit tests
 echo "Running static type checks..."
-mypy --strict-optional --disallow-untyped-defs --disallow-untyped-calls --ignore-missing-imports \
-  "${ROOT_DIR}/bin/repair" || exit -1
+mypy  --config-file ${FWDIR}/bin/mypy.ini \
+  --strict-optional --disallow-untyped-defs --disallow-untyped-calls --ignore-missing-imports \
+  "./bin/repair" || exit -1
 
 # Resolves a path of the test package
-PACKAGE_JAR="${ROOT_DIR}/target/${PACKAGE_JAR_NAME}"
+PACKAGE_JAR="${FWDIR}/target/${PACKAGE_JAR_NAME}"
 if [ ! -e "$PACKAGE_JAR" ]; then
   echo "${PACKAGE_JAR} not found, so you need to run './build/mvn clean package' first" 1>&2
   exit -1
 fi
 
-exec python -u ${ROOT_DIR}/bin/run-tests.py \
-  --package=${PACKAGE_JAR} --mod ${ROOT_DIR}/bin --data ${ROOT_DIR}/bin/tests/testdata "$@"
+exec python3 -u ./bin/run-tests.py \
+  --package=${PACKAGE_JAR} --module ${FWDIR}/bin --data ${FWDIR}/bin/testdata "$@"
 

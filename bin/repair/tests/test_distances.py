@@ -17,9 +17,8 @@
 
 import unittest
 
-from testutils import ReusedSQLTestCase
-
 from repair.distances import Levenshtein
+from repair.tests.testutils import ReusedSQLTestCase
 
 
 class DistanceTests(ReusedSQLTestCase):
