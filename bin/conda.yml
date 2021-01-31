@@ -13,7 +13,6 @@ dependencies:
   - python-Levenshtein=0.12.0
   - matplotlib=3.2.2
   - mypy=0.790
-  - coverage=5.4
   - pip:
     - numpy==1.16.1
 

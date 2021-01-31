@@ -214,19 +214,6 @@ def parse_opts():
     return args
 
 
-def _check_coverage(python_exec):
-    # Make sure if coverage is installed.
-    try:
-        subprocess.check_output(
-            [python_exec, "-c", "import coverage"],
-            stderr=open(os.devnull, 'w'))
-    except:
-        print_red("Coverage is not installed in Python executable '%s' "
-                  "but 'COVERAGE_PROCESS_START' environment variable is set, "
-                  "exiting." % python_exec)
-        sys.exit(-1)
-
-
 def main():
     opts = parse_opts()
 
@@ -254,11 +241,6 @@ def main():
 
     task_queue = Queue.PriorityQueue()
     for python_exec in python_execs:
-        # Check if the python executable has coverage installed when 'COVERAGE_PROCESS_START'
-        # environmental variable is set.
-        if "COVERAGE_PROCESS_START" in os.environ:
-            _check_coverage(python_exec)
-
         python_implementation = subprocess.check_output(
             [python_exec, "-c", "import platform; print(platform.python_implementation())"],
             universal_newlines=True).strip()
