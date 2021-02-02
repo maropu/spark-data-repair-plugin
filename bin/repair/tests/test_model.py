@@ -30,7 +30,7 @@ from repair.tests.testutils import ReusedSQLTestCase, load_testdata
 
 @unittest.skipIf(
     not have_pandas or not have_pyarrow,
-    pandas_requirement_message or pyarrow_requirement_message)
+    pandas_requirement_message or pyarrow_requirement_message)  # type: ignore
 class RepairModelTests(ReusedSQLTestCase):
 
     @classmethod
