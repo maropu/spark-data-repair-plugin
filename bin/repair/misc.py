@@ -19,7 +19,7 @@
 
 from typing import Dict, List
 
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import DataFrame, SparkSession  # type: ignore[import]
 
 
 class RepairMisc():

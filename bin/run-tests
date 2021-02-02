@@ -21,28 +21,22 @@
 FWDIR="$(cd "`dirname $0`"/..; pwd)"
 cd "$FWDIR"
 
+if [ -z "$CONDA_DISABLED" ]; then
+  # Activate a conda virtual env
+  . ./bin/conda.sh && activate_conda_virtual_env "${FWDIR}"
+fi
+
 PYTHON_VERSION_CHECK=$(python3 -c 'import sys; print(sys.version_info < (3, 6, 0))')
 if [[ "$PYTHON_VERSION_CHECK" == "True" ]]; then
   echo "Python versions prior to 3.6 are not supported."
   exit -1
 fi
 
+# Static code analysis before running unit tests
+./bin/lint-python || exit -1
+
 # Loads some variables from `pom.xml`
 . ./bin/package.sh && get_package_variables_from_pom "${FWDIR}"
-
-if [ -z "$CONDA_DISABLED" ]; then
-  # Activate a conda virtual env
-  . ./bin/conda.sh && activate_conda_virtual_env "${FWDIR}"
-fi
-
-# Checks codestyle and format before running unit tests
-./bin/lint-python
-
-# Checks type constraints before running unit tests
-echo "Running static type checks..."
-mypy  --config-file ${FWDIR}/bin/mypy.ini \
-  --strict-optional --disallow-untyped-defs --disallow-untyped-calls --ignore-missing-imports \
-  "./bin/repair" || exit -1
 
 # Resolves a path of the test package
 PACKAGE_JAR="${FWDIR}/target/${PACKAGE_JAR_NAME}"

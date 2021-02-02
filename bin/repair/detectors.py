@@ -20,7 +20,7 @@
 from abc import ABCMeta, abstractmethod
 from typing import Optional
 
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import DataFrame, SparkSession  # type: ignore[import]
 
 
 class ErrorDetector(metaclass=ABCMeta):

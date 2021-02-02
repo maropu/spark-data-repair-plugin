@@ -23,14 +23,14 @@ import functools
 import heapq
 import json
 import logging
-import numpy as np
-import pandas as pd
+import numpy as np   # type: ignore[import]
+import pandas as pd  # type: ignore[import]
 import time
 from functools import wraps
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from pyspark.sql import DataFrame, Row, SparkSession, functions
-from pyspark.sql.functions import col
+from pyspark.sql import DataFrame, Row, SparkSession, functions  # type: ignore[import]
+from pyspark.sql.functions import col  # type: ignore[import]
 
 from repair.detectors import ErrorDetector, NullErrorDetector
 from repair.distances import Distance, Levenshtein
@@ -605,7 +605,7 @@ class RepairModel():
         return self._spark.table(json.loads(ret_as_json)["histogram"])
 
     def _show_histogram(self, df: DataFrame) -> None:
-        import matplotlib.pyplot as plt
+        import matplotlib.pyplot as plt  # type: ignore[import]
         fig = plt.figure()
         num_targets = df.count()
         for index, row in enumerate(df.collect()):
@@ -728,7 +728,7 @@ class RepairModel():
     def _transform_features(self, env: Dict[str, str], X: pd.DataFrame, features: List[str],
                             continous_attrs: List[str]) -> Tuple[pd.DataFrame, Any]:
         # Transforms discrete attributes with some categorical encoders if necessary
-        import category_encoders as ce
+        import category_encoders as ce  # type: ignore[import]
         discrete_columns = [c for c in features if c not in continous_attrs]
         if len(discrete_columns) == 0:
             # TODO: Needs to normalize continous values
@@ -758,7 +758,7 @@ class RepairModel():
         return X, transformers
 
     def _build_model(self, X: pd.DataFrame, y: pd.DataFrame, is_discrete: bool) -> pd.DataFrame:
-        import lightgbm as lgb
+        import lightgbm as lgb  # type: ignore[import]
         if is_discrete:
             clf = lgb.LGBMClassifier(
                 boosting_type="gbdt",

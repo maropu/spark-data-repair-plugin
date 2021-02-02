@@ -42,5 +42,5 @@ class Levenshtein(Distance):
         Distance.__init__(self, 'Levenshtein')
 
     def _compute_impl(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
-        import Levenshtein
+        import Levenshtein  # type: ignore[import]
         return float(Levenshtein.distance(str(x), str(y)))
