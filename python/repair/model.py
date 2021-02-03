@@ -400,7 +400,7 @@ class RepairModel():
 
     @property
     def _input_table(self) -> str:
-        return self._create_temp_view(self.input) if type(self.input) is DataFrame \
+        return self._create_temp_view(self.input, "input") if type(self.input) is DataFrame \
             else str(self.input)
 
     @property
@@ -410,14 +410,14 @@ class RepairModel():
         if not all(c in df.columns for c in (self.row_id, "attribute")):  # type: ignore
             raise ValueError(f"Error cells must have `{self.row_id}` and "
                              "`attribute` in columns")
-        return self._create_temp_view(df)
+        return self._create_temp_view(df, "error_cells")
 
     @property
     def _repair_updates(self) -> str:
         df = self.repair_updates if type(self.repair_updates) is DataFrame \
             else self._spark.table(str(self.repair_updates))
         # TODO: Validates a schema of `self.repair_updates`
-        return self._create_temp_view(df)
+        return self._create_temp_view(df, "repair_updates")
 
     def _clear_job_group(self) -> None:
         # TODO: Uses `SparkContext.clearJobGroup()` instead
@@ -462,12 +462,14 @@ class RepairModel():
         return temp_name
 
     def _flatten(self, df: DataFrame) -> DataFrame:
-        jdf = self._jvm.RepairMiscApi.flattenTable("", self._create_temp_view(df), self.row_id)
+        jdf = self._jvm.RepairMiscApi.flattenTable(
+            "", self._create_temp_view(df), self.row_id)
         return DataFrame(jdf, self._spark._wrapped)
 
     def _release_resources(self) -> None:
         while self._intermediate_views_on_runtime:
             v = self._intermediate_views_on_runtime.pop()
+            logging.debug(f"Dropping an auto-generated view: {v}")
             self._spark.sql(f"DROP VIEW IF EXISTS {v}")
 
     def _check_input_table(self, env: Dict[str, str]) -> Tuple[str, List[str]]:
@@ -486,7 +488,7 @@ class RepairModel():
         error_cells_dfs = [d.detect() for d in self.error_detectors]
 
         err_cells_df = functools.reduce(lambda x, y: x.union(y), error_cells_dfs)
-        err_cells = self._create_temp_view(err_cells_df.distinct().cache())
+        err_cells = self._create_temp_view(err_cells_df.distinct().cache(), "error_cells")
         return err_cells
 
     @_spark_job_group(name="error detection")
@@ -548,6 +550,7 @@ class RepairModel():
                       "before computing error domains...".format(
                           self.attr_stat_sample_ratio,
                           self.attr_stat_threshold))
+
         env.update(json.loads(self._repair_api.computeAttrStats(
             env["discrete_features"], env["gray_cells"], self.row_id,
             self.attr_stat_sample_ratio,
@@ -573,7 +576,7 @@ class RepairModel():
         error_cells_df = weak_df.where("value IS NULL").drop("value").cache()
         weak_df = weak_df.where("value IS NOT NULL") \
             .selectExpr(self.row_id, "attribute", "value repaired")
-        env["weak"] = self._create_temp_view(weak_df.cache())
+        env["weak"] = self._create_temp_view(weak_df.cache(), "weak")
         ret_as_json = self._repair_api.repairAttrsFrom(
             env["weak"], env["repair_base"], self.row_id)
         env["partial_repaired"] = json.loads(ret_as_json)["repaired"]
@@ -649,7 +652,7 @@ class RepairModel():
         # Computes domain sizes for training data
         logging.info("[Repair Model Training Phase] Collecting training data stats before "
                      "building ML models...")
-        env["train"] = self._create_temp_view(train_df)
+        env["train"] = self._create_temp_view(train_df, "train")
         env.update(json.loads(self._repair_api.computeDomainSizes(env["train"])))
 
         # Sorts target columns by domain size
@@ -837,7 +840,7 @@ class RepairModel():
         # TODO: Fix this
         # grouping_key = self._temp_name("__grouping_key")
         grouping_key = "__grouping_key"
-        env["dirty"] = self._create_temp_view(dirty_df)
+        env["dirty"] = self._create_temp_view(dirty_df, "dirty")
         dirty_df = dirty_df.withColumn(
             grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
 
@@ -1032,7 +1035,8 @@ class RepairModel():
                 return top_delta_repairs_df
 
             # If `repair_data` is True, applys the selected repair updates into `dirty`
-            env["top_delta_repairs"] = self._create_temp_view(top_delta_repairs_df)
+            env["top_delta_repairs"] = \
+                self._create_temp_view(top_delta_repairs_df, "top_delta_repairs")
             env.update(json.loads(self._repair_api.repairAttrsFrom(env["top_delta_repairs"],
                                   env["dirty"], self.row_id)))
             repaired_df = self._register_and_get_df(env["repaired"])
