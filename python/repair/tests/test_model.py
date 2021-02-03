@@ -116,6 +116,9 @@ class RepairModelTests(ReusedSQLTestCase):
             lambda: api.run(compute_repair_candidate_prob=True, repair_data=True))
 
     def test_multiple_run(self):
+        # Checks if auto-generated views are dropped finally
+        current_view_nums = self.spark.sql("SHOW VIEWS").count()
+
         expected_result = self.spark.table("adult_repair") \
             .orderBy("tid", "attribute").collect()
 
@@ -129,6 +132,10 @@ class RepairModelTests(ReusedSQLTestCase):
 
         _test_basic()  # first run
         _test_basic()  # second run
+
+        self.assertEqual(
+            self.spark.sql("SHOW VIEWS").count(),
+            current_view_nums)
 
     # TODO: Fix a test failure in the test below:
     @unittest.skip(reason="")
