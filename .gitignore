@@ -4,6 +4,8 @@ hs_err_pid*
 .idea/
 .idea_modules/
 bin/pycodestyle-*
+bin/docs/build/*
+bin/docs/source/apis/*
 build/*.jar
 build/apache-maven*
 build/scala*
@@ -29,4 +31,3 @@ spark-warehouse
 libs/postgresql-*.jar
 libs/schemaspy-*.jar
 libs/sqlite-jdbc-*.jar
-

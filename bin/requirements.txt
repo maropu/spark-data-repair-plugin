@@ -8,4 +8,5 @@ python-Levenshtein==0.12.0
 matplotlib==3.2.2
 mypy==0.790
 numpy==1.16.1
-
+sphinx==3.0.4
+numpydoc==1.1.0
