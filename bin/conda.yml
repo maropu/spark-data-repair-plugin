@@ -14,6 +14,7 @@ dependencies:
   - matplotlib=3.2.2
   - mypy=0.790
   - sphinx=3.0.4
+  - pydata-sphinx-theme=0.4.3
   - numpydoc=1.1.0
   - pip:
     - numpy==1.16.1

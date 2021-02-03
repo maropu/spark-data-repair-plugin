@@ -212,6 +212,13 @@ function sphinx_test {
         return
     fi
 
+    PYTHON_HAS_THEME=$("$PYTHON_EXECUTABLE" -c 'import importlib.util; print(importlib.util.find_spec("pydata_sphinx_theme") is not None)')
+    if [[ "$PYTHON_HAS_THEME" == "False" ]]; then
+        echo "$PYTHON_EXECUTABLE does not have pydata_sphinx_theme installed. Skipping Sphinx build for now."
+        echo
+        return
+    fi
+
     PYTHON_HAS_NUMPYDOC=$("$PYTHON_EXECUTABLE" -c 'import importlib.util; print(importlib.util.find_spec("numpydoc") is not None)')
     if [[ "$PYTHON_HAS_NUMPYDOC" == "False" ]]; then
         echo "$PYTHON_EXECUTABLE does not have numpydoc installed. Skipping Sphinx build for now."
