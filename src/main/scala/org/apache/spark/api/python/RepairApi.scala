@@ -156,7 +156,8 @@ object RepairApi extends RepairBase {
         spark.sql(sqls.mkString(" UNION ALL "))
       }
     }
-    Seq("histogram" -> createAndCacheTempView(histogramDf)).asJson
+    val histgramView = createAndCacheTempView(histogramDf, "histogram")
+    Seq("histogram" -> histgramView).asJson
   }
 
   def convertToDiscreteFeatures(
@@ -168,7 +169,8 @@ object RepairApi extends RepairBase {
       s"rowId=$rowId discreteThres=$discreteThres")
     val (discreteDf, statMap) = doConvertToDiscreteFeatures(qualifiedName, discreteThres, Set(rowId))
     val distinctStats = statMap.mapValues(_.distinctCount.toString)
-    Seq("discrete_features" -> createAndCacheTempView(discreteDf),
+    val discreteFeaturesView = createAndCacheTempView(discreteDf, "discrete_features")
+    Seq("discrete_features" -> discreteFeaturesView,
       "distinct_stats" -> distinctStats
     ).asJson
   }
@@ -225,7 +227,8 @@ object RepairApi extends RepairBase {
            """.stripMargin)
       }
     }
-    Seq("repaired" -> createAndCacheTempView(repaired)).asJson
+    val repairedView = createAndCacheTempView(repaired, "repaired")
+    Seq("repaired" -> repairedView).asJson
   }
 
   def convertErrorCellsToNull(discreteAttrView: String, errCellView: String, rowId: String): String = {
@@ -264,7 +267,8 @@ object RepairApi extends RepairBase {
            |ON $discreteAttrView.$rowId = $errAttrView.$rowId
          """.stripMargin)
     }
-    Seq("repair_base" -> createAndCacheTempView(repairBase)).asJson
+    val repairBaseView = createAndCacheTempView(repairBase, "repair_base")
+    Seq("repair_base" -> repairBaseView).asJson
   }
 
   def computeAttrStats(
@@ -316,7 +320,8 @@ object RepairApi extends RepairBase {
            """.stripMargin)
       }
     }
-    Seq("attr_stats" -> createAndCacheTempView(statDf)).asJson
+    val attrStatsView = createAndCacheTempView(statDf, "attr_stats")
+    Seq("attr_stats" -> attrStatsView).asJson
   }
 
   def computeDomainInErrorCells(
@@ -610,7 +615,7 @@ object RepairApi extends RepairBase {
     }
 
     val cellDomainView = withJobDescription("compute domain values with posteriori probability") {
-      createAndCacheTempView(cellDomainDf)
+      createAndCacheTempView(cellDomainDf, "cell_domain")
     }
     // Checks if # of rows in `cellDomainView` is the same with # of error cells
     assert(cellDomainDf.count == spark.table(errCellView).count)

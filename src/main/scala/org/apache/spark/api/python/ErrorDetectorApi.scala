@@ -19,6 +19,7 @@ package org.apache.spark.api.python
 
 import java.net.URI
 
+import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 
 import org.apache.spark.python.DenialConstraints
@@ -83,26 +84,31 @@ abstract class ErrorDetector extends RepairBase {
   protected def loggingErrorStats(
       detectorIdent: String,
       inputName: String,
-      errCellView: String,
-      attrsToRepair: Seq[String]): Unit = {
+      errCellDf: DataFrame): Unit = {
+
+    lazy val attrsToRepair = ArrayBuffer[String]()
 
     logBasedOnLevel({
-      logBasedOnLevel({
+      withTempView(errCellDf) { errCellView =>
         val errorNumOfEachAttribute = {
           val df = spark.sql(s"SELECT attribute, COUNT(1) FROM $errCellView GROUP BY attribute")
-          df.collect.map { case Row(attribute: String, n: Long) => s"$attribute:$n" }
+          df.collect.map { case Row(attribute: String, n: Long) =>
+            attrsToRepair += attribute
+            s"$attribute:$n"
+          }
         }
         s"""
            |$detectorIdent found errors:
            |  ${errorNumOfEachAttribute.mkString("\n  ")}
          """.stripMargin
-      })
-
+      }
+    })
+    logBasedOnLevel({
       val inputDf = spark.table(inputName)
       val tableAttrs = inputDf.schema.map(_.name)
       val tableAttrNum = tableAttrs.length
       val tableRowCnt = inputDf.count()
-      val errCellNum = spark.table(errCellView).count()
+      val errCellNum = errCellDf.count()
       val totalCellNum = tableRowCnt * tableAttrNum
       val errRatio = (errCellNum + 0.0) / totalCellNum
       s"$detectorIdent found $errCellNum/$totalCellNum error cells (${errRatio * 100.0}%) of " +
@@ -132,18 +138,7 @@ object NullErrorDetector extends ErrorDetector {
       }
 
       val errCellDf = spark.sql(sqls.mkString(" UNION ALL "))
-
-      withTempView(errCellDf) { errCellView =>
-        val attrsToRepair = {
-          spark.sql(s"SELECT collect_set(attribute) FROM $errCellView")
-            .collect.head.getSeq[String](0)
-        }
-        loggingErrorStats(
-          "NULL-based error detector",
-          qualifiedName,
-          errCellView,
-          attrsToRepair)
-      }
+      loggingErrorStats("NULL-based error detector", qualifiedName, errCellDf)
       errCellDf
     }
   }
@@ -188,18 +183,7 @@ object RegExErrorDetector extends ErrorDetector {
           emptyTable(inputDf, rowId)
         } else {
           val errCellDf = spark.sql(sqls.mkString(" UNION ALL "))
-
-          withTempView(errCellDf) { errCellView =>
-            val attrsToRepair = {
-              spark.sql(s"SELECT collect_set(attribute) FROM $errCellView")
-                .collect.head.getSeq[String](0)
-            }
-            loggingErrorStats(
-              "RegEx-based error detector",
-              qualifiedName,
-              errCellView,
-              attrsToRepair)
-          }
+          loggingErrorStats("RegEx-based error detector", qualifiedName, errCellDf)
           errCellDf
         }
       }
@@ -265,13 +249,7 @@ object ConstraintErrorDetector extends ErrorDetector {
           }
 
           val errCellDf = spark.sql(sqls.mkString(" UNION ALL "))
-          val errCellView = createAndCacheTempView(errCellDf)
-          loggingErrorStats(
-            "Constraint-based error detector",
-            qualifiedName,
-            errCellView,
-            constraints.references
-          )
+          loggingErrorStats("Constraint-based error detector", qualifiedName, errCellDf)
           errCellDf
         }
       }
@@ -325,13 +303,7 @@ object GaussianOutlierErrorDetector extends ErrorDetector {
       }
 
       val errCellDf = spark.sql(sqls.mkString(" UNION ALL "))
-      val errCellView = createAndCacheTempView(errCellDf)
-      loggingErrorStats(
-        "Outlier-based error detector",
-        qualifiedName,
-        errCellView,
-        continousAttrs
-      )
+      loggingErrorStats("Outlier-based error detector", qualifiedName, errCellDf)
       errCellDf
     }
   }

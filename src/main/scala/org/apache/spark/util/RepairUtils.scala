@@ -51,6 +51,7 @@ object RepairUtils {
   }
 
   def getRandomString(prefix: String = ""): String = {
-    s"$prefix${Utils.getFormattedClassName(this)}_${RandomStringUtils.randomNumeric(12)}"
+    val prefixStr = if (prefix.nonEmpty) prefix else Utils.getFormattedClassName(this)
+    s"${prefixStr}_${RandomStringUtils.randomNumeric(16)}"
   }
 }

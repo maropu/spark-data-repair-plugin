@@ -538,6 +538,14 @@ class RepairModel():
 
         return discrete_ft_df
 
+    def _compute_attr_stats(self, env: Dict[str, str]) -> str:
+        ret = json.loads(self._repair_api.computeAttrStats(
+            env["discrete_features"], env["gray_cells"], self.row_id,
+            self.attr_stat_sample_ratio,
+            self.attr_stat_threshold))
+        self._intermediate_views_on_runtime.append(ret["attr_stats"])
+        return ret["attr_stats"]
+
     @_spark_job_group(name="cell domain analysis")
     def _analyze_error_cell_domain(self, env: Dict[str, str], gray_cells_df: DataFrame,
                                    continous_attrs: List[str]) -> str:
@@ -551,14 +559,11 @@ class RepairModel():
                           self.attr_stat_sample_ratio,
                           self.attr_stat_threshold))
 
-        env.update(json.loads(self._repair_api.computeAttrStats(
-            env["discrete_features"], env["gray_cells"], self.row_id,
-            self.attr_stat_sample_ratio,
-            self.attr_stat_threshold)))
+        attr_stats = self._compute_attr_stats(env)
 
         logging.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
         env.update(json.loads(self._repair_api.computeDomainInErrorCells(
-            env["discrete_features"], env["attr_stats"], env["gray_cells"], self.row_id,
+            env["discrete_features"], attr_stats, env["gray_cells"], self.row_id,
             env["continous_attrs"],
             self.max_attrs_to_compute_domains,
             self.min_corr_thres,

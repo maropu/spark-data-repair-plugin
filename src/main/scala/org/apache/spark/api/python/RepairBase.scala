@@ -74,21 +74,21 @@ abstract class RepairBase extends LoggingBasedOnLevel {
     }
   }
 
-  protected def createAndCacheTempView(df: DataFrame, name: String = ""): String = {
+  protected def createAndCacheTempView(df: DataFrame, name: String = "temp"): String = {
+    val viewName = getRandomString(prefix = name)
+    val numShufflePartitions = df.sparkSession.sessionState.conf.numShufflePartitions
+    df.coalesce(numShufflePartitions).cache.createOrReplaceTempView(viewName)
     def timer(name: String)(computeRowCnt: => Long): Unit = {
       val t0 = System.nanoTime()
       val rowCnt = computeRowCnt
       val t1 = System.nanoTime()
-      logBasedOnLevel(s"Elapsed time to compute '$name' with $rowCnt rows: " +
+      logBasedOnLevel(s"Elapsed time to compute '$viewName' with $rowCnt rows: " +
         ((t1 - t0 + 0.0) / 1000000000.0) + "s")
     }
-    val tempViewId = getRandomString()
-    val numShufflePartitions = df.sparkSession.sessionState.conf.numShufflePartitions
-    df.coalesce(numShufflePartitions).cache.createOrReplaceTempView(tempViewId)
-    timer(if (name.nonEmpty) s"$name($tempViewId)" else tempViewId) {
-      df.sparkSession.table(tempViewId).count()
+    timer(viewName) {
+      df.sparkSession.table(viewName).count()
     }
-    tempViewId
+    viewName
   }
 
   protected def checkIfColumnsExistIn(tableName: String, expectedColumns: Seq[String]): Unit = {
