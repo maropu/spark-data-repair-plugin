@@ -46,5 +46,5 @@ if [ ! -e "$PACKAGE_JAR" ]; then
 fi
 
 exec python3 -u ./bin/run-tests.py \
-  --package=${PACKAGE_JAR} --module ${FWDIR}/bin --data ${FWDIR}/bin/testdata "$@"
+  --package=${PACKAGE_JAR} --module ${FWDIR}/python --data ${FWDIR}/bin/testdata "$@"
 

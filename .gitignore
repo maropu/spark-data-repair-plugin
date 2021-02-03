@@ -4,8 +4,8 @@ hs_err_pid*
 .idea/
 .idea_modules/
 bin/pycodestyle-*
-bin/docs/build/*
-bin/docs/source/apis/*
+python/docs/build/*
+python/docs/source/apis/*
 build/*.jar
 build/apache-maven*
 build/scala*

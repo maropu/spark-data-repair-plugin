@@ -22,8 +22,6 @@ import warnings
 
 from pyspark.sql import SparkSession
 
-from repair.api import Scavenger
-
 # Initializes a Spark session
 spark = SparkSession.builder.getOrCreate()
 
@@ -53,6 +51,7 @@ num_parallelism = spark.sparkContext.defaultParallelism
 spark.sql(f"SET spark.sql.shuffle.partitions={num_parallelism * num_tasks_per_core}")
 
 # Defines an entrypoint for Scavenger APIs
+from repair.api import Scavenger
 scavenger = Scavenger.getOrCreate()
 
 print(f"Scavenger APIs (version {Scavenger.version()}) available as 'scavenger'.")
