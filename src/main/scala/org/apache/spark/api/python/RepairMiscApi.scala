@@ -214,10 +214,10 @@ object RepairMiscApi extends RepairBase {
           stat.max.map(_.toString), stat.nullCount.map(_.toLong), stat.avgLen,
           stat.maxLen, histogram2Seq(stat.histogram)))
       }
-      spark.createDataFrame(
-        statRows.toSeq.asJava,
-        StructType.fromDDL("attrName STRING, distinctCnt LONG, min STRING, max STRING, " +
-          "nullCnt LONG, avgLen LONG, maxLen LONG, hist ARRAY<DOUBLE>"))
+      // TODO: Add more metrics, e.g., central moments (See: `CentralMomentAgg`)
+      val statScehma = StructType.fromDDL("attrName STRING, distinctCnt LONG, min STRING, " +
+        "max STRING, nullCnt LONG, avgLen LONG, maxLen LONG, hist ARRAY<DOUBLE>")
+      spark.createDataFrame(statRows.toSeq.asJava, statScehma)
     }
   }
 
