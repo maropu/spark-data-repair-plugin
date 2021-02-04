@@ -129,7 +129,7 @@ def run_individual_python_test(target_dir, test_name, pyspark_python, params):
             # 2 (or --verbose option is enabled).
             decoded_lines = map(lambda line: line.decode("utf-8", "replace"), iter(per_test_output))
             skipped_tests = list(filter(
-                lambda line: re.search(r'test_.* \(pyspark\..*\) ... (skip|SKIP)', line),
+                lambda line: re.search(r'test_.* \(.*\) ... (skip|SKIP)', line),
                 decoded_lines))
             skipped_counts = len(skipped_tests)
             if skipped_counts > 0:

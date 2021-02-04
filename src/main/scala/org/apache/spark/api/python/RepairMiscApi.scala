@@ -153,7 +153,13 @@ object RepairMiscApi extends RepairBase {
     clusteringAlg.fit(featureDf).transform(featureDf).drop(featureAttr)
   }
 
-  def injectNullAt(dbName: String, tableName: String, targetAttrList: String, nullRatio: Double): DataFrame = {
+  def injectNullAt(
+      dbName: String,
+      tableName: String,
+      targetAttrList: String,
+      nullRatio: Double,
+      seed: Int): DataFrame = {
+
     logBasedOnLevel(s"injectNullAt called with: dbName=$dbName tableName=$tableName " +
       s"targetAttrList=$targetAttrList, nullRatio=$nullRatio")
 
@@ -171,7 +177,7 @@ object RepairMiscApi extends RepairBase {
     }
     val exprs = inputDf.schema.map {
       case f if targetAttrSet.contains(f.name) =>
-        s"IF(rand() > $nullRatio, ${f.name}, NULL) AS ${f.name}"
+        s"IF(rand($seed) > $nullRatio, ${f.name}, NULL) AS ${f.name}"
       case f =>
         f.name
     }
@@ -190,6 +196,7 @@ object RepairMiscApi extends RepairBase {
     val (inputDf, _) = checkAndGetQualifiedInputName(dbName, tableName)
 
     // `repairedCells` must have `$rowId`, `attribute`, and `repaired` columns
+    // TODO: Needs more strict validation for the input schema
     checkIfColumnsExistIn(repairUpdates, rowId :: "attribute" :: "repaired" :: Nil)
 
     val continousAttrTypeMap = inputDf.schema.filter(f => continousTypes.contains(f.dataType))

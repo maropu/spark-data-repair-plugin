@@ -97,7 +97,7 @@ class RepairMiscSuite extends QueryTest with SharedSparkSession {
   }
 
   test("injectNullAt") {
-    val df1 = RepairMiscApi.injectNullAt("default", "t", "v1", 1.0)
+    val df1 = RepairMiscApi.injectNullAt("default", "t", "v1", 1.0, 0)
     val expectedSchema = "`tid` STRING,`v1` INT,`v2` STRING"
     assert(df1.schema.toDDL === expectedSchema)
     checkAnswer(df1,
@@ -107,7 +107,7 @@ class RepairMiscSuite extends QueryTest with SharedSparkSession {
       Row("4", null, "test-4") ::
       Nil
     )
-    val df2 = RepairMiscApi.injectNullAt("default", "t", "v2", 0.0)
+    val df2 = RepairMiscApi.injectNullAt("default", "t", "v2", 0.0, 0)
     assert(df2.schema.toDDL === expectedSchema)
     checkAnswer(df2,
       Row("1", 100000, "test-1") ::
@@ -118,7 +118,7 @@ class RepairMiscSuite extends QueryTest with SharedSparkSession {
     )
 
     val errMsg = intercept[SparkException] {
-      RepairMiscApi.injectNullAt("default", "t", "non-existent", 1.0)
+      RepairMiscApi.injectNullAt("default", "t", "non-existent", 1.0, 0)
     }.getMessage
     assert(errMsg.contains("Columns 'non-existent' do not exist in 'default.t'"))
   }

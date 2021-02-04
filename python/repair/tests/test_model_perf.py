@@ -16,10 +16,12 @@
 #
 
 import os
+import logging
 import unittest
 
 from pyspark import SparkConf
 
+from repair.misc import RepairMisc
 from repair.model import RepairModel
 from repair.detectors import ConstraintErrorDetector
 from repair.tests.requirements import have_pandas, have_pyarrow, \
@@ -51,17 +53,14 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
 
         # Loads test data
         load_testdata(cls.spark, "iris_clean.csv").createOrReplaceTempView("iris_clean")
-        load_testdata(cls.spark, "iris_test1.csv").createOrReplaceTempView("iris_test1")
-        load_testdata(cls.spark, "iris_test2.csv").createOrReplaceTempView("iris_test2")
+        load_testdata(cls.spark, "iris_orig.csv").createOrReplaceTempView("iris")
 
-        boston_schema = "tid string, CRIM double, ZN double, INDUS double, CHAS double, " \
-            "NOX double, RM double, AGE double, DIS double, RAD double, TAX double, " \
+        boston_schema = "tid string, CRIM double, ZN string, INDUS double, CHAS string, " \
+            "NOX double, RM double, AGE double, DIS double, RAD string, TAX double, " \
             "PTRATIO double, B double, LSTAT double"
         load_testdata(cls.spark, "boston_clean.csv").createOrReplaceTempView("boston_clean")
-        load_testdata(cls.spark, "boston_test1.csv", boston_schema) \
-            .createOrReplaceTempView("boston_test1")
-        load_testdata(cls.spark, "boston_test2.csv", boston_schema) \
-            .createOrReplaceTempView("boston_test2")
+        load_testdata(cls.spark, "boston_orig.csv", boston_schema) \
+            .createOrReplaceTempView("boston")
 
         load_testdata(cls.spark, "hospital_clean.csv").createOrReplaceTempView("hospital_clean")
         load_testdata(cls.spark, "hospital.csv").createOrReplaceTempView("hospital")
@@ -81,42 +80,96 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .rmse
 
     def test_perf_iris_target_num_1(self):
-        # Target column is "sepal_width"
-        repaired_df = RepairModel() \
-            .setTableName("iris_test1") \
-            .setRowId("tid") \
-            .run()
-        rmse = self._compute_rmse(repaired_df, "iris_clean")
-        self.assertLess(rmse, 0.48, msg=f"target:iris(sepal_width)")
+        test_params = [
+            ("sepal_width", 0.3799671038392666),
+            ("sepal_length", 0.6051859218455101),
+            ("petal_width", 0.24622144504490262),
+            ("petal_length", 0.5080600358225392)
+        ]
+        for target, ulimit in test_params:
+            with self.subTest(f"target:iris({target})"):
+                df = RepairMisc() \
+                    .option("table_name", "iris") \
+                    .option("target_attr_list", target) \
+                    .option("null_ratio", "0.10") \
+                    .option("seed", "0") \
+                    .injectNull()
+                repaired_df = RepairModel() \
+                    .setInput(df) \
+                    .setRowId("tid") \
+                    .run()
+                rmse = self._compute_rmse(repaired_df, "iris_clean")
+                logging.info(f"target:iris({target}) RMSE:{rmse}")
+                self.assertLess(rmse, ulimit + 0.001)
 
     def test_perf_iris_target_num_2(self):
-        # Target columns are "sepal_length" and "petal_width"
-        repaired_df = RepairModel() \
-            .setTableName("iris_test2") \
-            .setRowId("tid") \
-            .run()
-        rmse = self._compute_rmse(repaired_df, "iris_clean")
-        self.assertLess(rmse, 0.36, msg=f"target:iris(sepal_length,petal_width)")
+        test_params = [
+            ("sepal_width", "sepal_length", 0.5871009282908688),
+            ("sepal_length", "petal_width", 0.49212549212573814),
+            ("petal_width", "petal_length", 0.771159840759359),
+            ("petal_length", "sepal_width", 0.46266888808304363)
+        ]
+        for target1, target2, ulimit in test_params:
+            with self.subTest(f"target:iris({target1},{target2})"):
+                df = RepairMisc() \
+                    .option("table_name", "iris") \
+                    .option("target_attr_list", f"{target1},{target2}") \
+                    .option("null_ratio", "0.10") \
+                    .option("seed", "0") \
+                    .injectNull()
+                repaired_df = RepairModel() \
+                    .setInput(df) \
+                    .setRowId("tid") \
+                    .run()
+                rmse = self._compute_rmse(repaired_df, "iris_clean")
+                logging.info(f"target:iris({target1},{target2}) RMSE:{rmse}")
+                self.assertLess(rmse, ulimit + 0.001)
 
     def test_perf_boston_target_num_1(self):
-        # Target column is "AGE"
-        repaired_df = RepairModel() \
-            .setTableName("boston_test2") \
-            .setRowId("tid") \
-            .run()
-        rmse = self._compute_rmse(repaired_df, "boston_clean")
-        # TODO: Needs to tune the performance below
-        self.assertLess(rmse, 11.5, msg=f"target:boston(AGE)")
+        test_params = [
+            ("NOX", 0.03053089633885037),
+            ("PTRATIO", 0.5934105655977463),
+            ("TAX", 26.637047326211157),
+            ("INDUS", 1.3041753678902412)
+        ]
+        for target, ulimit in test_params:
+            with self.subTest(f"target:boston({target})"):
+                df = RepairMisc() \
+                    .option("table_name", "boston") \
+                    .option("target_attr_list", target) \
+                    .option("null_ratio", "0.10") \
+                    .option("seed", "0") \
+                    .injectNull()
+                repaired_df = RepairModel() \
+                    .setInput(df) \
+                    .setRowId("tid") \
+                    .run()
+                rmse = self._compute_rmse(repaired_df, "boston_clean")
+                logging.info(f"target:boston({target}) RMSE:{rmse}")
+                self.assertLess(rmse, ulimit + 0.001)
 
-    def test_perf_boston_target_num_3(self):
-        # Target columns are "CRIM", "LSTAT", and "RM"
-        repaired_df = RepairModel() \
-            .setTableName("boston_test1") \
-            .setRowId("tid") \
-            .run()
-        # TODO: Needs to tune the performance below
-        rmse = self._compute_rmse(repaired_df, "boston_clean")
-        self.assertLess(rmse, 3.20, msg=f"target:boston(CRIM,LSTAT,RM)")
+    def test_perf_boston_target_num_2(self):
+        test_params = [
+            ("NOX", "PTRATIO", 0.4691041696958255),
+            ("PTRATIO", "TAX", 56.96715426988806),
+            ("TAX", "INDUS", 21.80912628903229),
+            ("INDUS", "NOX", 1.1736187435074215)
+        ]
+        for target1, target2, ulimit in test_params:
+            with self.subTest(f"target:boston({target1},{target2})"):
+                df = RepairMisc() \
+                    .option("table_name", "boston") \
+                    .option("target_attr_list", f"{target1},{target2}") \
+                    .option("null_ratio", "0.10") \
+                    .option("seed", "0") \
+                    .injectNull()
+                repaired_df = RepairModel() \
+                    .setInput(df) \
+                    .setRowId("tid") \
+                    .run()
+                rmse = self._compute_rmse(repaired_df, "boston_clean")
+                logging.info(f"target:boston({target1},{target2}) RMSE:{rmse}")
+                self.assertLess(rmse, ulimit + 0.001)
 
     @unittest.skip(reason="much time to compute repaired data")
     def test_perf_hospital(self):
@@ -144,9 +197,9 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         recall = rdf.where("repaired <=> correct_val").count() / rdf.count()
         f1 = (2.0 * precision * recall) / (precision + recall)
 
-        self.assertTrue(
-            precision > 0.70 and recall > 0.65 and f1 > 0.67,
-            msg=f"target:hospital precision:{precision} recall:{recall} f1:{f1}")
+        msg = f"target:hospital precision:{precision} recall:{recall} f1:{f1}"
+        logging.info(msg)
+        self.assertTrue(precision > 0.70 and recall > 0.65 and f1 > 0.67, msg=msg)
 
 
 if __name__ == "__main__":

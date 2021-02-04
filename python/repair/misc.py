@@ -67,6 +67,14 @@ class RepairMisc():
         else:
             return ""
 
+    @property
+    def _seed(self) -> int:
+        if "seed" in self.opts.keys():
+            return int(self.opts["seed"])
+        else:
+            import random
+            return random.randint(0, 65536)
+
     def _check_required_options(self, required: List[str]) -> None:
         if not all(opt in self.opts.keys() for opt in required):
             raise ValueError("Required options not found: {}".format(", ".join(required)))
@@ -238,7 +246,7 @@ class RepairMisc():
 
         jdf = self._misc_api_.injectNullAt(
             self._db_name, self.opts["table_name"], self._target_attr_list,
-            param_null_ratio)
+            param_null_ratio, self._seed)
         return DataFrame(jdf, self._spark._wrapped)
 
     def toErrorMap(self) -> DataFrame:
