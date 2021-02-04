@@ -75,6 +75,13 @@ class RepairMisc():
             import random
             return random.randint(0, 65536)
 
+    @property
+    def _num_bins(self) -> int:
+        if "num_bins" in self.opts.keys():
+            return int(self.opts["num_bins"])
+        else:
+            return 8
+
     def _check_required_options(self, required: List[str]) -> None:
         if not all(opt in self.opts.keys() for opt in required):
             raise ValueError("Required options not found: {}".format(", ".join(required)))
@@ -143,7 +150,8 @@ class RepairMisc():
         +------------+-----------+----+----+-------+------+------+----+
         """
         self._check_required_options(["table_name"])
-        jdf = self._misc_api_.computeAndGetStats(self._db_name, self.opts["table_name"])
+        jdf = self._misc_api_.computeAndGetStats(
+            self._db_name, self.opts["table_name"], self._num_bins)
         return DataFrame(jdf, self._spark._wrapped)
 
     def flatten(self) -> DataFrame:

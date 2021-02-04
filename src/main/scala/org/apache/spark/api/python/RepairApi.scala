@@ -56,46 +56,13 @@ object RepairApi extends RepairBase {
 
   case class ColumnStat(distinctCount: Long, min: Option[Any], max: Option[Any])
 
-  private def getColumnStats(inputName: String): Map[String, ColumnStat] = {
-    val df = spark.table(inputName)
-    val tableStats = {
-      val tableNode = df.queryExecution.optimizedPlan.collectLeaves().head.asInstanceOf[LeafNode]
-      tableNode.computeStats()
-    }
-    tableStats.attributeStats.map { kv =>
-      val stat = kv._2
+  private[python] def computeAndGetTableStats(tableIdent: String): Map[String, ColumnStat] = {
+    val df = spark.table(tableIdent)
+    val relation = df.queryExecution.analyzed
+    val (_, colStats) = SparkCommandUtils.computeColumnStats(spark, relation, relation.output)
+    val columnStats = colStats.map { case (attr, stat) =>
       val distinctCount = stat.distinctCount.map(_.toLong)
-      (kv._1.name, ColumnStat(distinctCount.get, stat.min, stat.max))
-    }
-  }
-
-  private[python] def computeAndGetTableStats(tableIdentifier: String): Map[String, ColumnStat] = {
-    // For safe guards, just cache it for `ANALYZE TABLE`
-    val df = spark.table(tableIdentifier)
-    df.cache().write.mode("overwrite").format("noop").save()
-    spark.sql(
-      s"""
-         |ANALYZE TABLE $tableIdentifier COMPUTE STATISTICS
-         |FOR ALL COLUMNS
-       """.stripMargin)
-
-    // It seems to be possible that `getColumnStats` cannot collect column stats sometimes,
-    // so we will retry it if the method fails to collect the stats.
-    val maxRetry = 3
-    var retry = 0
-    var columnStats = Map.empty[String, ColumnStat]
-    while (columnStats.isEmpty && retry < maxRetry) {
-      if (retry > 0) {
-        logWarning(s"Retry#$retry: collecting column stats of '$tableIdentifier'")
-      }
-      columnStats = getColumnStats(tableIdentifier)
-      retry += 1
-    }
-    if (columnStats.isEmpty) {
-      throw new SparkException(
-        s"""Cannot collect column stats of '$tableIdentifier':
-           |${df.queryExecution.stringWithStats}
-         """.stripMargin)
+      (attr.name, ColumnStat(distinctCount.get, stat.min, stat.max))
     }
     assert(df.columns.forall(columnStats.contains))
     columnStats

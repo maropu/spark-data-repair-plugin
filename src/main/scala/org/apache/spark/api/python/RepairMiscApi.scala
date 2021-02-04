@@ -24,8 +24,8 @@ import scala.collection.JavaConverters._
 import org.apache.spark.SparkException
 import org.apache.spark.ml.clustering.{BisectingKMeans, KMeans}
 import org.apache.spark.ml.feature.CountVectorizer
-import org.apache.spark.sql.{DataFrame, Row}
-import org.apache.spark.sql.catalyst.plans.logical.{Histogram, LeafNode}
+import org.apache.spark.sql.{DataFrame, Row, SparkCommandUtils}
+import org.apache.spark.sql.catalyst.plans.logical.Histogram
 import org.apache.spark.sql.functions.{lit, udf}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.StructType
@@ -245,38 +245,21 @@ object RepairMiscApi extends RepairBase {
     }
   }
 
-  def computeAndGetStats(dbName: String, tableName: String): DataFrame = {
+  def computeAndGetStats(dbName: String, tableName: String, numBins: Int): DataFrame = {
     logBasedOnLevel(s"computeAndGetStats called with: dbName=$dbName tableName=$tableName")
 
-    val (inputDf, qualifiedName) = checkAndGetQualifiedInputName(dbName, tableName)
-    spark.table(qualifiedName).cache()
-    withSQLConf(
-        SQLConf.CBO_ENABLED.key -> "true",
-        SQLConf.PLAN_STATS_ENABLED.key -> "true",
-        SQLConf.HISTOGRAM_ENABLED.key -> "true",
-        SQLConf.HISTOGRAM_NUM_BINS.key -> "8") {
+    val (inputDf, _) = checkAndGetQualifiedInputName(dbName, tableName)
+    val relation = inputDf.queryExecution.analyzed
 
-      spark.sql(
-        s"""
-           |ANALYZE TABLE $qualifiedName COMPUTE STATISTICS
-           |FOR ALL COLUMNS
-         """.stripMargin)
-
-      val tableStats = {
-        val tableNode = inputDf.queryExecution.optimizedPlan.collectLeaves().head.asInstanceOf[LeafNode]
-        val stat = tableNode.computeStats()
-        // TODO: This invariant can fail sometimes
-        assert(stat.attributeStats.nonEmpty, "stats must be computed")
-        stat
-      }
-
+    withSQLConf(SQLConf.HISTOGRAM_NUM_BINS.key -> s"$numBins") {
       def histogram2Seq(histOpt: Option[Histogram]): Option[Seq[Double]] = {
         histOpt.map { h =>
           val dist = h.bins.map { b => b.hi - b.lo }
           dist.map(_ / dist.sum)
         }
       }
-      val statRows = tableStats.attributeStats.map { case (attr, stat) =>
+      val (_, columnStats) = SparkCommandUtils.computeColumnStats(spark, relation, relation.output)
+      val statRows = columnStats.map { case (attr, stat) =>
         Row.fromSeq(Seq(attr.name, stat.distinctCount.map(_.toLong), stat.min.map(_.toString),
           stat.max.map(_.toString), stat.nullCount.map(_.toLong), stat.avgLen,
           stat.maxLen, histogram2Seq(stat.histogram)))
