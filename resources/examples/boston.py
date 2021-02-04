@@ -48,25 +48,27 @@ repaired_df = scavenger.repair \
 #  - Precision: the fraction of correct repairs, i.e., repairs that match
 #    the ground truth, over the total number of repairs performed
 #  - Recall: correct repairs over the total number of errors
-is_discrete = "attribute NOT IN ('CRIM', 'LSTAT')"
-discrete_df = repaired_df.where(is_discrete)
-pdf = discrete_df.join(spark.table("boston_clean"), ["tid", "attribute"], "inner")
-ground_truth_df = spark.table("error_cells_ground_truth").where(is_discrete)
-rdf = discrete_df.join(ground_truth_df, ["tid", "attribute"], "right_outer")
+pdf = repaired_df.join(spark.table("boston_clean"), ["tid", "attribute"], "inner")
 
-precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
-recall = rdf.where("repaired <=> correct_val").count() / rdf.count()
+# Compares predicted values with the correct ones
+pdf.show()
+
+is_discrete = "attribute NOT IN ('CRIM', 'LSTAT')"
+discrete_pdf = pdf.where(is_discrete)
+ground_truth_discrete_df = spark.table("error_cells_ground_truth").where(is_discrete)
+discrete_rdf = discrete_pdf.join(ground_truth_discrete_df, ["tid", "attribute"], "right_outer")
+
+precision = discrete_pdf.where("repaired <=> correct_val").count() / discrete_pdf.count()
+recall = discrete_pdf.where("repaired <=> correct_val").count() / discrete_pdf.count()
 f1 = (2.0 * precision * recall) / (precision + recall)
 
-print("Precision={} Recall={} F1={}".format(precision, recall, f1))
+print(f"Precision={precision} Recall={recall} F1={f1}")
 
 # Computes performance numbers for continous attributes (RMSE)
 is_continous = f"NOT({is_discrete})"
-n = repaired_df.count()
-rmse = repaired_df \
-    .where(is_continous) \
-    .join(spark.table("boston_clean"), ["tid", "attribute"], "inner") \
-    .selectExpr(f"sqrt(sum(pow(correct_val - repaired, 2.0)) / {n}) rmse") \
+continous_pdf = pdf.where(is_continous)
+n = continous_pdf.count()
+rmse = continous_pdf.selectExpr(f"sqrt(sum(pow(correct_val - repaired, 2.0)) / {n}) rmse") \
     .collect()[0] \
     .rmse
 

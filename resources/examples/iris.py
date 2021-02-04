@@ -31,14 +31,15 @@ repaired_df = scavenger.repair \
     .setDbName("default") \
     .setTableName("iris") \
     .setRowId("tid") \
-    .setInferenceOrder("entropy") \
     .run()
+
+# Compares predicted values with the correct ones
+cmp_df = repaired_df.join(spark.table("iris_clean"), ["tid", "attribute"], "inner")
+cmp_df.show()
 
 # Computes performance numbers for continous attributes (RMSE)
 n = repaired_df.count()
-rmse = repaired_df \
-    .join(spark.table("iris_clean"), ["tid", "attribute"], "inner") \
-    .selectExpr(f"sqrt(sum(pow(correct_val - repaired, 2.0)) / {n}) rmse") \
+rmse = cmp_df.selectExpr(f"sqrt(sum(pow(correct_val - repaired, 2.0)) / {n}) rmse") \
     .collect()[0] \
     .rmse
 

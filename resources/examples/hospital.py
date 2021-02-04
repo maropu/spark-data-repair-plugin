@@ -53,6 +53,9 @@ rdf = repaired_df.join(
     spark.table("error_cells_ground_truth").where("attribute != 'Score'"),
     ["tid", "attribute"], "right_outer")
 
+# Compares predicted values with the correct ones
+pdf.show()
+
 precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
 recall = rdf.where("repaired <=> correct_val").count() / rdf.count()
 f1 = (2.0 * precision * recall) / (precision + recall)

@@ -184,6 +184,7 @@ object RepairMiscApi extends RepairBase {
     val (inputDf, qualifiedName) = checkAndGetQualifiedInputName(dbName, tableName)
     spark.table(qualifiedName).cache()
     withSQLConf(
+        SQLConf.CBO_ENABLED.key -> "true",
         SQLConf.PLAN_STATS_ENABLED.key -> "true",
         SQLConf.HISTOGRAM_ENABLED.key -> "true",
         SQLConf.HISTOGRAM_NUM_BINS.key -> "8") {
@@ -197,6 +198,7 @@ object RepairMiscApi extends RepairBase {
       val tableStats = {
         val tableNode = inputDf.queryExecution.optimizedPlan.collectLeaves().head.asInstanceOf[LeafNode]
         val stat = tableNode.computeStats()
+        // TODO: This invariant can fail sometimes
         assert(stat.attributeStats.nonEmpty, "stats must be computed")
         stat
       }
