@@ -62,11 +62,11 @@ Interface to provide helper functionalities.
 .. autosummary::
     :toctree: apis
 
-    RepairMisc.computeAndGetStats
+    RepairMisc.describe
     RepairMisc.flatten
     RepairMisc.injectNull
     RepairMisc.option
     RepairMisc.options
-    RepairMisc.splitInputTableInto
+    RepairMisc.splitInputTable
     RepairMisc.toErrorMap
 

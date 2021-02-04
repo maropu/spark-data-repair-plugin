@@ -58,22 +58,22 @@ class RepairModelTests(ReusedSQLTestCase):
                     Row(tid=2, attirubte="v", value="b"),
                     Row(tid=3, attirubte="v", value="c")])
 
-    def test_splitInputTableInto(self):
+    def test_splitInputTable(self):
         misc = RepairMisc().options({"table_name": "adult", "row_id": "tid", "k": "3"})
         self.assertEqual(
-            misc.splitInputTableInto().selectExpr("k").distinct().orderBy("k").collect(),
+            misc.splitInputTable().selectExpr("k").distinct().orderBy("k").collect(),
             [Row(k=0), Row(k=1), Row(k=2)])
 
-    def test_splitInputTableInto_invalid_params(self):
+    def test_splitInputTable_invalid_params(self):
         self.assertRaisesRegexp(
             ValueError,
             "Required options not found: table_name, row_id, k",
-            lambda: RepairMisc().splitInputTableInto())
+            lambda: RepairMisc().splitInputTable())
         self.assertRaisesRegexp(
             ValueError,
             "Option 'k' must be an integer, but 'x' found",
             lambda: RepairMisc().options({"table_name": "adult", "row_id": "tid", "k": "x"})
-                                .splitInputTableInto())
+                                .splitInputTable())
 
     def test_injectNull(self):
         with self.tempView("tempView"):
@@ -89,10 +89,10 @@ class RepairModelTests(ReusedSQLTestCase):
                     Row(tid=3, v1=None, v2=1),
                     Row(tid=4, v1=None, v2=2)])
 
-    def test_computeAndGetStats(self):
+    def test_describe(self):
         misc = RepairMisc().options({"table_name": "adult"})
         self.assertEqual(
-            misc.computeAndGetStats().orderBy("attrName").collect(), [
+            misc.describe().orderBy("attrName").collect(), [
                 Row(attrName="Age", distinctCnt=4, min=None, max=None, nullCnt=2,
                     avgLen=5, maxLen=5, hist=None),
                 Row(attrName="Country", distinctCnt=3, min=None, max=None, nullCnt=0,
@@ -114,9 +114,9 @@ class RepairModelTests(ReusedSQLTestCase):
             self.spark.range(100).selectExpr("STRING(id)", "id % 9 v1", "DOUBLE(id % 17) v2") \
                 .createOrReplaceTempView("tempView")
             misc = RepairMisc().option("table_name", "tempView")
-            misc.computeAndGetStats().orderBy("attrName").show(truncate=False)
+            misc.describe().orderBy("attrName").show(truncate=False)
             self.assertEqual(
-                misc.computeAndGetStats().orderBy("attrName").collect(), [
+                misc.describe().orderBy("attrName").collect(), [
                     Row(attrName="id", distinctCnt=100, min=None, max=None, nullCnt=0,
                         avgLen=2, maxLen=2, hist=None),
                     Row(attrName="v1", distinctCnt=9, min="0", max="8", nullCnt=0, avgLen=8,

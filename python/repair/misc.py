@@ -71,6 +71,31 @@ class RepairMisc():
         if not all(opt in self.opts.keys() for opt in required):
             raise ValueError("Required options not found: {}".format(", ".join(required)))
 
+    def describe(self) -> DataFrame:
+        """Computes column stats for an input table.
+
+        .. versionchanged:: 0.1.0
+
+        Examples
+        --------
+        >>> scavenger.misc.option("table_name", "adult").describe().show()
+        +------------+-----------+----+----+-------+------+------+----+
+        |    attrName|distinctCnt| min| max|nullCnt|avgLen|maxLen|hist|
+        +------------+-----------+----+----+-------+------+------+----+
+        |     Country|          3|null|null|      0|    13|    13|null|
+        |   Education|          7|null|null|      0|     9|    12|null|
+        |      Income|          2|null|null|      2|    11|    11|null|
+        |  Occupation|          7|null|null|      0|    13|    17|null|
+        |Relationship|          4|null|null|      0|     9|    13|null|
+        |         tid|         20|null|null|      0|     2|     2|null|
+        |         Sex|          2|null|null|      3|     5|     6|null|
+        |         Age|          4|null|null|      2|     5|     5|null|
+        +------------+-----------+----+----+-------+------+------+----+
+        """
+        self._check_required_options(["table_name"])
+        jdf = self._misc_api_.computeAndGetStats(self._db_name, self.opts["table_name"])
+        return DataFrame(jdf, self._spark._wrapped)
+
     def flatten(self) -> DataFrame:
         """Converts an input table into a flatten <row_id, attribute, vaue> table.
 
@@ -94,7 +119,7 @@ class RepairMisc():
             self._db_name, self.opts["table_name"], self.opts["row_id"])
         return DataFrame(jdf, self._spark._wrapped)
 
-    def splitInputTableInto(self) -> DataFrame:
+    def splitInputTable(self) -> DataFrame:
         """Splits an input table into multiple tables with similar rows.
 
         .. versionchanged:: 0.1.0
@@ -102,7 +127,7 @@ class RepairMisc():
         Examples
         --------
         >>> df = scavenger.misc.options({"table_name": "adult", "row_id": "tid", "k": "2"})
-        ...    .splitInputTableInto()
+        ...    .splitInputTable()
         >>> df.show(3)
         +---+---+
         |tid|  k|
@@ -172,16 +197,6 @@ class RepairMisc():
         jdf = self._misc_api_.injectNullAt(
             self._db_name, self.opts["table_name"], self._target_attr_list,
             param_null_ratio)
-        return DataFrame(jdf, self._spark._wrapped)
-
-    def computeAndGetStats(self) -> DataFrame:
-        """Computes column stats for an input table.
-
-        .. versionchanged:: 0.1.0
-
-        """
-        self._check_required_options(["table_name"])
-        jdf = self._misc_api_.computeAndGetStats(self._db_name, self.opts["table_name"])
         return DataFrame(jdf, self._spark._wrapped)
 
     def toErrorMap(self) -> DataFrame:
