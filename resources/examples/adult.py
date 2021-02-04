@@ -48,7 +48,7 @@ pdf = repaired_df.join(spark.table("adult_clean"), ["tid", "attribute"], "inner"
 rdf = repaired_df.join(spark.table("error_cells_ground_truth"), ["tid", "attribute"], "right_outer")
 
 # Compares predicted values with the correct ones
-pdf.show()
+pdf.orderBy("attribute").show()
 
 precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
 recall = rdf.where("repaired <=> correct_val").count() / rdf.count()

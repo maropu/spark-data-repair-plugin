@@ -71,6 +71,47 @@ class RepairMisc():
         if not all(opt in self.opts.keys() for opt in required):
             raise ValueError("Required options not found: {}".format(", ".join(required)))
 
+    def repair(self) -> DataFrame:
+        """Applies predicted repair updates into an input table.
+
+        .. versionchanged:: 0.1.0
+
+        Examples
+        --------
+        >>> spark.table("predicted").show(3)
+        +---+---------+-----------+
+        |tid|attribute|   repaired|
+        +---+---------+-----------+
+        |  5|      Age|      18-21|
+        |  5|   Income|MoreThan50K|
+        |  7|      Sex|     Female|
+        | 12|      Age|      18-21|
+        | 12|      Sex|     Female|
+        |  3|      Sex|     Female|
+        | 16|   Income|MoreThan50K|
+        +---+---------+-----------+
+
+        >>> df = scavenger.misc.options({"repair_updates": "predicted", "table_name": "adult",
+        ...    "row_id": "tid"}).repair()
+        >>> df.where("tid in ('3', '5', '7', '12', '16')").show()
+        +---+-----+------------+---------------+------------+------+-------------+-----------+
+        |tid|  Age|   Education|     Occupation|Relationship|   Sex|      Country|     Income|
+        +---+-----+------------+---------------+------------+------+-------------+-----------+
+        | 16|  >50|Some-college|Exec-managerial|   Unmarried|Female|United-States|MoreThan50K|
+        |  5|18-21|Some-college|   Craft-repair|     Husband|  Male|United-States|MoreThan50K|
+        | 12|18-21|   Bachelors|Exec-managerial|     Husband|Female|United-States|MoreThan50K|
+        |  3|22-30|     HS-grad|   Craft-repair|   Own-child|Female|United-States|LessThan50K|
+        |  7|31-50| Prof-school| Prof-specialty|     Husband|Female|        India|MoreThan50K|
+        +---+-----+------------+---------------+------------+------+-------------+-----------+
+        """
+        self._check_required_options(["repair_updates", "table_name", "row_id"])
+        jdf = self._misc_api_.repairAttrsFrom(
+            self.opts["repair_updates"],
+            self._db_name,
+            self.opts["table_name"],
+            self.opts["row_id"])
+        return DataFrame(jdf, self._spark._wrapped)
+
     def describe(self) -> DataFrame:
         """Computes column stats for an input table.
 
@@ -78,7 +119,8 @@ class RepairMisc():
 
         Examples
         --------
-        >>> scavenger.misc.option("table_name", "adult").describe().show()
+        >>> df = scavenger.misc.option("table_name", "adult").describe()
+        >>> df.show()
         +------------+-----------+----+----+-------+------+------+----+
         |    attrName|distinctCnt| min| max|nullCnt|avgLen|maxLen|hist|
         +------------+-----------+----+----+-------+------+------+----+

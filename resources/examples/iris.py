@@ -35,7 +35,7 @@ repaired_df = scavenger.repair \
 
 # Compares predicted values with the correct ones
 cmp_df = repaired_df.join(spark.table("iris_clean"), ["tid", "attribute"], "inner")
-cmp_df.show()
+cmp_df.orderBy("attribute").show()
 
 # Computes performance numbers for continous attributes (RMSE)
 n = repaired_df.count()

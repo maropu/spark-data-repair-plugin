@@ -46,7 +46,6 @@ model to repair them.
     RepairModel.setMaximalLikelihoodRepairEnabled
     RepairModel.setMinCorrThreshold
     RepairModel.setRepairDelta
-    RepairModel.setRepairUpdates
     RepairModel.setRowId
     RepairModel.setSmallDomainThreshold
     RepairModel.setTableName

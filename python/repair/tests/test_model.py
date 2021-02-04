@@ -21,6 +21,7 @@ import unittest
 from pyspark import SparkConf
 from pyspark.sql import Row
 
+from repair.misc import RepairMisc
 from repair.model import RepairModel
 from repair.detectors import ConstraintErrorDetector, RegExErrorDetector
 from repair.tests.requirements import have_pandas, have_pyarrow, \
@@ -263,22 +264,14 @@ class RepairModelTests(ReusedSQLTestCase):
             .setTableName("adult") \
             .setRowId("tid") \
             .run()
-        df = RepairModel() \
-            .setTableName("adult") \
-            .setRowId("tid") \
-            .setRepairUpdates(repair_updates_df) \
-            .run()
-        self.assertEqual(
-            df.orderBy("tid").collect(),
-            expected_result)
 
         with self.tempView("repair_updates_view"):
             repair_updates_df.createOrReplaceTempView("repair_updates_view")
-            df = RepairModel() \
-                .setTableName("adult") \
-                .setRowId("tid") \
-                .setRepairUpdates("repair_updates_view") \
-                .run()
+            df = RepairMisc() \
+                .option("repair_updates", "repair_updates_view") \
+                .option("table_name", "adult") \
+                .option("row_id", "tid") \
+                .repair()
             self.assertEqual(
                 df.orderBy("tid").collect(),
                 expected_result)

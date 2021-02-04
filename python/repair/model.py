@@ -74,7 +74,6 @@ class RepairModel():
         self.lgb_max_depth: int = -1
 
         # Parameters for repairing
-        self.repair_updates: Optional[Union[str, DataFrame]] = None
         self.maximal_likelihood_repair_enabled: bool = False
         self.repair_delta: Optional[int] = None
 
@@ -355,21 +354,6 @@ class RepairModel():
         self.inference_order = str(inference_order)
         return self
 
-    def setRepairUpdates(self, repair_updates: Any) -> "RepairModel":
-        """Specifies repair updates for input data.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        repair_updates: str, :class:`DataFrame`
-            user-specified repair updates.
-        """
-        if type(repair_updates) is not str and type(repair_updates) is not DataFrame:
-            raise TypeError("repair updates must be str or `DataFrame`")
-        self.repair_updates = repair_updates
-        return self
-
     def setMaximalLikelihoodRepairEnabled(self, enabled: bool) -> "RepairModel":
         """Specifies whether to enable maximal likelihood repair.
 
@@ -411,13 +395,6 @@ class RepairModel():
             raise ValueError(f"Error cells must have `{self.row_id}` and "
                              "`attribute` in columns")
         return self._create_temp_view(df, "error_cells")
-
-    @property
-    def _repair_updates(self) -> str:
-        df = self.repair_updates if type(self.repair_updates) is DataFrame \
-            else self._spark.table(str(self.repair_updates))
-        # TODO: Validates a schema of `self.repair_updates`
-        return self._create_temp_view(df, "repair_updates")
 
     def _clear_job_group(self) -> None:
         # TODO: Uses `SparkContext.clearJobGroup()` instead
@@ -461,9 +438,13 @@ class RepairModel():
         self._intermediate_views_on_runtime.append(temp_name)
         return temp_name
 
-    def _flatten(self, df: DataFrame) -> DataFrame:
-        jdf = self._jvm.RepairMiscApi.flattenTable(
-            "", self._create_temp_view(df), self.row_id)
+    def _repair_attrs(self, repair_updates: str, base_table: str) -> DataFrame:
+        jdf = self._jvm.RepairMiscApi.repairAttrsFrom(
+            repair_updates, "", base_table, self.row_id)
+        return DataFrame(jdf, self._spark._wrapped)
+
+    def _flatten(self, input_table: str) -> DataFrame:
+        jdf = self._jvm.RepairMiscApi.flattenTable("", input_table, self.row_id)
         return DataFrame(jdf, self._spark._wrapped)
 
     def _release_resources(self) -> None:
@@ -582,11 +563,9 @@ class RepairModel():
         weak_df = weak_df.where("value IS NOT NULL") \
             .selectExpr(self.row_id, "attribute", "value repaired")
         env["weak"] = self._create_temp_view(weak_df.cache(), "weak")
-        ret_as_json = self._repair_api.repairAttrsFrom(
-            env["weak"], env["repair_base"], self.row_id)
-        env["partial_repaired"] = json.loads(ret_as_json)["repaired"]
-
-        self._register_and_get_df(env["partial_repaired"])
+        env["partial_repaired"] = self._create_temp_view(
+            self._repair_attrs(env["weak"], env["repair_base"]),
+            "partial_repaired")
 
         logging.info('[Error Detection Phase] {} suspicious cells fixed and '
                      '{} error cells remaining...'.format(
@@ -906,7 +885,7 @@ class RepairModel():
         to_current_expr = "named_struct('value', current_value, 'prob', " \
             "coalesce(pmf.probs[array_position(pmf.classes, current_value) - 1], 0.0)) current"
         sorted_pmf_expr = "array_sort(pmf, (left, right) -> if(left.`1` < right.`1`, 1, -1)) pmf"
-        pmf_df = self._flatten(repaired_df) \
+        pmf_df = self._flatten(self._create_temp_view(repaired_df)) \
             .join(error_cells_df, [self.row_id, "attribute"], "inner") \
             .selectExpr(self.row_id, "attribute", "current_value", parse_pmf_json_expr) \
             .selectExpr(self.row_id, "attribute", to_current_expr, to_pmf_expr) \
@@ -1040,16 +1019,14 @@ class RepairModel():
                 return top_delta_repairs_df
 
             # If `repair_data` is True, applys the selected repair updates into `dirty`
-            env["top_delta_repairs"] = \
-                self._create_temp_view(top_delta_repairs_df, "top_delta_repairs")
-            env.update(json.loads(self._repair_api.repairAttrsFrom(env["top_delta_repairs"],
-                                  env["dirty"], self.row_id)))
-            repaired_df = self._register_and_get_df(env["repaired"])
+            env["top_delta_repairs"] = self._create_temp_view(
+                top_delta_repairs_df, "top_delta_repairs")
+            repaired_df = self._repair_attrs(env["top_delta_repairs"], env["dirty"])
 
         # If `repair_data` is False, returns repair candidates whoes
         # value is the same with `current_value`.
         if not repair_data:
-            repair_candidates_df = self._flatten(repaired_df) \
+            repair_candidates_df = self._flatten(self._create_temp_view(repaired_df)) \
                 .join(error_cells_df, [self.row_id, "attribute"], "inner") \
                 .selectExpr("tid", "attribute", "current_value", "value repaired") \
                 .where("not(current_value <=> repaired)")
@@ -1117,13 +1094,6 @@ class RepairModel():
         try:
             # Validates input data
             input_df, continous_attrs = self._check_input_table(env)
-
-            # If `self.repair_updates` specified, just applies repair updates
-            # TODO: Move this part into `scavenger.misc`
-            if self.repair_updates is not None:
-                ret_as_json = self._repair_api.repairAttrsFrom(
-                    self._repair_updates, env["input_table"], self.row_id)
-                return self._spark.table(json.loads(ret_as_json)["repaired"])
 
             if compute_repair_candidate_prob and len(continous_attrs) != 0:
                 raise ValueError("Cannot compute probability mass function of repairs "

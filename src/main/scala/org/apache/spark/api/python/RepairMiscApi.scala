@@ -178,6 +178,66 @@ object RepairMiscApi extends RepairBase {
     inputDf.selectExpr(exprs: _*)
   }
 
+  def repairAttrsFrom(
+      repairUpdates: String,
+      dbName: String,
+      tableName: String,
+      rowId: String): DataFrame = {
+
+    logBasedOnLevel(s"repairAttrsFrom called with: repairUpdates=$repairUpdates " +
+      s"dbName=$dbName tableName=$tableName rowId=$rowId")
+
+    val (inputDf, _) = checkAndGetQualifiedInputName(dbName, tableName)
+
+    // `repairedCells` must have `$rowId`, `attribute`, and `repaired` columns
+    checkIfColumnsExistIn(repairUpdates, rowId :: "attribute" :: "repaired" :: Nil)
+
+    val continousAttrTypeMap = inputDf.schema.filter(f => continousTypes.contains(f.dataType))
+      .map { f => f.name -> f.dataType }.toMap
+    val attrsToRepair = {
+      spark.sql(s"SELECT collect_set(attribute) FROM $repairUpdates")
+        .collect.head.getSeq[String](0).toSet
+    }
+
+    val repairDf = spark.sql(
+      s"""
+         |SELECT
+         |  $rowId, map_from_entries(collect_list(r)) AS repairs
+         |FROM (
+         |  select $rowId, struct(attribute, repaired) r
+         |  FROM $repairUpdates
+         |)
+         |GROUP BY
+         |  $rowId
+       """.stripMargin)
+
+    withTempView(inputDf) { inputView =>
+      withTempView(repairDf) { repairView =>
+        val cleanAttrs = inputDf.columns.map {
+          case attr if attr == rowId =>
+            s"$inputView.$rowId"
+          case attr if attrsToRepair.contains(attr) =>
+            val repaired = if (continousAttrTypeMap.contains(attr)) {
+              val dataType = continousAttrTypeMap(attr)
+              s"CAST(repairs['$attr'] AS ${dataType.catalogString})"
+            } else {
+              s"repairs['$attr']"
+            }
+            s"if(array_contains(map_keys(repairs), '$attr'), $repaired, $attr) AS $attr"
+          case cleanAttr =>
+            cleanAttr
+        }
+        spark.sql(
+          s"""
+             |SELECT ${cleanAttrs.mkString(", ")}
+             |FROM $inputView
+             |LEFT OUTER JOIN $repairView
+             |ON $inputView.$rowId = $repairView.$rowId
+           """.stripMargin)
+      }
+    }
+  }
+
   def computeAndGetStats(dbName: String, tableName: String): DataFrame = {
     logBasedOnLevel(s"computeAndGetStats called with: dbName=$dbName tableName=$tableName")
 

@@ -51,7 +51,7 @@ repaired_df = scavenger.repair \
 pdf = repaired_df.join(spark.table("boston_clean"), ["tid", "attribute"], "inner")
 
 # Compares predicted values with the correct ones
-pdf.show()
+pdf.orderBy("attribute").show()
 
 is_discrete = "attribute NOT IN ('CRIM', 'LSTAT')"
 discrete_pdf = pdf.where(is_discrete)
