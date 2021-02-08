@@ -694,7 +694,6 @@ class RepairModel():
                          excluded_columns: List[str]) -> List[str]:
         # All the available features
         features = [c for c in input_columns if c not in excluded_columns]
-        excluded_columns.remove(y)
 
         # Selects features if necessary
         if self.max_training_column_num is not None and \
@@ -717,11 +716,8 @@ class RepairModel():
         # Transforms discrete attributes with some categorical encoders if necessary
         import category_encoders as ce  # type: ignore[import]
         discrete_columns = [c for c in features if c not in continous_attrs]
-        if len(discrete_columns) == 0:
-            # TODO: Needs to normalize continous values
-            transformers = None
-        else:
-            transformers = []
+        transformers = []
+        if len(discrete_columns) != 0:
             # TODO: Needs to reconsider feature transformation in this part, e.g.,
             # we can use `ce.OrdinalEncoder` for small domain features. For the other category
             # encoders, see https://github.com/scikit-learn-contrib/category_encoders
@@ -741,6 +737,8 @@ class RepairModel():
                 X = transformer.fit_transform(X)
             logging.debug("{} encoders transform ({})=>({})".format(
                 len(transformers), ",".join(features), ",".join(X.columns)))
+
+        # TODO: Needs to normalize continous values?
 
         return X, transformers
 
@@ -796,6 +794,8 @@ class RepairModel():
         excluded_columns = copy.deepcopy(target_columns)
         for index, y in enumerate(target_columns):
             features = self._select_features(env, train_pdf.columns, y, excluded_columns)
+            excluded_columns.remove(y)
+
             X, transformers = self._transform_features(
                 env, train_pdf[features], features, continous_attrs)
             is_discrete = y not in continous_attrs
@@ -847,7 +847,7 @@ class RepairModel():
                         X[c] = X[c].astype("float64")
 
                     # Transforms an input row to a feature
-                    if transformers is not None:
+                    if transformers:
                         for transformer in transformers:
                             X = transformer.transform(X)
 
@@ -905,7 +905,7 @@ class RepairModel():
 
         broadcasted_distance = self._spark.sparkContext.broadcast(self.distance)
 
-        @functions.pandas_udf("double", functions.PandasUDFType.SCALAR)
+        @functions.pandas_udf("double")
         def distance(xs: pd.Series, ys: pd.Series) -> pd.Series:
             distance = broadcasted_distance.value
             dists = [distance.compute(x, y) for x, y in zip(xs, ys)]
