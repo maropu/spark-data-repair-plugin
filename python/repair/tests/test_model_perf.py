@@ -81,10 +81,10 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
 
     def test_perf_iris_target_num_1(self):
         test_params = [
-            ("sepal_width", 0.3799671038392666),
-            ("sepal_length", 0.6051859218455101),
-            ("petal_width", 0.24622144504490262),
-            ("petal_length", 0.5080600358225392)
+            ("sepal_width", 0.3455068740271313),
+            ("sepal_length", 0.7022285952594068),
+            ("petal_width", 0.27838821814150105),
+            ("petal_length", 0.5623610939600994)
         ]
         for target, ulimit in test_params:
             with self.subTest(f"target:iris({target})"):
@@ -104,10 +104,10 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
 
     def test_perf_iris_target_num_2(self):
         test_params = [
-            ("sepal_width", "sepal_length", 0.5871009282908688),
-            ("sepal_length", "petal_width", 0.49212549212573814),
+            ("sepal_width", "sepal_length", 0.6093028803476969),
+            ("sepal_length", "petal_width", 0.43981530214397946),
             ("petal_width", "petal_length", 0.771159840759359),
-            ("petal_length", "sepal_width", 0.46266888808304363)
+            ("petal_length", "sepal_width", 0.40155946010522525)
         ]
         for target1, target2, ulimit in test_params:
             with self.subTest(f"target:iris({target1},{target2})"):
@@ -129,7 +129,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         test_params = [
             ("NOX", 0.03053089633885037),
             ("PTRATIO", 0.5934105655977463),
-            ("TAX", 26.637047326211157),
+            ("TAX", "23.988253582114222"),
             ("INDUS", 1.3041753678902412)
         ]
         for target, ulimit in test_params:

@@ -70,8 +70,12 @@ class RepairModel():
         self.max_training_column_num: Optional[int] = None
         self.small_domain_threshold: int = 12
         self.inference_order: str = "entropy"
-        self.lgb_num_leaves: int = 31
-        self.lgb_max_depth: int = -1
+        self.hyparam_tuning_enabled: bool = True
+        self.param_grid = {
+            "learning_rate": [0.1, 0.01],
+            "max_depth": [16, 24],
+            "num_leaves": [8, 16],
+        }
 
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
@@ -86,6 +90,9 @@ class RepairModel():
         # This model can be re-used to compute this cost. For more details, see the section 5,
         # 'DATA AUGMENTATION LEARNING', in the paper.
         self.distance: Distance = Levenshtein()
+
+        # Options for internal behaviours
+        self.opts: Dict[str, str] = {}
 
         # Temporary views to keep intermediate results; these views are automatically
         # created when repairing data, and then dropped finally.
@@ -354,6 +361,32 @@ class RepairModel():
         self.inference_order = str(inference_order)
         return self
 
+    def setHyperParamTuningEnabled(self, enabled: bool) -> "RepairModel":
+        """Specifies whether to enable hyper parameter tuning.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        enabled: bool
+            If set to ``True``, tune hyper parameters for repair models (default: ``True``).
+        """
+        self.maximal_likelihood_repair_enabled = bool(enabled)
+        return self
+
+    def setParamSearchSpace(self, key: str, values: List[Any]) -> "RepairModel":
+        """Defines a search space for a given parameter key.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        values: list
+            List of parameter values.
+        """
+        self.param_grid.update(key=values)
+        return self
+
     def setMaximalLikelihoodRepairEnabled(self, enabled: bool) -> "RepairModel":
         """Specifies whether to enable maximal likelihood repair.
 
@@ -382,6 +415,14 @@ class RepairModel():
         self.repair_delta = int(delta)
         return self
 
+    def option(self, key: str, value: str) -> "RepairModel":
+        """Adds an input option for internal functionalities (e.g., model learning).
+
+        .. versionchanged:: 0.1.0
+        """
+        self.opts[str(key)] = str(value)
+        return self
+
     @property
     def _input_table(self) -> str:
         return self._create_temp_view(self.input, "input") if type(self.input) is DataFrame \
@@ -395,6 +436,9 @@ class RepairModel():
             raise ValueError(f"Error cells must have `{self.row_id}` and "
                              "`attribute` in columns")
         return self._create_temp_view(df, "error_cells")
+
+    def _get_option(self, key: str, default_value: str) -> str:
+        return self.opts[str(key)] if str(key) in self.opts else default_value
 
     def _clear_job_group(self) -> None:
         # TODO: Uses `SparkContext.clearJobGroup()` instead
@@ -416,15 +460,13 @@ class RepairModel():
             return wrapper
         return decorator
 
-    def _elapsed_time(name: str):  # type: ignore
+    def _elapsed_time():  # type: ignore
         def decorator(f):  # type: ignore
             @wraps(f)
             def wrapper(self, *args, **kwargs):  # type: ignore
                 start_time = time.time()
                 ret = f(self, *args, **kwargs)
-                logging.info(f"!!!Elapsed time (name: {name}) is {time.time() - start_time}(s)!!!")
-
-                return ret
+                return ret, time.time() - start_time
             return wrapper
         return decorator
 
@@ -742,30 +784,48 @@ class RepairModel():
 
         return X, transformers
 
-    def _build_model(self, X: pd.DataFrame, y: pd.DataFrame, is_discrete: bool) -> pd.DataFrame:
+    @_elapsed_time()
+    def _build_model(self, X: pd.DataFrame, y: pd.DataFrame, is_discrete: bool,
+                     labels: List[str]) -> pd.DataFrame:
         import lightgbm as lgb  # type: ignore[import]
-        if is_discrete:
-            clf = lgb.LGBMClassifier(
-                boosting_type="gbdt",
-                # objective="multiclass",
-                learning_rate=0.1,
-                n_estimators=100,
-                num_leaves=self.lgb_num_leaves,
-                max_depth=self.lgb_max_depth,
-                class_weight="balanced"
+
+        def _objective() -> str:
+            if is_discrete:
+                return "binary" if len(labels) == 2 else "multiclass"
+            else:
+                return "regression"
+
+        # TODO: Validate given parameter values
+        def _n_splits() -> int:
+            return int(self._get_option("cv.n_splits", "3"))
+
+        def _verbose() -> int:
+            return int(self._get_option("cv.verbose", "0"))
+
+        # TODO: Use param unpacking for the class inits
+        model_params = {"objective": _objective(), "class_weight": "balanced"}
+        model = lgb.LGBMClassifier(**model_params) if is_discrete \
+            else lgb.LGBMRegressor(**model_params)
+
+        if self.hyparam_tuning_enabled:
+            from sklearn.model_selection import (  # type: ignore[import]
+                KFold, StratifiedKFold, GridSearchCV
             )
-            return clf.fit(X, y)
-        else:
-            reg = lgb.LGBMRegressor(
-                boosting_type="gbdt",
-                objective="regression",
-                learning_rate=0.1,
-                n_estimators=100,
-                num_leaves=self.lgb_num_leaves,
-                max_depth=self.lgb_max_depth,
-                class_weight="balanced"
-            )
-            return reg.fit(X, y)
+            scorer = "f1_macro" \
+                if is_discrete else "neg_mean_squared_error"
+            cv = StratifiedKFold(n_splits=_n_splits(), shuffle=True) if is_discrete \
+                else KFold(n_splits=_n_splits(), shuffle=True)
+            model = GridSearchCV(
+                model,
+                self.param_grid,
+                cv=cv,
+                scoring=scorer,
+                verbose=_verbose())
+
+        model.fit(X, y)
+        if hasattr(model, "best_params_"):
+            logging.info(f"Best params: {model.best_params_}")
+        return model
 
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame, error_attrs: List[Row],
@@ -794,15 +854,23 @@ class RepairModel():
         excluded_columns = copy.deepcopy(target_columns)
         for index, y in enumerate(target_columns):
             features = self._select_features(env, train_pdf.columns, y, excluded_columns)
-            excluded_columns.remove(y)
-
             X, transformers = self._transform_features(
                 env, train_pdf[features], features, continous_attrs)
+            excluded_columns.remove(y)
+
             is_discrete = y not in continous_attrs
-            models[y] = (self._build_model(X, train_pdf[y], is_discrete), features, transformers)
-            logging.debug("{}[{}]: #features={}, y({})<=X({})".format(
-                "Classifier" if is_discrete else "Regressor", index, len(X.columns), y,
-                ",".join(features)))
+            labels = train_df.selectExpr(f"collect_set(`{y}`) labels").collect()[0].labels \
+                if is_discrete else []
+
+            model, elapsed_time = self._build_model(X, train_pdf[y], is_discrete, labels)
+
+            models[y] = (model, features, transformers)
+            logging.info("{}[{}/{}]: y={} features={} {}elapsed={}s".format(
+                "Classifier" if is_discrete else "Regressor", index, len(target_columns), y,
+                ",".join(features),
+                "labels={} ".format(",".join(labels) if len(labels) < 8 else "...")
+                if len(labels) > 0 else "",
+                elapsed_time))
 
         return models, target_columns
 
@@ -936,7 +1004,7 @@ class RepairModel():
 
         return top_delta_repairs_df
 
-    @_elapsed_time(name="total processing time")
+    @_elapsed_time()
     def _run(self, env: Dict[str, str], input_df: DataFrame, continous_attrs: List[str],
              detect_errors_only: bool, compute_training_target_hist: bool,
              compute_repair_candidate_prob: bool, repair_data: bool) -> DataFrame:
@@ -1102,8 +1170,11 @@ class RepairModel():
                 raise ValueError("Cannot enable maximal likelihood repair mode "
                                  "when continous attributes found")
 
-            return self._run(env, input_df, continous_attrs, detect_errors_only,
-                             compute_training_target_hist, compute_repair_candidate_prob,
-                             repair_data)
+            df, elapsed_time = self._run(
+                env, input_df, continous_attrs, detect_errors_only,
+                compute_training_target_hist, compute_repair_candidate_prob,
+                repair_data)
+            logging.info(f"!!!Total Processing time is {elapsed_time}(s)!!!")
+            return df
         finally:
             self._release_resources()
