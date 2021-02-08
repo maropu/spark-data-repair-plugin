@@ -53,6 +53,7 @@ model to repair them.
     RepairModel.setSmallDomainThreshold
     RepairModel.setTableName
     RepairModel.setTrainingDataSampleRatio
+    RepairModel.setTargets
 
 Repair Misc APIs
 -----------------

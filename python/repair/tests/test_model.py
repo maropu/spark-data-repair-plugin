@@ -184,7 +184,33 @@ class RepairModelTests(ReusedSQLTestCase):
                 expected_result)
 
         _test_setInput("adult")
-        # _test_setInput(self.spark.table("adult"))
+        _test_setInput(self.spark.table("adult"))
+
+    def test_setTargets(self):
+        error_cells_df = expected_result = self.spark.table("adult_repair") \
+            .selectExpr("tid", "attribute") \
+            .orderBy("tid", "attribute")
+
+        def _test_setTargets(targets):
+            actual_result = RepairModel() \
+                .setInput("adult") \
+                .setRowId("tid") \
+                .setTargets(targets) \
+                .run() \
+                .selectExpr("tid", "attribute") \
+                .orderBy("tid", "attribute")
+            expected_result = error_cells_df \
+                .where("attribute IN ({})".format(",".join(map(lambda x: f"'{x}'", targets)))) \
+                .collect()
+            self.assertEqual(
+                actual_result.collect(),
+                expected_result)
+
+        _test_setTargets(["Sex"])
+        _test_setTargets(["Sex", "Income"])
+        _test_setTargets(["Age", "Sex"])
+        _test_setTargets(["Non-Existent", "Age"])
+        _test_setTargets(["Non-Existent"])
 
     def test_setErrorCells(self):
         expected_result = self.spark.table("adult_repair") \

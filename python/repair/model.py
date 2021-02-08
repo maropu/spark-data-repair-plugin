@@ -51,6 +51,7 @@ class RepairModel():
         self.db_name: str = ""
         self.input: Optional[Union[str, DataFrame]] = None
         self.row_id: Optional[str] = None
+        self.targets: List[str] = []
 
         # Parameters for error detection
         self.error_cells: Optional[Union[str, DataFrame]] = None
@@ -161,6 +162,19 @@ class RepairModel():
             the column where all values are different.
         """
         self.row_id = row_id
+        return self
+
+    def setTargets(self, attrs: List[str]) -> "RepairModel":
+        """Specifies target attributes to repair.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        attrs: list
+            list of target attributes.
+        """
+        self.targets = attrs
         return self
 
     def setErrorCells(self, error_cells: Union[str, DataFrame]) -> "RepairModel":
@@ -382,7 +396,7 @@ class RepairModel():
         Parameters
         ----------
         values: list
-            List of parameter values.
+            list of parameter values.
         """
         self.param_grid.update(key=values)
         return self
@@ -515,21 +529,30 @@ class RepairModel():
         return err_cells
 
     @_spark_job_group(name="error detection")
-    def _detect_errors(self, env: Dict[str, str]) -> str:
+    def _detect_errors(self, env: Dict[str, str]) -> DataFrame:
         # If `self.error_cells` provided, just uses it
         if self.error_cells is not None:
-            env["gray_cells"] = self._error_cells
-            logging.info(f'[Error Detection Phase] Error cells provided by `{env["gray_cells"]}`')
+            gray_cells_view = self._error_cells
+            logging.info(f'[Error Detection Phase] Error cells provided by `{gray_cells_view}`')
 
             # We assume that the given error cells are true, so we skip computing error domains
             # with probability because the computational cost is much high.
             self.domain_threshold_beta = 1.0
         else:
             # Applys error detectors to get gray cells
-            env["gray_cells"] = self._detect_error_cells(env["input_table"])
+            gray_cells_view = self._detect_error_cells(env["input_table"])
             logging.info(f'[Error Detection Phase] Detecting errors '
                          f'in a table `{env["input_table"]}` '
                          f'({env["num_attrs"]} cols x {env["num_input_rows"]} rows)...')
+
+        # Filters target attributes if `self.targets` defined
+        if len(self.targets) > 0:
+            in_list = ",".join(map(lambda x: f"'{x}'", self.targets))
+            df = self._spark.sql("SELECT * FROM {} WHERE attribute IN ({})".format(
+                gray_cells_view, in_list))
+            env["gray_cells"] = self._create_temp_view(df, "gray_cells")
+        else:
+            env["gray_cells"] = gray_cells_view
 
         return self._spark.table(env["gray_cells"])
 
@@ -1016,7 +1039,7 @@ class RepairModel():
         gray_cells_df = self._detect_errors(env)
         if gray_cells_df.count() == 0:  # type: ignore
             logging.info("Any error cells not found, so returns the input as clean cells")
-            return input_df
+            return gray_cells_df if not repair_data else input_df
 
         # Sets NULL to suspicious cells
         repair_base_df = self._prepare_repair_base(env, gray_cells_df)
