@@ -821,11 +821,16 @@ class RepairModel():
         def _class_weight() -> str:
             return self._get_option("lgb.class_weight", "balanced")
 
-        def _n_estimators() -> int:
-            return int(self._get_option("lgb.n_estimators", "300"))
-
         def _early_stopping_enabled() -> bool:
             return bool(self._get_option("lgb.early_stopping_enabled", ""))
+
+        def _early_stopping_rounds() -> int:
+            return int(self._get_option("lgb.early_stopping_rounds", "30"))
+
+        def _n_estimators() -> int:
+            return int(self._get_option(
+                "lgb.n_estimators",
+                "100000" if _early_stopping_rounds() else "300"))
 
         def _n_splits() -> int:
             return int(self._get_option("cv.n_splits", "3"))
@@ -844,7 +849,15 @@ class RepairModel():
         model = lgb.LGBMClassifier(**model_params) if is_discrete \
             else lgb.LGBMRegressor(**model_params)
 
-        if self.hyparam_tuning_enabled:
+        # If a task is clasification and #labels if less than 2,
+        # we forcibly disable some optimizations.
+        disable_opts = is_discrete and len(labels) < 2
+        if disable_opts:
+            logging.debug(
+                f"Only {len(labels)} labels found, so forcibly disable learning optimizations "
+                "(e.g., hyper param searches) when building a classifier")
+
+        if not disable_opts and self.hyparam_tuning_enabled:
             from sklearn.model_selection import (  # type: ignore[import]
                 KFold, StratifiedKFold, GridSearchCV
             )
@@ -859,13 +872,14 @@ class RepairModel():
                 scoring=scorer,
                 verbose=_verbose())
 
-        if _early_stopping_enabled():
+        if not disable_opts and _early_stopping_enabled():
             from sklearn.model_selection import train_test_split
             X_train, X_eval, y_train, y_eval = \
-                train_test_split(X, y, test_size=0.20, random_state=42)
+                train_test_split(X, y, test_size=0.20, stratify=y, random_state=42)
             fit_params = {
-                "early_stopping_rounds": 30,
-                "eval_set": [[X_eval, y_eval]]
+                "early_stopping_rounds": _early_stopping_rounds(),
+                "eval_set": [[X_eval, y_eval]],
+                "verbose": _verbose()
             }
             model.fit(X_train, y_train, **fit_params)
         else:
