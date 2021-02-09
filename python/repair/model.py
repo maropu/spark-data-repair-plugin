@@ -829,6 +829,12 @@ class RepairModel():
         import lightgbm as lgb  # type: ignore[import]
 
         # TODO: Validate given parameter values
+        def _boosting_type() -> str:
+            return self._get_option("lgb.boosting_type", "gbdt")
+
+        def _class_weight() -> str:
+            return self._get_option("lgb.class_weight", "balanced")
+
         def _n_estimators() -> int:
             return int(self._get_option("lgb.n_estimators", "300"))
 
@@ -843,8 +849,8 @@ class RepairModel():
 
         # TODO: Use param unpacking for the class inits
         model_params = {
-            "boosting_type": "gbdt",
-            "class_weight": "balanced",
+            "boosting_type": _boosting_type(),
+            "class_weight": _class_weight(),
             "n_estimators": _n_estimators(),
             "random_state": 42
         }
