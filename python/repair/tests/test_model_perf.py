@@ -83,11 +83,12 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         return RepairModel() \
             .setInput(input) \
             .setRowId("tid") \
-            .setInferenceOrder("entropy") \
+            .setInferenceOrder("domain") \
             .setHyperParamTuningEnabled(True) \
             .setParamSearchSpace("learning_rate", [0.5, 0.1, 0.05, 0.01, 0.005]) \
             .setParamSearchSpace("max_depth", [8, 12, 16, 20, 24, 28, 32]) \
-            .setParamSearchSpace("num_leaves", [4, 8, 12, 16])
+            .setParamSearchSpace("num_leaves", [4, 8, 12, 16, 32])
+            .option("lgb.n_estimators", 100)
 
     def _compute_rmse(self, repaired_df, expected):
         # Compares predicted values with the correct ones
@@ -131,7 +132,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         test_params = [
             ("NOX", 0.03053089633885037),
             ("PTRATIO", 0.5934105655977463),
-            ("TAX", "23.988253582114222"),
+            ("TAX", 23.988253582114222),
             ("INDUS", 1.3041753678902412)
         ]
         for target, ulimit in test_params:
