@@ -1075,10 +1075,10 @@ class RepairModel():
         # 1. Error Detection Phase
         #################################################################################
 
-        # If no error found, it just returns the given table
+        # If no error found, we don't need to do nothing
         gray_cells_df = self._detect_errors(env)
         if gray_cells_df.count() == 0:  # type: ignore
-            logging.info("Any error cells not found, so returns the input as clean cells")
+            logging.info("Any error cells not found, so the input data is already clean")
             return gray_cells_df if not repair_data else input_df
 
         # Sets NULL to suspicious cells
@@ -1087,14 +1087,15 @@ class RepairModel():
         # Selects error cells based on the result of domain analysis
         cell_domain_df = self._analyze_error_cell_domain(env, gray_cells_df, continous_attrs)
 
-        # If no error cell found, ready to return a clean table
-        error_cells_df = self._extract_error_cells(env, cell_domain_df, repair_base_df)
-        if error_cells_df.count() == 0:
-            return input_df
-
         # If `detect_errors_only` is True, returns found error cells
+        error_cells_df = self._extract_error_cells(env, cell_domain_df, repair_base_df)
         if detect_errors_only:
             return error_cells_df
+
+        # If no error found, we don't need to do nothing
+        if error_cells_df.count() == 0:
+            logging.info("Any error cells not found, so the input data is already clean")
+            return error_cells_df if not repair_data else input_df
 
         #################################################################################
         # 2. Repair Model Training Phase
