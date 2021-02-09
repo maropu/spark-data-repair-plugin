@@ -375,6 +375,20 @@ class RepairModel():
         self.inference_order = str(inference_order)
         return self
 
+    # TODO: Needs to implement this feature
+    def setFeatureAttributes(self, attrs: List[str]) -> "RepairModel":
+        """Specifies attributes used for repair model training.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        attrs: list
+            list of feature attributes.
+        """
+        raise NotImplementedError("Not implemented yet")
+        return self
+
     def setHyperParamTuningEnabled(self, enabled: bool) -> "RepairModel":
         """Specifies whether to enable hyper parameter tuning.
 
@@ -385,7 +399,7 @@ class RepairModel():
         enabled: bool
             If set to ``True``, tune hyper parameters for repair models (default: ``True``).
         """
-        self.maximal_likelihood_repair_enabled = bool(enabled)
+        self.hyparam_tuning_enabled = bool(enabled)
         return self
 
     def setParamSearchSpace(self, key: str, values: List[Any]) -> "RepairModel":
@@ -398,7 +412,7 @@ class RepairModel():
         values: list
             list of parameter values.
         """
-        self.param_grid.update(key=values)
+        self.param_grid.update({key: values})
         return self
 
     def setMaximalLikelihoodRepairEnabled(self, enabled: bool) -> "RepairModel":
@@ -803,22 +817,24 @@ class RepairModel():
             logging.debug("{} encoders transform ({})=>({})".format(
                 len(transformers), ",".join(features), ",".join(X.columns)))
 
-        # TODO: Needs to normalize continous values?
+        # TODO: Even when using a GDBT, it might be better to standardize
+        # continous values.
 
         return X, transformers
 
+    # TODO: Makes a learning algorithm pluggable
     @_elapsed_time()
     def _build_model(self, X: pd.DataFrame, y: pd.DataFrame, is_discrete: bool,
                      labels: List[str]) -> pd.DataFrame:
         import lightgbm as lgb  # type: ignore[import]
 
-        def _objective() -> str:
-            if is_discrete:
-                return "binary" if len(labels) == 2 else "multiclass"
-            else:
-                return "regression"
-
         # TODO: Validate given parameter values
+        def _n_estimators() -> int:
+            return int(self._get_option("lgb.n_estimators", "300"))
+
+        def _early_stopping_enabled() -> bool:
+            return bool(self._get_option("lgb.early_stopping_enabled", ""))
+
         def _n_splits() -> int:
             return int(self._get_option("cv.n_splits", "3"))
 
@@ -826,7 +842,13 @@ class RepairModel():
             return int(self._get_option("cv.verbose", "0"))
 
         # TODO: Use param unpacking for the class inits
-        model_params = {"objective": _objective(), "class_weight": "balanced"}
+        model_params = {
+            "boosting_type": "gbdt",
+            "class_weight": "balanced",
+            "n_estimators": _n_estimators(),
+            "random_state": 42
+        }
+
         model = lgb.LGBMClassifier(**model_params) if is_discrete \
             else lgb.LGBMRegressor(**model_params)
 
@@ -845,9 +867,21 @@ class RepairModel():
                 scoring=scorer,
                 verbose=_verbose())
 
-        model.fit(X, y)
+        if _early_stopping_enabled():
+            from sklearn.model_selection import train_test_split
+            X_train, X_eval, y_train, y_eval = \
+                train_test_split(X, y, test_size=0.20, random_state=42)
+            fit_params = {
+                "early_stopping_rounds": 30,
+                "eval_set": [[X_eval, y_eval]]
+            }
+            model.fit(X_train, y_train, **fit_params)
+        else:
+            model.fit(X, y)
+
         if hasattr(model, "best_params_"):
-            logging.info(f"Best params: {model.best_params_}")
+            logging.debug(f"Best params: {model.best_params_}")
+
         return model
 
     @_spark_job_group(name="repair model training")
@@ -888,7 +922,7 @@ class RepairModel():
             model, elapsed_time = self._build_model(X, train_pdf[y], is_discrete, labels)
 
             models[y] = (model, features, transformers)
-            logging.info("{}[{}/{}]: y={} features={} {}elapsed={}s".format(
+            logging.debug("{}[{}/{}]: y={} features={} {}elapsed={}s".format(
                 "Classifier" if is_discrete else "Regressor", index, len(target_columns), y,
                 ",".join(features),
                 "labels={} ".format(",".join(labels) if len(labels) < 8 else "...")

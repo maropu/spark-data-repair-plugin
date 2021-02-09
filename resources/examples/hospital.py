@@ -40,6 +40,10 @@ repaired_df = scavenger.repair \
         constraint_path="./testdata/hospital_constraints.txt")) \
     .setDiscreteThreshold(100) \
     .setInferenceOrder("domain") \
+    .setHyperParamTuningEnabled(True) \
+    .setParamSearchSpace("learning_rate", [0.1, 0.5, 0.05, 0.01]) \
+    .setParamSearchSpace("max_depth", [8, 16, 24, 32]) \
+    .setParamSearchSpace("num_leaves", [8, 12, 16]) \
     .run()
 
 # Computes performance numbers (precision & recall)

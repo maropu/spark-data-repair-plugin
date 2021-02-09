@@ -71,6 +71,24 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
     def tearDownClass(cls):
         super(ReusedSQLTestCase, cls).tearDownClass()
 
+    def _inject_null(self, table_name, target_attr_list):
+        return RepairMisc() \
+            .option("table_name", table_name) \
+            .option("target_attr_list", target_attr_list) \
+            .option("null_ratio", "0.10") \
+            .option("seed", "0") \
+            .injectNull()
+
+    def _build_model(self, input):
+        return RepairModel() \
+            .setInput(input) \
+            .setRowId("tid") \
+            .setInferenceOrder("entropy") \
+            .setHyperParamTuningEnabled(True) \
+            .setParamSearchSpace("learning_rate", [0.5, 0.1, 0.05, 0.01, 0.005]) \
+            .setParamSearchSpace("max_depth", [8, 12, 16, 20, 24, 28, 32]) \
+            .setParamSearchSpace("num_leaves", [4, 8, 12, 16])
+
     def _compute_rmse(self, repaired_df, expected):
         # Compares predicted values with the correct ones
         cmp_df = repaired_df.join(self.spark.table(expected), ["tid", "attribute"], "inner")
@@ -88,16 +106,8 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         ]
         for target, ulimit in test_params:
             with self.subTest(f"target:iris({target})"):
-                df = RepairMisc() \
-                    .option("table_name", "iris") \
-                    .option("target_attr_list", target) \
-                    .option("null_ratio", "0.10") \
-                    .option("seed", "0") \
-                    .injectNull()
-                repaired_df = RepairModel() \
-                    .setInput(df) \
-                    .setRowId("tid") \
-                    .run()
+                df = self._inject_null("iris", target)
+                repaired_df = self._build_model(df).run()
                 rmse = self._compute_rmse(repaired_df, "iris_clean")
                 logging.info(f"target:iris({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.001)
@@ -111,16 +121,8 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         ]
         for target1, target2, ulimit in test_params:
             with self.subTest(f"target:iris({target1},{target2})"):
-                df = RepairMisc() \
-                    .option("table_name", "iris") \
-                    .option("target_attr_list", f"{target1},{target2}") \
-                    .option("null_ratio", "0.10") \
-                    .option("seed", "0") \
-                    .injectNull()
-                repaired_df = RepairModel() \
-                    .setInput(df) \
-                    .setRowId("tid") \
-                    .run()
+                df = self._inject_null("iris", f"{target1},{target2}")
+                repaired_df = self._build_model(df).run()
                 rmse = self._compute_rmse(repaired_df, "iris_clean")
                 logging.info(f"target:iris({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.001)
@@ -134,16 +136,8 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         ]
         for target, ulimit in test_params:
             with self.subTest(f"target:boston({target})"):
-                df = RepairMisc() \
-                    .option("table_name", "boston") \
-                    .option("target_attr_list", target) \
-                    .option("null_ratio", "0.10") \
-                    .option("seed", "0") \
-                    .injectNull()
-                repaired_df = RepairModel() \
-                    .setInput(df) \
-                    .setRowId("tid") \
-                    .run()
+                df = self._inject_null("boston", target)
+                repaired_df = self._build_model(df).run()
                 rmse = self._compute_rmse(repaired_df, "boston_clean")
                 logging.info(f"target:boston({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.001)
@@ -157,16 +151,8 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         ]
         for target1, target2, ulimit in test_params:
             with self.subTest(f"target:boston({target1},{target2})"):
-                df = RepairMisc() \
-                    .option("table_name", "boston") \
-                    .option("target_attr_list", f"{target1},{target2}") \
-                    .option("null_ratio", "0.10") \
-                    .option("seed", "0") \
-                    .injectNull()
-                repaired_df = RepairModel() \
-                    .setInput(df) \
-                    .setRowId("tid") \
-                    .run()
+                df = self._inject_null("boston", f"{target1},{target2}")
+                repaired_df = self._build_model(df).run()
                 rmse = self._compute_rmse(repaired_df, "boston_clean")
                 logging.info(f"target:boston({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.001)
@@ -174,9 +160,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
     @unittest.skip(reason="much time to compute repaired data")
     def test_perf_hospital(self):
         constraint_path = "{}/hospital_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
-        repaired_df = RepairModel() \
-            .setTableName("hospital") \
-            .setRowId("tid") \
+        repaired_df = self._build_model("hospital") \
             .setErrorDetector(ConstraintErrorDetector(constraint_path)) \
             .setDiscreteThreshold(100) \
             .run()
