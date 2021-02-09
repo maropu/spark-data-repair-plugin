@@ -41,7 +41,6 @@ model to repair them.
     RepairModel.setDomainThresholds
     RepairModel.setErrorCells
     RepairModel.setErrorDetector
-    RepairModel.setFeatureAttributes
     RepairModel.setHyperParamTuningEnabled
     RepairModel.setInferenceOrder
     RepairModel.setInput

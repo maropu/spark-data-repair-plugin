@@ -323,20 +323,6 @@ class RepairModel():
         self.attr_stat_threshold = float(ratio)
         return self
 
-    # TODO: Needs to implement this feature
-    def setFeatureAttributes(self, attrs: List[str]) -> "RepairModel":
-        """Specifies attributes used for repair model training.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        attrs: list
-            list of feature attributes.
-        """
-        raise NotImplementedError("Not implemented yet")
-        return self
-
     def setTrainingDataSampleRatio(self, ratio: float) -> "RepairModel":
         """Specifies a sample ratio for table used to build statistical models.
 

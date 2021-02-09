@@ -198,7 +198,6 @@ scavenger.repair
   .setAttrStatThreshold(float)                 // threshold for filtering out low frequency (default: 0.0)
 
   // Parameters for Repair Model Training
-  .setFeatureAttributes(list)                  // attributes used for repair model training
   .setTrainingDataSampleRatio(float)           // sample ratio for table used to build statistical models (default: 1.0)
   .setMaxTrainingColumnNum(int)                // max number of columns used when building models
   .setSmallDomainThreshold(int)                // max domain size for low-cardinality catogory encoding (default: 12)
