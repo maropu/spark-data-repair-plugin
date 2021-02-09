@@ -85,9 +85,16 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setRowId("tid") \
             .setInferenceOrder("domain") \
             .setHyperParamTuningEnabled(True) \
-            .setParamSearchSpace("learning_rate", [0.5, 0.1, 0.05, 0.01, 0.005]) \
-            .setParamSearchSpace("max_depth", [8, 12, 16, 20, 24, 28, 32]) \
-            .setParamSearchSpace("num_leaves", [4, 8, 12, 16, 32])
+            .setParamSearchSpace("learning_rate", [0.1, 0.01]) \
+            .setParamSearchSpace("max_depth", [7]) \
+            .setParamSearchSpace("num_leaves", [2, 4, 8, 16, 32, 64]) \
+            .setParamSearchSpace("subsample", [0.5, 0.75]) \
+            .setParamSearchSpace("subsample_freq", [0, 5, 20]) \
+            .setParamSearchSpace("colsample_bytree", [0.1, 0.5, 1.0]) \
+            .setParamSearchSpace("min_child_samples", [1, 10, 25]) \
+            .setParamSearchSpace("min_child_weight", [0.001, 0.01, 0.1]) \
+            .setParamSearchSpace("reg_alpha", [0.0]) \
+            .setParamSearchSpace("reg_lambda", [0.0, 0.1, 1.0]) \
             .option("lgb.n_estimators", 100)
 
     def _compute_rmse(self, repaired_df, expected):
