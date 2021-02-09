@@ -185,6 +185,7 @@ scavenger.repair
   .setDbName(str)                              // database name (default: '')
   .setInput(str)                               // table name or `DataFrame`
   .setRowId(str)                               // unique column name in table
+  .setTargets(list)                            // target attributes to repair
 
   // Parameters for Error Detection
   .setErrorCells(df)                           // user-specified error cells
@@ -197,13 +198,13 @@ scavenger.repair
   .setAttrStatThreshold(float)                 // threshold for filtering out low frequency (default: 0.0)
 
   // Parameters for Repair Model Training
+  .setFeatureAttributes(list)                  // attributes used for repair model training
   .setTrainingDataSampleRatio(float)           // sample ratio for table used to build statistical models (default: 1.0)
   .setMaxTrainingColumnNum(int)                // max number of columns used when building models
   .setSmallDomainThreshold(int)                // max domain size for low-cardinality catogory encoding (default: 12)
   .setInferenceOrder(str)                      // how to order target columns to build models (default: 'entropy')
 
   // Parameters for Repairing
-  .setRepairUpdates(df)                        // user-specified repair updates
   .setMaximalLikelihoodRepairEnabled(boolean)  // whether to enable maximal likelihood repair (default: False)
   .setRepairDelta(int)                         // max number of applied repairs
 
@@ -211,7 +212,6 @@ scavenger.repair
   .run(
     detect_errors_only=boolean,                // whether to return detected error cells (default: False)
     compute_repair_candidate_prob=boolean      // whether to return probabiity mass function of repairs (default: False)
-    repair_data=boolean,                       // whether to return repaired data (default: False)
   )
 ```
 
