@@ -185,7 +185,7 @@ scavenger.repair
   .setDbName(str)                              // database name (default: '')
   .setInput(str)                               // table name or `DataFrame`
   .setRowId(str)                               // unique column name in table
-  .setTargets(list)                            // target attributes to repair
+  .setTargets(list)                            // target attribute list to repair
 
   // Parameters for Error Detection
   .setErrorCells(df)                           // user-specified error cells
