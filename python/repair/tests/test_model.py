@@ -75,7 +75,7 @@ class RepairModelTests(ReusedSQLTestCase):
             "`setInput` and `setRowId` should be called before repairing",
             lambda: RepairModel().setInput("dummyTab").run())
         self.assertRaisesRegexp(
-            TypeError,
+            ValueError,
             "Can not specify a database name when input is `DataFrame`",
             lambda: RepairModel().setInput(self.spark.table("adult"))
             .setDbName("default").run())

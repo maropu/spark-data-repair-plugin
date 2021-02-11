@@ -17,6 +17,7 @@
 # limitations under the License.
 #
 
+import os
 import copy
 import datetime
 import functools
@@ -24,6 +25,7 @@ import heapq
 import inspect
 import json
 import logging
+import pickle
 import numpy as np   # type: ignore[import]
 import pandas as pd  # type: ignore[import]
 import time
@@ -52,6 +54,8 @@ class RepairModel():
         self.input: Optional[Union[str, DataFrame]] = None
         self.row_id: Optional[str] = None
         self.targets: List[str] = []
+
+        self.checkpoint: bool = False
 
         # Parameters for error detection
         self.error_cells: Optional[Union[str, DataFrame]] = None
@@ -925,10 +929,8 @@ class RepairModel():
         else:
             model.fit(X, y)
 
-        if hasattr(model, "best_params_"):
-            logging.debug(f"Best params: {model.best_params_}")
-
-        return model
+        params = model.best_params_ if hasattr(model, "best_params_") else []
+        return model, params
 
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame, error_attrs: List[Row],
@@ -952,8 +954,13 @@ class RepairModel():
         # Builds multiple ML models to repair error cells
         logging.info(f"[Repair Model Training Phase] Building {len(target_columns)} ML models "
                      "to repair the error cells...")
-        # TODO: Stores training data and built models into a persistent storage
+        # Stores built models and their params into a persistent storage
         # for resuming the training process.
+        if self.checkpoint:
+            checkpoint_path = f'checkpoint_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
+            logging.info(f"Checkpoint path is '{checkpoint_path}'")
+            os.mkdir(checkpoint_path)
+
         models = {}
         train_pdf = train_df.toPandas()
         excluded_columns = copy.deepcopy(target_columns)
@@ -967,7 +974,7 @@ class RepairModel():
             labels = train_df.selectExpr(f"collect_set(`{y}`) labels").collect()[0].labels \
                 if is_discrete else []
 
-            model, elapsed_time = self._build_model(X, train_pdf[y], is_discrete, labels)
+            (model, params), elapsed_time = self._build_model(X, train_pdf[y], is_discrete, labels)
             models[y] = (model, features, transformers)
             logging.info("[{}/{}] type={} y={} features={} {}score={} elapsed={}s".format(
                 index, len(target_columns),
@@ -976,6 +983,19 @@ class RepairModel():
                 f"#labels={len(labels)} " if len(labels) > 0 else "",
                 model.best_score_,
                 elapsed_time))
+
+            if self.checkpoint:
+                pickle.dump(model, open(f"{checkpoint_path}/model_{index}.pkl", 'wb'))
+                with open(f"{checkpoint_path}/metadata_{index}.json", mode='w') as f:
+                    metadata = {
+                        "score": model.best_score_,
+                        "type": "classifier" if is_discrete else "regressor",
+                        "params": params,
+                        "y": y,
+                        "features": features,
+                        "labels": labels
+                    }
+                    json.dump(metadata, f, indent=2)
 
         return models, target_columns
 
