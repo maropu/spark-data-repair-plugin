@@ -21,12 +21,12 @@ import copy
 import datetime
 import functools
 import heapq
+import inspect
 import json
 import logging
 import numpy as np   # type: ignore[import]
 import pandas as pd  # type: ignore[import]
 import time
-from functools import wraps
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pyspark.sql import DataFrame, Row, SparkSession, functions  # type: ignore[import]
@@ -104,6 +104,22 @@ class RepairModel():
         self._jvm = self._spark.sparkContext._active_spark_context._jvm
         self._repair_api = self._jvm.RepairApi
 
+    def _argtype_check():  # type: ignore
+        def decorator(f):  # type: ignore
+            @functools.wraps(f)
+            def wrapper(self, *args, **kwargs):  # type: ignore
+                sig = inspect.signature(f)
+                for k, v in sig.bind(self, *args, **kwargs).arguments.items():
+                    annot = sig.parameters[k].annotation
+                    request_type = annot if type(annot) is type else inspect._empty
+                    if request_type is not inspect._empty and type(v) is not request_type:
+                        msg = "`{}` should be provided as {}, got {}"
+                        raise TypeError(msg.format(k, request_type.__name__, type(v).__name__))
+                return f(self, *args, **kwargs)
+            return wrapper
+        return decorator
+
+    @_argtype_check()
     def setDbName(self, db_name: str) -> "RepairModel":
         """Specifies the database name for an input table.
 
@@ -115,10 +131,11 @@ class RepairModel():
             database name (default: '').
         """
         if type(self.input) is DataFrame:
-            raise TypeError("Can not specify a database name when input is `DataFrame`")
+            raise ValueError("Can not specify a database name when input is `DataFrame`")
         self.db_name = db_name
         return self
 
+    @_argtype_check()
     def setTableName(self, table_name: str) -> "RepairModel":
         """Specifies the table or view name to repair data.
 
@@ -129,11 +146,10 @@ class RepairModel():
         table_name : str
             table or view name.
         """
-        if type(table_name) is not str:
-            raise TypeError("table name must be str")
         self.input = table_name
         return self
 
+    # @_argtype_check()
     def setInput(self, input: Union[str, DataFrame]) -> "RepairModel":
         """Specifies the table/view name or :class:`DataFrame` to repair data.
 
@@ -145,12 +161,14 @@ class RepairModel():
             table/view name or :class:`DataFrame`.
         """
         if type(input) is not str and type(input) is not DataFrame:
-            raise TypeError("input must be str or `DataFrame`")
+            raise TypeError("`input` should be provided as str or DataFrame, "
+                            f"got {type(input)}")
         if type(input) is DataFrame:
             self.db_name = ""
         self.input = input
         return self
 
+    @_argtype_check()
     def setRowId(self, row_id: str) -> "RepairModel":
         """Specifies the table name or :class:`DataFrame` to repair data.
 
@@ -164,6 +182,7 @@ class RepairModel():
         self.row_id = row_id
         return self
 
+    # @_argtype_check()
     def setTargets(self, attrs: List[str]) -> "RepairModel":
         """Specifies target attributes to repair.
 
@@ -174,9 +193,12 @@ class RepairModel():
         attrs: list
             list of target attributes.
         """
+        if not (type(attrs) is list and all(type(i) is str for i in attrs)):
+            raise TypeError("`attrs` should be provided as list[str], got {type(attrs)}")
         self.targets = attrs
         return self
 
+    # @_argtype_check()
     def setErrorCells(self, error_cells: Union[str, DataFrame]) -> "RepairModel":
         """Specifies the table/view name or :class:`DataFrame` defining where error cells are.
 
@@ -214,6 +236,7 @@ class RepairModel():
         self.error_cells = error_cells
         return self
 
+    @_argtype_check()
     def setErrorDetector(self, detector: ErrorDetector) -> "RepairModel":
         """
         Specifies the :class:`ErrorDetector` derived class to implement
@@ -232,11 +255,12 @@ class RepairModel():
               defined by denial constraints.
         """
         if not isinstance(detector, ErrorDetector):
-            raise TypeError("Error detector must derive a base class "
-                            "`repair.detectors.ErrorDetector`")
+            raise TypeError("`detector` should be provided as repair.detectors.ErrorDetector, "
+                            "got {type(detector)}")
         self.error_detectors.append(detector)
         return self
 
+    @_argtype_check()
     def setDiscreteThreshold(self, thres: int) -> "RepairModel":
         """Specifies max domain size of discrete values.
 
@@ -250,9 +274,10 @@ class RepairModel():
         """
         if int(thres) < 2:
             raise ValueError("threshold must be bigger than 1")
-        self.discrete_thres = int(thres)
+        self.discrete_thres = thres
         return self
 
+    @_argtype_check()
     def setMinCorrThreshold(self, thres: float) -> "RepairModel":
         """Specifies a threshold to decide which columns are used to compute domains.
 
@@ -264,9 +289,10 @@ class RepairModel():
            threshold value. The value must be in [0.0, 1.0] and
            the default value is 0.7.0.
         """
-        self.min_corr_thres = float(thres)
+        self.min_corr_thres = thres
         return self
 
+    @_argtype_check()
     def setDomainThresholds(self, alpha: float, beta: float) -> "RepairModel":
         """Specifies a thresholds to reduce domain size.
 
@@ -278,10 +304,11 @@ class RepairModel():
            threshold values. The values must be in [0.0, 1.0] and
            the default values of alpha and beta are 0.0 and 0.70, respectively.
         """
-        self.domain_threshold_alpha = float(alpha)
-        self.domain_threshold_beta = float(beta)
+        self.domain_threshold_alpha = alpha
+        self.domain_threshold_beta = beta
         return self
 
+    @_argtype_check()
     def setAttrMaxNumToComputeDomains(self, max: int) -> "RepairModel":
         """
         Specifies the max number of attributes to compute posterior probabiity
@@ -294,9 +321,10 @@ class RepairModel():
         thres: int
             the max number of attributes (default: 4).
         """
-        self.max_attrs_to_compute_domains = int(max)
+        self.max_attrs_to_compute_domains = max
         return self
 
+    @_argtype_check()
     def setAttrStatSampleRatio(self, ratio: float) -> "RepairModel":
         """Specifies a sample ratio for table used to compute co-occurrence frequency.
 
@@ -307,9 +335,10 @@ class RepairModel():
         ratio: float
             sampling ratio (default: 1.0).
         """
-        self.attr_stat_sample_ratio = float(ratio)
+        self.attr_stat_sample_ratio = ratio
         return self
 
+    @_argtype_check()
     def setAttrStatThreshold(self, ratio: float) -> "RepairModel":
         """Specifies a threshold for filtering out low frequency.
 
@@ -320,9 +349,10 @@ class RepairModel():
         ratio: float
             threshold value (default: 0.0).
         """
-        self.attr_stat_threshold = float(ratio)
+        self.attr_stat_threshold = ratio
         return self
 
+    @_argtype_check()
     def setTrainingDataSampleRatio(self, ratio: float) -> "RepairModel":
         """Specifies a sample ratio for table used to build statistical models.
 
@@ -333,9 +363,10 @@ class RepairModel():
         ratio: float
             sampling ratio (default: 1.0).
         """
-        self.training_data_sample_ratio = float(ratio)
+        self.training_data_sample_ratio = ratio
         return self
 
+    @_argtype_check()
     def setMaxTrainingColumnNum(self, n: int) -> "RepairModel":
         """Specifies the max number of columns used to build models.
 
@@ -346,9 +377,10 @@ class RepairModel():
         n: int
             the max number of columns (default: None).
         """
-        self.max_training_column_num = int(n)
+        self.max_training_column_num = n
         return self
 
+    @_argtype_check()
     def setSmallDomainThreshold(self, thres: int) -> "RepairModel":
         """Specifies max domain size for low-cardinality catogory encoding.
 
@@ -359,9 +391,10 @@ class RepairModel():
         thres: int
             threshold value (default: 12).
         """
-        self.small_domain_threshold = int(thres)
+        self.small_domain_threshold = thres
         return self
 
+    @_argtype_check()
     def setInferenceOrder(self, inference_order: str) -> "RepairModel":
         """Specifies how to order target columns when building models.
 
@@ -372,9 +405,10 @@ class RepairModel():
         inference_order: str
             built-in logic name (default: 'entropy').
         """
-        self.inference_order = str(inference_order)
+        self.inference_order = inference_order
         return self
 
+    @_argtype_check()
     def setHyperParamTuningEnabled(self, enabled: bool) -> "RepairModel":
         """Specifies whether to enable hyper parameter tuning.
 
@@ -385,9 +419,10 @@ class RepairModel():
         enabled: bool
             If set to ``True``, tune hyper parameters for repair models (default: ``True``).
         """
-        self.hyparam_tuning_enabled = bool(enabled)
+        self.hyparam_tuning_enabled = enabled
         return self
 
+    @_argtype_check()
     def setParamSearchSpace(self, key: str, values: List[Any]) -> "RepairModel":
         """Defines a search space for a given parameter key.
 
@@ -398,9 +433,12 @@ class RepairModel():
         values: list
             list of parameter values.
         """
+        if type(values) is not list:
+            raise TypeError("`values` should be provided as list, got {type(attrs)}")
         self.param_grid.update({key: values})
         return self
 
+    @_argtype_check()
     def setMaximalLikelihoodRepairEnabled(self, enabled: bool) -> "RepairModel":
         """Specifies whether to enable maximal likelihood repair.
 
@@ -411,9 +449,10 @@ class RepairModel():
         enabled: bool
             If set to ``True``, uses maximal likelihood repair (default: ``False``).
         """
-        self.maximal_likelihood_repair_enabled = bool(enabled)
+        self.maximal_likelihood_repair_enabled = enabled
         return self
 
+    @_argtype_check()
     def setRepairDelta(self, delta: int) -> "RepairModel":
         """Specifies the max number of applied repairs.
 
@@ -429,12 +468,13 @@ class RepairModel():
         self.repair_delta = int(delta)
         return self
 
+    @_argtype_check()
     def option(self, key: str, value: str) -> "RepairModel":
         """Adds an input option for internal functionalities (e.g., model learning).
 
         .. versionchanged:: 0.1.0
         """
-        self.opts[str(key)] = str(value)
+        self.opts[key] = value
         return self
 
     @property
@@ -462,7 +502,7 @@ class RepairModel():
 
     def _spark_job_group(name: str):  # type: ignore
         def decorator(f):  # type: ignore
-            @wraps(f)
+            @functools.wraps(f)
             def wrapper(self, *args, **kwargs):  # type: ignore
                 self._spark.sparkContext.setJobGroup(name, name)
                 start_time = time.time()
@@ -476,7 +516,7 @@ class RepairModel():
 
     def _elapsed_time():  # type: ignore
         def decorator(f):  # type: ignore
-            @wraps(f)
+            @functools.wraps(f)
             def wrapper(self, *args, **kwargs):  # type: ignore
                 start_time = time.time()
                 ret = f(self, *args, **kwargs)
@@ -912,6 +952,8 @@ class RepairModel():
         # Builds multiple ML models to repair error cells
         logging.info(f"[Repair Model Training Phase] Building {len(target_columns)} ML models "
                      "to repair the error cells...")
+        # TODO: Stores training data and built models into a persistent storage
+        # for resuming the training process.
         models = {}
         train_pdf = train_df.toPandas()
         excluded_columns = copy.deepcopy(target_columns)
@@ -926,13 +968,13 @@ class RepairModel():
                 if is_discrete else []
 
             model, elapsed_time = self._build_model(X, train_pdf[y], is_discrete, labels)
-
             models[y] = (model, features, transformers)
-            logging.debug("{}[{}/{}]: y={} features={} {}elapsed={}s".format(
-                "Classifier" if is_discrete else "Regressor", index, len(target_columns), y,
-                ",".join(features),
-                "labels={} ".format(",".join(labels) if len(labels) < 8 else "...")
-                if len(labels) > 0 else "",
+            logging.info("[{}/{}] type={} y={} features={} {}score={} elapsed={}s".format(
+                index, len(target_columns),
+                "classifier" if is_discrete else "regressor",
+                y, ",".join(features),
+                f"#labels={len(labels)} " if len(labels) > 0 else "",
+                model.best_score_,
                 elapsed_time))
 
         return models, target_columns

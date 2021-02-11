@@ -116,6 +116,28 @@ class RepairModelTests(ReusedSQLTestCase):
         _assert_exclusive_params(
             lambda: api.run(compute_repair_candidate_prob=True, repair_data=True))
 
+    def test_argtype_check(self):
+        self.assertRaisesRegexp(
+            TypeError,
+            "`db_name` should be provided as str, got int",
+            lambda: RepairModel().setDbName(1))
+        self.assertRaisesRegexp(
+            TypeError,
+            "`table_name` should be provided as str, got int",
+            lambda: RepairModel().setTableName(1))
+        self.assertRaisesRegexp(
+            TypeError,
+            "`thres` should be provided as int, got str",
+            lambda: RepairModel().setDiscreteThreshold("a"))
+        self.assertRaisesRegexp(
+            TypeError,
+            "`thres` should be provided as float, got int",
+            lambda: RepairModel().setMinCorrThreshold(1))
+        self.assertRaisesRegexp(
+            TypeError,
+            "`beta` should be provided as float, got int",
+            lambda: RepairModel().setDomainThresholds(1.0, 1))
+
     def test_multiple_run(self):
         # Checks if auto-generated views are dropped finally
         current_view_nums = self.spark.sql("SHOW VIEWS").count()
