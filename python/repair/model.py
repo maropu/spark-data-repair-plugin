@@ -79,9 +79,9 @@ class RepairModel():
         self.inference_order: str = "entropy"
         self.hyparam_tuning_enabled: bool = True
         self.param_grid = {
-            "learning_rate": [0.1, 0.01],
-            "max_depth": [16, 24],
-            "num_leaves": [8, 16],
+            "learning_rate": [0.01],
+            "max_depth": [7],
+            "num_leaves": [2, 8, 16, 32, 64]
         }
 
         # Parameters for repairing
