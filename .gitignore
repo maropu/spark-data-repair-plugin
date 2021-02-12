@@ -3,6 +3,7 @@ hs_err_pid*
 *.pyc
 .idea/
 .idea_modules/
+checkpoint_*
 bin/pycodestyle-*
 python/docs/build/*
 python/docs/source/apis/*

@@ -55,7 +55,9 @@ class RepairModel():
         self.row_id: Optional[str] = None
         self.targets: List[str] = []
 
-        self.checkpoint: bool = False
+        # For storing built models and their params into a persistent storage
+        # to analyze the training process.
+        self.checkpoint: bool = True
 
         # Parameters for error detection
         self.error_cells: Optional[Union[str, DataFrame]] = None
@@ -115,6 +117,7 @@ class RepairModel():
                 sig = inspect.signature(f)
                 for k, v in sig.bind(self, *args, **kwargs).arguments.items():
                     annot = sig.parameters[k].annotation
+                    # TODO: Cannot handle types ohter than primitive types (e.g., List, Union, ...)
                     request_type = annot if type(annot) is type else inspect._empty
                     if request_type is not inspect._empty and type(v) is not request_type:
                         msg = "`{}` should be provided as {}, got {}"
@@ -200,6 +203,22 @@ class RepairModel():
         if not (type(attrs) is list and all(type(i) is str for i in attrs)):
             raise TypeError("`attrs` should be provided as list[str], got {type(attrs)}")
         self.targets = attrs
+        return self
+
+    @_argtype_check()
+    def setCheckpoint(self, enabled: bool) -> "RepairModel":
+        """
+        Specifies whether to store built models and their params into a persistent
+        storage to analyze the training process.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        enabled: bool
+            If set to ``True``, store built models and thier params (default: ``False``).
+        """
+        self.checkpoint = enabled
         return self
 
     # @_argtype_check()
@@ -954,12 +973,31 @@ class RepairModel():
         # Builds multiple ML models to repair error cells
         logging.info(f"[Repair Model Training Phase] Building {len(target_columns)} ML models "
                      "to repair the error cells...")
-        # Stores built models and their params into a persistent storage
-        # for resuming the training process.
+
         if self.checkpoint:
             checkpoint_path = f'checkpoint_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
-            logging.info(f"Checkpoint path is '{checkpoint_path}'")
+            train_temp_view = f"train_{checkpoint_path}"
+
+            # Keep a training table so that users can check later
+            train_df.createOrReplaceTempView(train_temp_view)
+
+            # Path to store models that will be built by the training process
             os.mkdir(checkpoint_path)
+            with open(f"{checkpoint_path}/metadata.json", mode='w') as f:
+                metadata = {
+                    "train_table": train_temp_view,
+                    "#rows": train_df.count(),
+                    "sample_ratio": self.training_data_sample_ratio,
+                    "columns": train_df.columns,
+                    "inference_order": self.inference_order,
+                    "target_columns": target_columns,
+                    "pairwise_stats": env["pairwise_attr_stats"],
+                    "distinct_stats": env["distinct_stats"]
+                }
+                json.dump(metadata, f, indent=2)
+
+            logging.info(f"Model data checkpoint enabled for {train_temp_view}, "
+                         f"the output path is '{checkpoint_path}'")
 
         models = {}
         train_pdf = train_df.toPandas()
@@ -971,6 +1009,7 @@ class RepairModel():
             excluded_columns.remove(y)
 
             is_discrete = y not in continous_attrs
+            model_type = "classifier" if is_discrete else "regressor"
             labels = train_df.selectExpr(f"collect_set(`{y}`) labels").collect()[0].labels \
                 if is_discrete else []
 
@@ -978,18 +1017,17 @@ class RepairModel():
             models[y] = (model, features, transformers)
             logging.info("[{}/{}] type={} y={} features={} {}score={} elapsed={}s".format(
                 index, len(target_columns),
-                "classifier" if is_discrete else "regressor",
-                y, ",".join(features),
+                model_type, y, ",".join(features),
                 f"#labels={len(labels)} " if len(labels) > 0 else "",
                 model.best_score_,
                 elapsed_time))
 
             if self.checkpoint:
-                pickle.dump(model, open(f"{checkpoint_path}/model_{index}.pkl", 'wb'))
-                with open(f"{checkpoint_path}/metadata_{index}.json", mode='w') as f:
+                pickle.dump(model, open(f"{checkpoint_path}/{index}_{y}_{model_type}.pkl", 'wb'))
+                with open(f"{checkpoint_path}/{index}_{y}_{model_type}.json", mode='w') as f:
                     metadata = {
                         "score": model.best_score_,
-                        "type": "classifier" if is_discrete else "regressor",
+                        "type": model_type,
                         "params": params,
                         "y": y,
                         "features": features,
