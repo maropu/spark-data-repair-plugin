@@ -1023,8 +1023,8 @@ class RepairModel():
                 elapsed_time))
 
             if self.checkpoint:
-                pickle.dump(model, open(f"{checkpoint_path}/{index}_{y}_{model_type}.pkl", 'wb'))
-                with open(f"{checkpoint_path}/{index}_{y}_{model_type}.json", mode='w') as f:
+                pickle.dump(model, open(f"{checkpoint_path}/{index}_{model_type}_{y}.pkl", 'wb'))
+                with open(f"{checkpoint_path}/{index}_{model_type}_{y}.json", mode='w') as f:
                     metadata = {
                         "score": model.best_score_,
                         "type": model_type,
