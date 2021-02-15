@@ -57,7 +57,7 @@ class RepairModel():
 
         # For storing built models and their params into a persistent storage
         # to analyze the training process.
-        self.checkpoint: bool = True
+        self.checkpoint: bool = False
 
         # Parameters for error detection
         self.error_cells: Optional[Union[str, DataFrame]] = None
@@ -77,12 +77,6 @@ class RepairModel():
         self.max_training_column_num: Optional[int] = None
         self.small_domain_threshold: int = 12
         self.inference_order: str = "entropy"
-        self.hyparam_tuning_enabled: bool = True
-        self.param_grid = {
-            "learning_rate": [0.01],
-            "max_depth": [7],
-            "num_leaves": [2, 8, 16, 32, 64]
-        }
 
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
@@ -429,36 +423,6 @@ class RepairModel():
             built-in logic name (default: 'entropy').
         """
         self.inference_order = inference_order
-        return self
-
-    @_argtype_check()
-    def setHyperParamTuningEnabled(self, enabled: bool) -> "RepairModel":
-        """Specifies whether to enable hyper parameter tuning.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        enabled: bool
-            If set to ``True``, tune hyper parameters for repair models (default: ``True``).
-        """
-        self.hyparam_tuning_enabled = enabled
-        return self
-
-    @_argtype_check()
-    def setParamSearchSpace(self, key: str, values: List[Any]) -> "RepairModel":
-        """Defines a search space for a given parameter key.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        values: list
-            list of parameter values.
-        """
-        if type(values) is not list:
-            raise TypeError("`values` should be provided as list, got {type(attrs)}")
-        self.param_grid.update({key: values})
         return self
 
     @_argtype_check()
@@ -873,7 +837,7 @@ class RepairModel():
 
     # TODO: Makes a learning algorithm pluggable
     @_elapsed_time()
-    def _build_model(self, X: pd.DataFrame, y: pd.DataFrame, is_discrete: bool,
+    def _build_model(self, X: pd.DataFrame, y: pd.Series, is_discrete: bool,
                      labels: List[str]) -> pd.DataFrame:
         import lightgbm as lgb  # type: ignore[import]
 
@@ -884,72 +848,120 @@ class RepairModel():
         def _class_weight() -> str:
             return self._get_option("lgb.class_weight", "balanced")
 
-        def _early_stopping_enabled() -> bool:
-            return bool(self._get_option("lgb.early_stopping_enabled", ""))
+        def _learning_rate() -> float:
+            return float(self._get_option("lgb.learning_rate", "0.01"))
 
-        def _early_stopping_rounds() -> int:
-            return int(self._get_option("lgb.early_stopping_rounds", "30"))
+        def _max_depth() -> int:
+            return int(self._get_option("lgb.max_depth", "7"))
+
+        def _max_bin() -> int:
+            return int(self._get_option("lgb.max_bin", "255"))
+
+        def _reg_alpha() -> float:
+            return float(self._get_option("lgb.reg_alpha", "0.0"))
+
+        def _min_split_gain() -> float:
+            return float(self._get_option("lgb.min_split_gain", "0.0"))
 
         def _n_estimators() -> int:
-            return int(self._get_option(
-                "lgb.n_estimators",
-                "100000" if _early_stopping_rounds() else "300"))
+            return int(self._get_option("lgb.n_estimators", "300"))
 
         def _n_splits() -> int:
             return int(self._get_option("cv.n_splits", "3"))
 
-        def _verbose() -> int:
-            return int(self._get_option("cv.verbose", "0"))
+        def _max_eval() -> int:
+            return int(self._get_option("hp.max_evals", "100000000"))
 
-        # TODO: Use param unpacking for the class inits
-        model_params = {
+        fixed_params = {
             "boosting_type": _boosting_type(),
             "class_weight": _class_weight(),
+            "learning_rate": _learning_rate(),
+            "max_depth": _max_depth(),
+            "max_bin": _max_bin(),
+            "reg_alpha": _reg_alpha(),
+            "min_split_gain": _min_split_gain(),
             "n_estimators": _n_estimators(),
-            "random_state": 42
+            "random_state": 42,
+            "n_jobs": -1
         }
 
-        model = lgb.LGBMClassifier(**model_params) if is_discrete \
-            else lgb.LGBMRegressor(**model_params)
+        model_class = lgb.LGBMClassifier if is_discrete \
+            else lgb.LGBMRegressor
 
         # If a task is clasification and #labels if less than 2,
         # we forcibly disable some optimizations.
         disable_opts = is_discrete and len(labels) < 2
         if disable_opts:
-            logging.debug(
+            logging.warn(
                 f"Only {len(labels)} labels found, so forcibly disable learning optimizations "
                 "(e.g., hyper param searches) when building a classifier")
 
-        if not disable_opts and self.hyparam_tuning_enabled:
+        params: Dict[str, Any] = {}
+        min_loss = float("nan")
+
+        if not disable_opts:
+            from hyperopt import hp, tpe, Trials  # type: ignore[import]
+            from hyperopt.early_stop import no_progress_loss  # type: ignore[import]
+            from hyperopt.fmin import fmin  # type: ignore[import]
             from sklearn.model_selection import (  # type: ignore[import]
-                KFold, StratifiedKFold, GridSearchCV
+                cross_val_score, KFold, StratifiedKFold
             )
-            scorer = "f1_macro" \
-                if is_discrete else "neg_mean_squared_error"
+
+            # Forcibly disable INFO-level logging in the `hyperopt` module
+            logger = logging.getLogger("hyperopt")
+            logger.setLevel(logging.WARN)
+
+            param_space = {
+                "num_leaves": hp.quniform("num_leaves", 2, 100, 1),
+                "subsample": hp.uniform("subsample", 0.5, 1.0),
+                "subsample_freq": hp.quniform("subsample_freq", 1, 20, 1),
+                "colsample_bytree": hp.uniform("colsample_bytree", 0.01, 1.0),
+                "min_child_samples": hp.quniform("min_child_samples", 1, 50, 1),
+                "min_child_weight": hp.loguniform("min_child_weight", -3, 1),
+                "reg_lambda": hp.loguniform("reg_lambda", -2, 3)
+            }
+
+            scorer = "f1_macro" if is_discrete else "neg_mean_squared_error"
             cv = StratifiedKFold(n_splits=_n_splits(), shuffle=True) if is_discrete \
                 else KFold(n_splits=_n_splits(), shuffle=True)
-            model = GridSearchCV(
-                model,
-                self.param_grid,
-                cv=cv,
-                scoring=scorer,
-                verbose=_verbose())
 
-        if not disable_opts and _early_stopping_enabled():
-            from sklearn.model_selection import train_test_split
-            X_train, X_eval, y_train, y_eval = \
-                train_test_split(X, y, test_size=0.20, stratify=y, random_state=42)
-            fit_params = {
-                "early_stopping_rounds": _early_stopping_rounds(),
-                "eval_set": [[X_eval, y_eval]],
-                "verbose": _verbose()
-            }
-            model.fit(X_train, y_train, **fit_params)
-        else:
-            model.fit(X, y)
+            def _create_model(params: Dict[str, Any]) -> Any:
+                # Some params must be int
+                for k in ["num_leaves", "subsample_freq", "min_child_samples"]:
+                    params[k] = int(params[k])
+                p = fixed_params.copy()
+                p.update(params)
+                return model_class(**p)
 
-        params = model.best_params_ if hasattr(model, "best_params_") else []
-        return model, params
+            def _objective(params: Dict[str, Any]) -> float:
+                model = _create_model(params)
+                fit_params = {"verbose": 0}
+                scores = -cross_val_score(
+                    model, X, y, scoring=scorer, cv=cv, fit_params=fit_params, n_jobs=-1)
+                return scores.mean()
+
+            trials = Trials()
+
+            best_params = fmin(
+                fn=_objective,
+                space=param_space,
+                algo=tpe.suggest,
+                trials=trials,
+                max_evals=_max_eval(),
+                early_stop_fn=no_progress_loss(10),
+                rstate=np.random.RandomState(42),
+                show_progressbar=False,
+                verbose=False)
+
+            sorted_lst = sorted(trials.trials, key=lambda x: x['result']['loss'])
+            min_loss = sorted_lst[0]['result']['loss']
+            params = best_params
+
+        # Builds a model with `best_params`
+        model = _create_model(params)
+        model.fit(X, y)
+
+        return model, params, -min_loss
 
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame, error_attrs: List[Row],
@@ -1013,20 +1025,21 @@ class RepairModel():
             labels = train_df.selectExpr(f"collect_set(`{y}`) labels").collect()[0].labels \
                 if is_discrete else []
 
-            (model, params), elapsed_time = self._build_model(X, train_pdf[y], is_discrete, labels)
+            (model, params, score), elapsed_time = \
+                self._build_model(X, train_pdf[y], is_discrete, labels)
             models[y] = (model, features, transformers)
             logging.info("[{}/{}] type={} y={} features={} {}score={} elapsed={}s".format(
                 index, len(target_columns),
                 model_type, y, ",".join(features),
                 f"#labels={len(labels)} " if len(labels) > 0 else "",
-                model.best_score_,
+                score,
                 elapsed_time))
 
             if self.checkpoint:
                 pickle.dump(model, open(f"{checkpoint_path}/{index}_{model_type}_{y}.pkl", 'wb'))
                 with open(f"{checkpoint_path}/{index}_{model_type}_{y}.json", mode='w') as f:
                     metadata = {
-                        "score": model.best_score_,
+                        "score": score,
                         "type": model_type,
                         "params": params,
                         "y": y,

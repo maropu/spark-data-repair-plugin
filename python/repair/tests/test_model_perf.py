@@ -83,20 +83,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         return RepairModel() \
             .setInput(input) \
             .setRowId("tid") \
-            .setInferenceOrder("domain") \
-            .setHyperParamTuningEnabled(True) \
-            .setParamSearchSpace("learning_rate", [0.01]) \
-            .setParamSearchSpace("max_depth", [7]) \
-            .setParamSearchSpace("num_leaves", [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96]) \
-            .setParamSearchSpace("subsample", [0.5, 0.75, 1.0]) \
-            .setParamSearchSpace("subsample_freq", [0, 5, 20]) \
-            .setParamSearchSpace("colsample_bytree", [0.1, 0.5, 1.0]) \
-            .setParamSearchSpace("min_child_samples", [1, 10, 25, 50]) \
-            .setParamSearchSpace("min_child_weight", [0.001, 0.01, 0.1, 1.0]) \
-            .setParamSearchSpace("reg_alpha", [0.0]) \
-            .setParamSearchSpace("reg_lambda", [0.0, 0.1, 1.0, 10.0]) \
-            .setParamSearchSpace("min_split_gain", [0.0]) \
-            .option("lgb.n_estimators", "1000")
+            .setInferenceOrder("domain")
 
     def _compute_rmse(self, repaired_df, expected):
         # Compares predicted values with the correct ones
@@ -106,7 +93,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .collect()[0] \
             .rmse
 
-    @unittest.skip(reason="much time to compute repaired data")
     def test_perf_iris_target_num_1(self):
         test_params = [
             ("sepal_width", 0.3455068740271313),
@@ -122,7 +108,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 logging.info(f"target:iris({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.001)
 
-    @unittest.skip(reason="much time to compute repaired data")
     def test_perf_iris_target_num_2(self):
         test_params = [
             ("sepal_width", "sepal_length", 0.6093028803476969),
@@ -138,7 +123,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 logging.info(f"target:iris({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.001)
 
-    @unittest.skip(reason="much time to compute repaired data")
     def test_perf_boston_target_num_1(self):
         test_params = [
             ("NOX", 0.03053089633885037),
@@ -154,7 +138,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 logging.info(f"target:boston({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.001)
 
-    @unittest.skip(reason="much time to compute repaired data")
     def test_perf_boston_target_num_2(self):
         test_params = [
             ("NOX", "PTRATIO", 0.4691041696958255),

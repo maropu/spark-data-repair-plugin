@@ -42,13 +42,11 @@ model to repair them.
     RepairModel.setDomainThresholds
     RepairModel.setErrorCells
     RepairModel.setErrorDetector
-    RepairModel.setHyperParamTuningEnabled
     RepairModel.setInferenceOrder
     RepairModel.setInput
     RepairModel.setMaxTrainingColumnNum
     RepairModel.setMaximalLikelihoodRepairEnabled
     RepairModel.setMinCorrThreshold
-    RepairModel.setParamSearchSpace
     RepairModel.setRepairDelta
     RepairModel.setRowId
     RepairModel.setSmallDomainThreshold

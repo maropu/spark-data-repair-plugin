@@ -138,6 +138,11 @@ class RepairModelTests(ReusedSQLTestCase):
             "`beta` should be provided as float, got int",
             lambda: RepairModel().setDomainThresholds(1.0, 1))
 
+    # TODO: We fix a seed for building a repair model, but inferred values fluctuate run-by-run.
+    # So, to avoid it, we set 1 to `hp.max_evals` for now.
+    def _build_model(self):
+        return RepairModel().option("hp.max_evals", "1")
+
     def test_multiple_run(self):
         # Checks if auto-generated views are dropped finally
         current_view_nums = self.spark.sql("SHOW VIEWS").count()
@@ -146,7 +151,7 @@ class RepairModelTests(ReusedSQLTestCase):
             .orderBy("tid", "attribute").collect()
 
         def _test_basic():
-            test_model = RepairModel() \
+            test_model = self._build_model() \
                 .setTableName("adult") \
                 .setRowId("tid")
             self.assertEqual(
@@ -186,7 +191,7 @@ class RepairModelTests(ReusedSQLTestCase):
         with self.table("adult_table"):
             # Tests for input overwrite case ("default.adult_table" -> "adult")
             self.spark.table("adult").write.mode("overwrite").saveAsTable("adult_table")
-            test_model = RepairModel() \
+            test_model = self._build_model() \
                 .setDbName("default") \
                 .setTableName("adult_table") \
                 .setInput(self.spark.table("adult")) \
@@ -200,7 +205,7 @@ class RepairModelTests(ReusedSQLTestCase):
             .orderBy("tid", "attribute").collect()
 
         def _test_setInput(input):
-            test_model = RepairModel().setInput(input).setRowId("tid")
+            test_model = self._build_model().setInput(input).setRowId("tid")
             self.assertEqual(
                 test_model.run().orderBy("tid", "attribute").collect(),
                 expected_result)
@@ -214,7 +219,7 @@ class RepairModelTests(ReusedSQLTestCase):
             .orderBy("tid", "attribute")
 
         def _test_setTargets(targets):
-            actual_result = RepairModel() \
+            actual_result = self._build_model() \
                 .setInput("adult") \
                 .setRowId("tid") \
                 .setTargets(targets) \
@@ -239,7 +244,7 @@ class RepairModelTests(ReusedSQLTestCase):
             .orderBy("tid", "attribute").collect()
 
         def _test_setErrorCells(error_cells):
-            test_model = RepairModel() \
+            test_model = self._build_model() \
                 .setTableName("adult") \
                 .setRowId("tid") \
                 .setErrorCells(error_cells)
@@ -252,7 +257,7 @@ class RepairModelTests(ReusedSQLTestCase):
 
     def test_detect_errors_only(self):
         # Tests for `NullErrorDetector`
-        null_errors = RepairModel() \
+        null_errors = self._build_model() \
             .setInput("adult") \
             .setRowId("tid") \
             .run(detect_errors_only=True)
@@ -267,7 +272,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 Row(tid="7", attribute="Sex", current_value=None)])
 
         # Tests for `RegExErrorDetector`
-        regex_errors = RepairModel() \
+        regex_errors = self._build_model() \
             .setInput("adult") \
             .setRowId("tid") \
             .setErrorDetector(RegExErrorDetector("Exec-managerial")) \
@@ -283,7 +288,7 @@ class RepairModelTests(ReusedSQLTestCase):
 
         # Tests for `ConstraintErrorDetector`
         constraint_path = "{}/adult_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
-        constraint_errors = RepairModel() \
+        constraint_errors = self._build_model() \
             .setInput("adult") \
             .setRowId("tid") \
             .setErrorDetector(ConstraintErrorDetector(constraint_path)) \
@@ -298,7 +303,7 @@ class RepairModelTests(ReusedSQLTestCase):
     def test_repair_data(self):
         expected_result = self.spark.table("adult_clean") \
             .orderBy("tid").collect()
-        test_model = RepairModel() \
+        test_model = self._build_model() \
             .setTableName("adult") \
             .setRowId("tid")
         self.assertEqual(
@@ -308,7 +313,7 @@ class RepairModelTests(ReusedSQLTestCase):
     def test_setRepairUpdates(self):
         expected_result = self.spark.table("adult_clean") \
             .orderBy("tid").collect()
-        repair_updates_df = RepairModel() \
+        repair_updates_df = self._build_model() \
             .setTableName("adult") \
             .setRowId("tid") \
             .run()
