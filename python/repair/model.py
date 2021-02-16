@@ -57,7 +57,7 @@ class RepairModel():
 
         # For storing built models and their params into a persistent storage
         # to analyze the training process.
-        self.checkpoint: bool = False
+        self.checkpoint_path: Optional[str] = None
 
         # Parameters for error detection
         self.error_cells: Optional[Union[str, DataFrame]] = None
@@ -200,19 +200,21 @@ class RepairModel():
         return self
 
     @_argtype_check()
-    def setCheckpoint(self, enabled: bool) -> "RepairModel":
+    def setCheckpointPath(self, path: str) -> "RepairModel":
         """
-        Specifies whether to store built models and their params into a persistent
+        Specifies a directory path to store built models and their params into a persistent
         storage to analyze the training process.
 
         .. versionchanged:: 0.1.0
 
         Parameters
         ----------
-        enabled: bool
-            If set to ``True``, store built models and thier params (default: ``False``).
+        path: str
+            directory path for checkpointing (default: ``None``).
         """
-        self.checkpoint = enabled
+        if os.path.exists(path):
+            raise ValueError(f"Path '{path}' already exists")
+        self.checkpoint_path = path
         return self
 
     # @_argtype_check()
@@ -986,16 +988,18 @@ class RepairModel():
         logging.info(f"[Repair Model Training Phase] Building {len(target_columns)} ML models "
                      "to repair the error cells...")
 
-        if self.checkpoint:
-            checkpoint_path = f'checkpoint_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
-            train_temp_view = f"train_{checkpoint_path}"
-
+        if self.checkpoint_path is not None:
             # Keep a training table so that users can check later
+            train_temp_view = f'train_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
             train_df.createOrReplaceTempView(train_temp_view)
 
             # Path to store models that will be built by the training process
-            os.mkdir(checkpoint_path)
-            with open(f"{checkpoint_path}/metadata.json", mode='w') as f:
+            os.mkdir(self.checkpoint_path)
+
+            logging.info(f"Model data checkpoint enabled for {train_temp_view}, "
+                         f"the output path is '{self.checkpoint_path}'")
+
+            with open(f"{self.checkpoint_path}/metadata.json", mode='w') as f:
                 metadata = {
                     "train_table": train_temp_view,
                     "#rows": train_df.count(),
@@ -1007,9 +1011,6 @@ class RepairModel():
                     "distinct_stats": env["distinct_stats"]
                 }
                 json.dump(metadata, f, indent=2)
-
-            logging.info(f"Model data checkpoint enabled for {train_temp_view}, "
-                         f"the output path is '{checkpoint_path}'")
 
         models = {}
         train_pdf = train_df.toPandas()
@@ -1035,9 +1036,18 @@ class RepairModel():
                 score,
                 elapsed_time))
 
-            if self.checkpoint:
-                pickle.dump(model, open(f"{checkpoint_path}/{index}_{model_type}_{y}.pkl", 'wb'))
-                with open(f"{checkpoint_path}/{index}_{model_type}_{y}.json", mode='w') as f:
+            if self.checkpoint_path is not None:
+                checkpoint_prefix = f"{self.checkpoint_path}/{index}_{model_type}_{y}"
+                # TODO: An error below happens when using `open` and `pickle` together:
+                #   Argument 2 to "dump" has incompatible type "TextIO"; expected "IO[bytes]"
+                # with open(f"{checkpoint_prefix}.pkl", mode='wb') as f:
+                #     pickle.dump(model, f)
+                try:
+                    fd = open(f"{checkpoint_prefix}.pkl", mode='wb')
+                    pickle.dump(model, fd)
+                finally:
+                    fd.close()
+                with open(f"{checkpoint_prefix}.json", mode='w') as f:
                     metadata = {
                         "score": score,
                         "type": model_type,

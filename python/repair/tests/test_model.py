@@ -255,6 +255,36 @@ class RepairModelTests(ReusedSQLTestCase):
         _test_setErrorCells("adult_dirty")
         _test_setErrorCells(self.spark.table("adult_dirty"))
 
+    def test_setCheckpointPath(self):
+        with tempfile.TemporaryDirectory() as path:
+            import glob
+            import tempfile
+            checkpoint_path = f"{path}/chkpnt"
+            self._build_model() \
+                .setTableName("adult") \
+                .setRowId("tid") \
+                .setCheckpointPath(checkpoint_path) \
+                .run()
+
+            files = glob.glob(f"{checkpoint_path}/*")
+            expected_files = [
+                "0_classifier_Income.json",
+                "0_classifier_Income.pkl",
+                "1_classifier_Sex.json",
+                "1_classifier_Sex.pkl",
+                "2_classifier_Age.json",
+                "2_classifier_Age.pkl",
+                "metadata.json"
+            ]
+            for file in files:
+                fn = os.path.basename(file)
+                self.assertTrue(fn in expected_files)
+
+            self.assertRaisesRegexp(
+                ValueError,
+                f"Path '{checkpoint_path}' already exists",
+                lambda: RepairModel().setCheckpointPath(checkpoint_path))
+
     def test_detect_errors_only(self):
         # Tests for `NullErrorDetector`
         null_errors = self._build_model() \

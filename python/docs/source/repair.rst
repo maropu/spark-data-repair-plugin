@@ -37,7 +37,7 @@ model to repair them.
     RepairModel.setAttrStatSampleRatio
     RepairModel.setAttrStatThreshold
     RepairModel.setDbName
-    RepairModel.setCheckpoint
+    RepairModel.setCheckpointPath
     RepairModel.setDiscreteThreshold
     RepairModel.setDomainThresholds
     RepairModel.setErrorCells
