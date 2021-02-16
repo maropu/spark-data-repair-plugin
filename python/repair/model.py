@@ -904,6 +904,15 @@ class RepairModel():
         params: Dict[str, Any] = {}
         min_loss = float("nan")
 
+        def _create_model(params: Dict[str, Any]) -> Any:
+            # Some params must be int
+            for k in ["num_leaves", "subsample_freq", "min_child_samples"]:
+                if k in params:
+                    params[k] = int(params[k])
+            p = copy.deepcopy(fixed_params)
+            p.update(params)
+            return model_class(**p)
+
         if not disable_opts:
             from hyperopt import hp, tpe, Trials  # type: ignore[import]
             from hyperopt.early_stop import no_progress_loss  # type: ignore[import]
@@ -929,14 +938,6 @@ class RepairModel():
             scorer = "f1_macro" if is_discrete else "neg_mean_squared_error"
             cv = StratifiedKFold(n_splits=_n_splits(), shuffle=True) if is_discrete \
                 else KFold(n_splits=_n_splits(), shuffle=True)
-
-            def _create_model(params: Dict[str, Any]) -> Any:
-                # Some params must be int
-                for k in ["num_leaves", "subsample_freq", "min_child_samples"]:
-                    params[k] = int(params[k])
-                p = fixed_params.copy()
-                p.update(params)
-                return model_class(**p)
 
             def _objective(params: Dict[str, Any]) -> float:
                 model = _create_model(params)

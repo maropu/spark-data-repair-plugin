@@ -16,6 +16,8 @@
 #
 
 import os
+import glob
+import tempfile
 import unittest
 
 from pyspark import SparkConf
@@ -257,8 +259,6 @@ class RepairModelTests(ReusedSQLTestCase):
 
     def test_setCheckpointPath(self):
         with tempfile.TemporaryDirectory() as path:
-            import glob
-            import tempfile
             checkpoint_path = f"{path}/chkpnt"
             self._build_model() \
                 .setTableName("adult") \

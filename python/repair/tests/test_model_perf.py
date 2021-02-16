@@ -83,8 +83,8 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         return RepairModel() \
             .setInput(input) \
             .setRowId("tid") \
-            .setInferenceOrder("domain") \
-            .option("hp.no_progress_loss", "100")
+            .setInferenceOrder("entropy") \
+            .option("hp.no_progress_loss", "500")
 
     def _compute_rmse(self, repaired_df, expected):
         # Compares predicted values with the correct ones
@@ -154,7 +154,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 logging.info(f"target:boston({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.001)
 
-    @unittest.skip(reason="much time to compute repaired data")
     def test_perf_hospital(self):
         constraint_path = "{}/hospital_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
         repaired_df = self._build_model("hospital") \
@@ -180,7 +179,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
 
         msg = f"target:hospital precision:{precision} recall:{recall} f1:{f1}"
         logging.info(msg)
-        self.assertTrue(precision > 0.70 and recall > 0.65 and f1 > 0.67, msg=msg)
+        self.assertTrue(precision > 0.70 and recall > 0.65 and f1 > 0.65, msg=msg)
 
 
 if __name__ == "__main__":
