@@ -939,9 +939,15 @@ class RepairModel():
             cv = StratifiedKFold(n_splits=_n_splits(), shuffle=True) if is_discrete \
                 else KFold(n_splits=_n_splits(), shuffle=True)
 
+            # TODO: Columns where domain size is small are assumed to be categorical
+            categorical_feature = "auto"
+
             def _objective(params: Dict[str, Any]) -> float:
                 model = _create_model(params)
-                fit_params = {"verbose": 0}
+                fit_params = {
+                    "categorical_feature": categorical_feature,
+                    "verbose": 0
+                }
                 scores = -cross_val_score(
                     model, X, y, scoring=scorer, cv=cv, fit_params=fit_params, n_jobs=-1)
                 return scores.mean()
@@ -1086,6 +1092,7 @@ class RepairModel():
         dirty_df = dirty_df.withColumn(
             grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
 
+        # TODO: Run the `repair` UDF based on checkpoint files
         @functions.pandas_udf(dirty_df.schema, functions.PandasUDFType.GROUPED_MAP)
         def repair(pdf: pd.DataFrame) -> pd.DataFrame:
             target_columns = broadcasted_target_columns.value
