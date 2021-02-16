@@ -874,6 +874,9 @@ class RepairModel():
         def _max_eval() -> int:
             return int(self._get_option("hp.max_evals", "100000000"))
 
+        def _no_progress_loss() -> int:
+            return int(self._get_option("hp.no_progress_loss", "10"))
+
         fixed_params = {
             "boosting_type": _boosting_type(),
             "class_weight": _class_weight(),
@@ -950,7 +953,7 @@ class RepairModel():
                 algo=tpe.suggest,
                 trials=trials,
                 max_evals=_max_eval(),
-                early_stop_fn=no_progress_loss(10),
+                early_stop_fn=no_progress_loss(_no_progress_loss()),
                 rstate=np.random.RandomState(42),
                 show_progressbar=False,
                 verbose=False)

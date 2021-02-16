@@ -83,7 +83,8 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         return RepairModel() \
             .setInput(input) \
             .setRowId("tid") \
-            .setInferenceOrder("domain")
+            .setInferenceOrder("domain") \
+            .option("hp.no_progress_loss", "100")
 
     def _compute_rmse(self, repaired_df, expected):
         # Compares predicted values with the correct ones
