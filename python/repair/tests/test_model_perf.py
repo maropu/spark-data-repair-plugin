@@ -23,7 +23,6 @@ from pyspark import SparkConf
 
 from repair.misc import RepairMisc
 from repair.model import RepairModel
-from repair.detectors import ConstraintErrorDetector
 from repair.tests.requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
 from repair.tests.testutils import ReusedSQLTestCase, load_testdata
@@ -154,11 +153,9 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 logging.info(f"target:boston({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.01)
 
-    @unittest.skip(reason="manu resources needed to compute repaired data")
     def test_perf_hospital(self):
-        constraint_path = "{}/hospital_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
         repaired_df = self._build_model("hospital") \
-            .setErrorDetector(ConstraintErrorDetector(constraint_path)) \
+            .setErrorCells("hospital_error_cells") \
             .setDiscreteThreshold(100) \
             .run()
 
