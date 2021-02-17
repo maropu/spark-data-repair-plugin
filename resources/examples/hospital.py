@@ -39,20 +39,8 @@ repaired_df = scavenger.repair \
     .setErrorDetector(ConstraintErrorDetector(
         constraint_path="./testdata/hospital_constraints.txt")) \
     .setDiscreteThreshold(100) \
-    .setInferenceOrder("domain") \
-    .setHyperParamTuningEnabled(True) \
-    .setParamSearchSpace("learning_rate", [0.01]) \
-    .setParamSearchSpace("max_depth", [7]) \
-    .setParamSearchSpace("num_leaves", [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96]) \
-    .setParamSearchSpace("subsample", [0.5, 0.75, 1.0]) \
-    .setParamSearchSpace("subsample_freq", [0, 5, 20]) \
-    .setParamSearchSpace("colsample_bytree", [0.1, 0.5, 1.0]) \
-    .setParamSearchSpace("min_child_samples", [1, 10, 25, 50]) \
-    .setParamSearchSpace("min_child_weight", [0.001, 0.01, 0.1, 1.0]) \
-    .setParamSearchSpace("reg_alpha", [0.0]) \
-    .setParamSearchSpace("reg_lambda", [0.0, 0.1, 1.0, 10.0]) \
-    .setParamSearchSpace("min_split_gain", [0.0]) \
-    .option("lgb.n_estimators", 1000) \
+    .setInferenceOrder("entropy") \
+    .option("hp.no_progress_loss", "1000") \
     .run()
 
 # Computes performance numbers (precision & recall)
