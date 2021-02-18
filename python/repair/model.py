@@ -557,6 +557,8 @@ class RepairModel():
     def _detect_errors(self, env: Dict[str, str]) -> DataFrame:
         # If `self.error_cells` provided, just uses it
         if self.error_cells is not None:
+            # TODO: Even in this case, we need to use a NULL detector because
+            # `_build_model` will fial if `y` has NULL.
             gray_cells_view = self._error_cells
             logging.info(f'[Error Detection Phase] Error cells provided by `{gray_cells_view}`')
 

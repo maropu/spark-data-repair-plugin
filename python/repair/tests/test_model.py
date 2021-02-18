@@ -257,6 +257,23 @@ class RepairModelTests(ReusedSQLTestCase):
         _test_setErrorCells("adult_dirty")
         _test_setErrorCells(self.spark.table("adult_dirty"))
 
+    def test_error_cells_having_no_existent_attribute(self):
+        error_cells = [
+            Row(tid="1", attribute="NoExistent"),
+            Row(tid="5", attribute="Income"),
+            Row(tid="16", attribute="Income")
+        ]
+        error_cells_df = self.spark.createDataFrame(
+            error_cells, schema="tid STRING, attribute STRING")
+        test_model = self._build_model() \
+            .setTableName("adult") \
+            .setRowId("tid") \
+            .setErrorCells(error_cells_df)
+        self.assertEqual(
+            test_model.run().orderBy("tid", "attribute").collect(), [
+                Row(tid="16", attribute="Income", current_value=None, repaired="MoreThan50K"),
+                Row(tid="5", attribute="Income", current_value=None, repaired="MoreThan50K")])
+
     def test_setCheckpointPath(self):
         with tempfile.TemporaryDirectory() as path:
             checkpoint_path = f"{path}/chkpnt"
