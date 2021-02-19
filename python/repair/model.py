@@ -22,7 +22,6 @@ import copy
 import datetime
 import functools
 import heapq
-import inspect
 import json
 import logging
 import pickle
@@ -35,6 +34,7 @@ from pyspark.sql import DataFrame, Row, SparkSession, functions  # type: ignore[
 from pyspark.sql.functions import col  # type: ignore[import]
 
 from repair.detectors import ErrorDetector, NullErrorDetector
+from repair.decorators import argtype_check, elapsed_time
 from repair.distances import Distance, Levenshtein
 
 
@@ -106,38 +106,7 @@ class RepairModel():
         self._jvm = self._spark.sparkContext._active_spark_context._jvm
         self._repair_api = self._jvm.RepairApi
 
-    def _argtype_check(f):  # type: ignore
-        @functools.wraps(f)
-        def wrapper(self, *args, **kwargs):  # type: ignore
-            sig = inspect.signature(f)
-            for k, v in sig.bind(self, *args, **kwargs).arguments.items():
-                annot = sig.parameters[k].annotation
-                if annot is not inspect._empty and type(annot) is type:
-                    if annot is not type(v):
-                        msg = "`{}` should be provided as {}, got {}"
-                        raise TypeError(msg.format(k, annot.__name__, type(v).__name__))
-                elif hasattr(annot, "__origin__") and annot.__origin__ is Union:
-                    if type(v) not in annot.__args__:
-                        msg = "`{}` should be provided as {}, got {}"
-                        request_types = "/".join(map(lambda x: x.__name__, annot.__args__))
-                        raise TypeError(msg.format(k, request_types, type(v).__name__))
-                elif hasattr(annot, "__origin__") and annot.__origin__ is List:
-                    request_elem_type = annot.__args__[0]
-                    if type(v) is not list:
-                        msg = "`{}` should be provided as list[{}], got {}"
-                        raise TypeError(msg.format(k, request_elem_type.__name__, type(v).__name__))
-
-                    unmathed_elem_types = list(filter(lambda x: type(x) is not request_elem_type, v))
-                    if len(unmathed_elem_types) > 0:
-                        msg = "`{}` should be provided as list[{}], got {} in elements"
-                        raise TypeError(msg.format(
-                            k, request_elem_type.__name__,
-                            type(unmathed_elem_types[0]).__name__))
-
-            return f(self, *args, **kwargs)
-        return wrapper
-
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setDbName(self, db_name: str) -> "RepairModel":
         """Specifies the database name for an input table.
 
@@ -153,7 +122,7 @@ class RepairModel():
         self.db_name = db_name
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setTableName(self, table_name: str) -> "RepairModel":
         """Specifies the table or view name to repair data.
 
@@ -167,7 +136,7 @@ class RepairModel():
         self.input = table_name
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setInput(self, input: Union[str, DataFrame]) -> "RepairModel":
         """Specifies the table/view name or :class:`DataFrame` to repair data.
 
@@ -183,7 +152,7 @@ class RepairModel():
         self.input = input
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setRowId(self, row_id: str) -> "RepairModel":
         """Specifies the table name or :class:`DataFrame` to repair data.
 
@@ -197,7 +166,7 @@ class RepairModel():
         self.row_id = row_id
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setTargets(self, attrs: List[str]) -> "RepairModel":
         """Specifies target attributes to repair.
 
@@ -208,12 +177,12 @@ class RepairModel():
         attrs: list
             list of target attributes.
         """
-        if len(attrs) == 0
+        if len(attrs) == 0:
             raise ValueError("`attrs` has at least one attribute")
         self.targets = attrs
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setCheckpointPath(self, path: str) -> "RepairModel":
         """
         Specifies a directory path to store built models and their params into a persistent
@@ -231,7 +200,7 @@ class RepairModel():
         self.checkpoint_path = path
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setErrorCells(self, error_cells: Union[str, DataFrame]) -> "RepairModel":
         """Specifies the table/view name or :class:`DataFrame` defining where error cells are.
 
@@ -267,7 +236,7 @@ class RepairModel():
         self.error_cells = error_cells
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setErrorDetector(self, detector: ErrorDetector) -> "RepairModel":
         """
         Specifies the :class:`ErrorDetector` derived class to implement
@@ -291,7 +260,7 @@ class RepairModel():
         self.error_detectors.append(detector)
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setDiscreteThreshold(self, thres: int) -> "RepairModel":
         """Specifies max domain size of discrete values.
 
@@ -308,7 +277,7 @@ class RepairModel():
         self.discrete_thres = thres
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setMinCorrThreshold(self, thres: float) -> "RepairModel":
         """Specifies a threshold to decide which columns are used to compute domains.
 
@@ -323,7 +292,7 @@ class RepairModel():
         self.min_corr_thres = thres
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setDomainThresholds(self, alpha: float, beta: float) -> "RepairModel":
         """Specifies a thresholds to reduce domain size.
 
@@ -339,7 +308,7 @@ class RepairModel():
         self.domain_threshold_beta = beta
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setAttrMaxNumToComputeDomains(self, max: int) -> "RepairModel":
         """
         Specifies the max number of attributes to compute posterior probabiity
@@ -355,7 +324,7 @@ class RepairModel():
         self.max_attrs_to_compute_domains = max
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setAttrStatSampleRatio(self, ratio: float) -> "RepairModel":
         """Specifies a sample ratio for table used to compute co-occurrence frequency.
 
@@ -369,7 +338,7 @@ class RepairModel():
         self.attr_stat_sample_ratio = ratio
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setAttrStatThreshold(self, ratio: float) -> "RepairModel":
         """Specifies a threshold for filtering out low frequency.
 
@@ -383,7 +352,7 @@ class RepairModel():
         self.attr_stat_threshold = ratio
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setTrainingDataSampleRatio(self, ratio: float) -> "RepairModel":
         """Specifies a sample ratio for table used to build statistical models.
 
@@ -397,7 +366,7 @@ class RepairModel():
         self.training_data_sample_ratio = ratio
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setMaxTrainingColumnNum(self, n: int) -> "RepairModel":
         """Specifies the max number of columns used to build models.
 
@@ -411,7 +380,7 @@ class RepairModel():
         self.max_training_column_num = n
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setSmallDomainThreshold(self, thres: int) -> "RepairModel":
         """Specifies max domain size for low-cardinality catogory encoding.
 
@@ -425,7 +394,7 @@ class RepairModel():
         self.small_domain_threshold = thres
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setInferenceOrder(self, inference_order: str) -> "RepairModel":
         """Specifies how to order target columns when building models.
 
@@ -439,7 +408,7 @@ class RepairModel():
         self.inference_order = inference_order
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setMaximalLikelihoodRepairEnabled(self, enabled: bool) -> "RepairModel":
         """Specifies whether to enable maximal likelihood repair.
 
@@ -453,7 +422,7 @@ class RepairModel():
         self.maximal_likelihood_repair_enabled = enabled
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def setRepairDelta(self, delta: int) -> "RepairModel":
         """Specifies the max number of applied repairs.
 
@@ -469,7 +438,7 @@ class RepairModel():
         self.repair_delta = int(delta)
         return self
 
-    @_argtype_check  # type: ignore
+    @argtype_check  # type: ignore
     def option(self, key: str, value: str) -> "RepairModel":
         """Adds an input option for internal functionalities (e.g., model learning).
 
@@ -514,14 +483,6 @@ class RepairModel():
                 return ret
             return wrapper
         return decorator
-
-    def _elapsed_time(f):  # type: ignore
-        @functools.wraps(f)
-        def wrapper(self, *args, **kwargs):  # type: ignore
-            start_time = time.time()
-            ret = f(self, *args, **kwargs)
-            return ret, time.time() - start_time
-        return wrapper
 
     def _register_and_get_df(self, view_name: str) -> DataFrame:
         self._intermediate_views_on_runtime.append(view_name)
@@ -849,7 +810,7 @@ class RepairModel():
 
         return X, transformers
 
-    @_elapsed_time  # type: ignore
+    @elapsed_time  # type: ignore
     def _build_model(self, X: pd.DataFrame, y: pd.Series, is_discrete: bool,
                      labels: List[str]) -> pd.DataFrame:
         import lightgbm as lgb  # type: ignore[import]
@@ -1017,8 +978,9 @@ class RepairModel():
         target_columns = self._compute_inference_order(env, train_df, error_attrs)
 
         # Builds multiple ML models to repair error cells
-        logging.info("[Repair Model Training Phase] Building {} ML models to repair the error cells in {}"
-            .format(len(target_columns), ",".join(target_columns)))
+        logging.info("[Repair Model Training Phase] Building {} ML models "
+                     "to repair the error cells in {}"
+                     .format(len(target_columns), ",".join(target_columns)))
 
         if self.checkpoint_path is not None:
             # Keep a training table so that users can check later
@@ -1223,7 +1185,7 @@ class RepairModel():
 
         return top_delta_repairs_df
 
-    @_elapsed_time  # type: ignore
+    @elapsed_time  # type: ignore
     def _run(self, env: Dict[str, str], input_df: DataFrame, continous_attrs: List[str],
              detect_errors_only: bool, compute_training_target_hist: bool,
              compute_repair_candidate_prob: bool, repair_data: bool) -> DataFrame:

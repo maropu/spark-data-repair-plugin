@@ -47,6 +47,16 @@ class RepairModelTests(ReusedSQLTestCase):
         # Loads test data
         load_testdata(cls.spark, "adult.csv").createOrReplaceTempView("adult")
 
+    def test_argtype_check(self):
+        self.assertRaisesRegexp(
+            TypeError,
+            "`key` should be provided as str, got int",
+            lambda: RepairMisc().option(1, "value"))
+        self.assertRaisesRegexp(
+            TypeError,
+            "`value` should be provided as str, got int",
+            lambda: RepairMisc().option("key", 1))
+
     def test_flatten(self):
         with self.tempView("tempView"):
             self.spark.createDataFrame([(1, "a"), (2, "b"), (3, "c")], ["tid", "v"]) \

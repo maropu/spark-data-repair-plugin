@@ -21,6 +21,8 @@ from typing import Dict, List
 
 from pyspark.sql import DataFrame, SparkSession  # type: ignore[import]
 
+from repair.decorators import argtype_check
+
 
 class RepairMisc():
     """Interface to provide helper functionalities.
@@ -37,6 +39,7 @@ class RepairMisc():
         self._spark = SparkSession.builder.getOrCreate()
         self._misc_api_ = self._spark.sparkContext._active_spark_context._jvm.RepairMiscApi
 
+    @argtype_check
     def option(self, key: str, value: str) -> "RepairMisc":
         """Adds an input option for misc functions.
 
@@ -45,6 +48,7 @@ class RepairMisc():
         self.opts[str(key)] = str(value)
         return self
 
+    @argtype_check
     def options(self, options: Dict[str, str]) -> "RepairMisc":
         """Adds input options for misc functions.
 
