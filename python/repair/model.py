@@ -1003,8 +1003,8 @@ class RepairModel():
         target_columns = self._compute_inference_order(env, train_df, error_attrs)
 
         # Builds multiple ML models to repair error cells
-        logging.info(f"[Repair Model Training Phase] Building {len(target_columns)} ML models "
-                     "to repair the error cells...")
+        logging.info("[Repair Model Training Phase] Building {} ML models to repair the error cells in {}"
+            .format(len(target_columns), ",".join(target_columns)))
 
         if self.checkpoint_path is not None:
             # Keep a training table so that users can check later
