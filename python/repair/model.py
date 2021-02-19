@@ -874,8 +874,14 @@ class RepairModel():
         def _no_progress_loss() -> int:
             return int(self._get_option("hp.no_progress_loss", "10"))
 
+        if is_discrete:
+            objective = "binary" if len(labels) <= 2 else "multiclass"
+        else:
+            objective = "regression"
+
         fixed_params = {
             "boosting_type": _boosting_type(),
+            "objective": objective,
             "class_weight": _class_weight(),
             "learning_rate": _learning_rate(),
             "max_depth": _max_depth(),
@@ -886,6 +892,10 @@ class RepairModel():
             "random_state": 42,
             "n_jobs": -1
         }
+
+        # Set `num_class` only in the `multiclass` mode
+        if objective == "multiclass":
+            fixed_params["num_class"] = len(labels)
 
         model_class = lgb.LGBMClassifier if is_discrete \
             else lgb.LGBMRegressor
@@ -945,9 +955,10 @@ class RepairModel():
                     "categorical_feature": categorical_feature,
                     "verbose": 0
                 }
-                scores = -cross_val_score(
+                # TODO: Replace with `lgb.cv` to remove the `sklearn` dependency
+                scores = cross_val_score(
                     model, X, y, scoring=scorer, cv=cv, fit_params=fit_params, n_jobs=-1)
-                return scores.mean()
+                return -scores.mean()
 
             trials = Trials()
 
