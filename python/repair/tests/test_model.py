@@ -364,11 +364,11 @@ class RepairModelTests(ReusedSQLTestCase):
                 Row(tid="4", attribute="Sex", current_value="Female")])
 
     def test_repair_data(self):
-        expected_result = self.spark.table("adult_clean") \
-            .orderBy("tid").collect()
         test_model = self._build_model() \
             .setTableName("adult") \
             .setRowId("tid")
+        expected_result = self.spark.table("adult_clean") \
+            .orderBy("tid").collect()
         self.assertEqual(
             test_model.run(repair_data=True).orderBy("tid").collect(),
             expected_result)
@@ -391,6 +391,24 @@ class RepairModelTests(ReusedSQLTestCase):
             self.assertEqual(
                 df.orderBy("tid").collect(),
                 expected_result)
+
+    def test_compute_repair_candidate_prob(self):
+        repaired_df = test_model = self._build_model() \
+            .setTableName("adult") \
+            .setRowId("tid") \
+            .run(compute_repair_candidate_prob=True)
+        self.assertEqual(
+            repaired_df.schema.simpleString(),
+            "struct<tid:string,attribute:string,current:struct<value:string,prob:double>,"
+            "pmf:array<struct<0:string,1:double>>>")
+
+        expected_result = self.spark.table("adult_repair") \
+            .selectExpr("tid", "attribute", "current_value v") \
+            .orderBy("tid")\
+            .collect()
+        self.assertEqual(
+            repaired_df.selectExpr("tid", "attribute", "current.value v").orderBy("tid").collect(),
+            expected_result)
 
 
 if __name__ == "__main__":
