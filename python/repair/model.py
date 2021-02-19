@@ -97,6 +97,8 @@ class RepairModel():
 
         # Temporary views to keep intermediate results; these views are automatically
         # created when repairing data, and then dropped finally.
+        #
+        # TODO: Move this variable into a runtime `env`
         self._intermediate_views_on_runtime: List[str] = []
 
         # JVM interfaces for Data Repair APIs
@@ -110,11 +112,28 @@ class RepairModel():
             sig = inspect.signature(f)
             for k, v in sig.bind(self, *args, **kwargs).arguments.items():
                 annot = sig.parameters[k].annotation
-                # TODO: Cannot handle types ohter than primitive types (e.g., List, Union, ...)
-                request_type = annot if type(annot) is type else inspect._empty
-                if request_type is not inspect._empty and type(v) is not request_type:
-                    msg = "`{}` should be provided as {}, got {}"
-                    raise TypeError(msg.format(k, request_type.__name__, type(v).__name__))
+                if annot is not inspect._empty and type(annot) is type:
+                    if annot is not type(v):
+                        msg = "`{}` should be provided as {}, got {}"
+                        raise TypeError(msg.format(k, annot.__name__, type(v).__name__))
+                elif hasattr(annot, "__origin__") and annot.__origin__ is Union:
+                    if type(v) not in annot.__args__:
+                        msg = "`{}` should be provided as {}, got {}"
+                        request_types = "/".join(map(lambda x: x.__name__, annot.__args__))
+                        raise TypeError(msg.format(k, request_types, type(v).__name__))
+                elif hasattr(annot, "__origin__") and annot.__origin__ is List:
+                    request_elem_type = annot.__args__[0]
+                    if type(v) is not list:
+                        msg = "`{}` should be provided as list[{}], got {}"
+                        raise TypeError(msg.format(k, request_elem_type.__name__, type(v).__name__))
+
+                    unmathed_elem_types = list(filter(lambda x: type(x) is not request_elem_type, v))
+                    if len(unmathed_elem_types) > 0:
+                        msg = "`{}` should be provided as list[{}], got {} in elements"
+                        raise TypeError(msg.format(
+                            k, request_elem_type.__name__,
+                            type(unmathed_elem_types[0]).__name__))
+
             return f(self, *args, **kwargs)
         return wrapper
 
@@ -159,9 +178,6 @@ class RepairModel():
         input: str, :class:`DataFrame`
             table/view name or :class:`DataFrame`.
         """
-        if type(input) is not str and type(input) is not DataFrame:
-            raise TypeError("`input` should be provided as str or DataFrame, "
-                            f"got {type(input)}")
         if type(input) is DataFrame:
             self.db_name = ""
         self.input = input
@@ -192,8 +208,6 @@ class RepairModel():
         attrs: list
             list of target attributes.
         """
-        if not (type(attrs) is list and all(type(i) is str for i in attrs)):
-            raise TypeError("`attrs` should be provided as list[str], got {type(attrs)}")
         self.targets = attrs
         return self
 
@@ -248,8 +262,6 @@ class RepairModel():
         | 16|   Income|         null|MoreThan50K|
         +---+---------+-------------+-----------+
         """
-        if type(error_cells) is not str and type(error_cells) is not DataFrame:
-            raise TypeError("error cells must be str or `DataFrame`")
         self.error_cells = error_cells
         return self
 

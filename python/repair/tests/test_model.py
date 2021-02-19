@@ -139,6 +139,18 @@ class RepairModelTests(ReusedSQLTestCase):
             TypeError,
             "`beta` should be provided as float, got int",
             lambda: RepairModel().setDomainThresholds(1.0, 1))
+        self.assertRaisesRegexp(
+            TypeError,
+            "`input` should be provided as str/DataFrame, got int",
+            lambda: RepairModel().setInput(1))
+        self.assertRaisesRegexp(
+            TypeError,
+            "`attrs` should be provided as list[str], got int",
+            lambda: RepairModel().setTargets(1))
+        self.assertRaisesRegexp(
+            TypeError,
+            "`attrs` should be provided as list[str], got int in elements",
+            lambda: RepairModel().setTargets(["a", 1]))
 
     # TODO: We fix a seed for building a repair model, but inferred values fluctuate run-by-run.
     # So, to avoid it, we set 1 to `hp.max_evals` for now.
