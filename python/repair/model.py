@@ -34,8 +34,8 @@ from pyspark.sql import DataFrame, Row, SparkSession, functions  # type: ignore[
 from pyspark.sql.functions import col  # type: ignore[import]
 
 from repair.detectors import ErrorDetector, NullErrorDetector
-from repair.decorators import argtype_check, elapsed_time
 from repair.distances import Distance, Levenshtein
+from repair.utils import argtype_check, elapsed_time
 
 
 class RepairModel():

@@ -123,35 +123,35 @@ class RepairModelTests(ReusedSQLTestCase):
             lambda: api.run(compute_repair_candidate_prob=True, repair_data=True))
 
     def test_argtype_check(self):
-        self.assertRaisesRegexp(
+        self.assertRaises(
             TypeError,
             "`db_name` should be provided as str, got int",
             lambda: RepairModel().setDbName(1))
-        self.assertRaisesRegexp(
+        self.assertRaises(
             TypeError,
             "`table_name` should be provided as str, got int",
             lambda: RepairModel().setTableName(1))
-        self.assertRaisesRegexp(
+        self.assertRaises(
             TypeError,
             "`thres` should be provided as int, got str",
             lambda: RepairModel().setDiscreteThreshold("a"))
-        self.assertRaisesRegexp(
+        self.assertRaises(
             TypeError,
             "`thres` should be provided as float, got int",
             lambda: RepairModel().setMinCorrThreshold(1))
-        self.assertRaisesRegexp(
+        self.assertRaises(
             TypeError,
             "`beta` should be provided as float, got int",
             lambda: RepairModel().setDomainThresholds(1.0, 1))
-        self.assertRaisesRegexp(
+        self.assertRaises(
             TypeError,
             "`input` should be provided as str/DataFrame, got int",
             lambda: RepairModel().setInput(1))
-        self.assertRaisesRegexp(
+        self.assertRaises(
             TypeError,
             "`attrs` should be provided as list[str], got int",
             lambda: RepairModel().setTargets(1))
-        self.assertRaisesRegexp(
+        self.assertRaises(
             TypeError,
             "`attrs` should be provided as list[str], got int in elements",
             lambda: RepairModel().setTargets(["a", 1]))

@@ -21,7 +21,7 @@ from typing import Dict, List
 
 from pyspark.sql import DataFrame, SparkSession  # type: ignore[import]
 
-from repair.decorators import argtype_check
+from repair.utils import argtype_check
 
 
 class RepairMisc():
