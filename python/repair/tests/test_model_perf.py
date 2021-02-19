@@ -154,17 +154,38 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 self.assertLess(rmse, ulimit + 0.01)
 
     def test_perf_hospital(self):
+        repair_targets = [
+            "City",
+            "HospitalName",
+            "ZipCode",
+            # All the values of "Score" column is NULL, so ignores it
+            # "Score",
+            "ProviderNumber",
+            "Sample",
+            "Address1",
+            "HospitalType",
+            "HospitalOwner",
+            "PhoneNumber",
+            "EmergencyService",
+            "State",
+            "Stateavg",
+            "CountyName",
+            "MeasureCode",
+            "MeasureName",
+            "Condition"
+        ]
         repaired_df = self._build_model("hospital") \
             .setErrorCells("hospital_error_cells") \
             .setDiscreteThreshold(100) \
+            .setTargets(repair_targets) \
             .run()
 
-        # All the values of "Score" column is NULL, so ignores it
+        repair_targets_set = ",".join(map(lambda x: f"'{x}'", repair_targets))
         pdf = repaired_df.join(
-            self.spark.table("hospital_clean").where("attribute != 'Score'"),
+            self.spark.table("hospital_clean").where(f"attribute IN ({repair_targets_set})"),
             ["tid", "attribute"], "inner")
         rdf = repaired_df.join(
-            self.spark.table("hospital_error_cells").where("attribute != 'Score'"),
+            self.spark.table("hospital_error_cells").where(f"attribute IN ({repair_targets_set})"),
             ["tid", "attribute"], "right_outer")
 
         # Computes performance numbers (precision & recall)
