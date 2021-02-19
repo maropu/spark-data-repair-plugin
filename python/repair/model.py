@@ -208,6 +208,8 @@ class RepairModel():
         attrs: list
             list of target attributes.
         """
+        if len(attrs) == 0
+            raise ValueError("`attrs` has at least one attribute")
         self.targets = attrs
         return self
 

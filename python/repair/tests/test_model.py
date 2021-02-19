@@ -101,6 +101,10 @@ class RepairModelTests(ReusedSQLTestCase):
             "Inference order must be `error`, `domain`, or `entropy`",
             lambda: RepairModel().setInput("dummyTab").setRowId("dummyId")
             .setInferenceOrder("invalid").run())
+        self.assertRaisesRegexp(
+            ValueError,
+            "`attrs` has at least one attribute",
+            lambda: RepairModel().setTargets([]))
 
     def test_exclusive_params(self):
         def _assert_exclusive_params(func):
