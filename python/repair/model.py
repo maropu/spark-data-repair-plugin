@@ -749,6 +749,10 @@ class RepairModel():
         # For example, the SCARE paper [2] builds a dependency graph (a variant of graphical models)
         # to analyze the correlatioin of input data. But, the analysis is compute-intensive, so
         # we just use a naive approache to define the order now.
+        #
+        # TODO: Implements an `auto` strategy; it computes cost values by considering the three
+        # existing strategies together and decides the inference order of attributes
+        # based on the values.
         if self.inference_order == "domain":
             return self._domain_size_based_order(env, train_df, error_attrs)
         elif self.inference_order == "error":
@@ -979,8 +983,8 @@ class RepairModel():
 
         # Builds multiple ML models to repair error cells
         logging.info("[Repair Model Training Phase] Building {} ML models "
-                     "to repair the error cells in {}"
-                     .format(len(target_columns), ",".join(target_columns)))
+                     "to repair the cells in {} (order={})"
+                     .format(len(target_columns), ",".join(target_columns), self.inference_order))
 
         if self.checkpoint_path is not None:
             # Keep a training table so that users can check later
@@ -1020,15 +1024,16 @@ class RepairModel():
             labels = train_df.selectExpr(f"collect_set(`{y}`) labels").collect()[0].labels \
                 if is_discrete else []
 
+            logging.info("Building {}/{} ML model... (type={}, y={}, features={}{})".format(
+                index + 1, len(target_columns),
+                model_type, y, ",".join(features),
+                f" #labels={len(labels)}" if len(labels) > 0 else ""))
             (model, params, score), elapsed_time = \
                 self._build_model(X, train_pdf[y], is_discrete, labels)
+            logging.info("[{}/{}] score={} elapsed={}s".format(
+                index + 1, len(target_columns), score, elapsed_time))
+
             models[y] = (model, features, transformers)
-            logging.info("[{}/{}] type={} y={} features={} {}score={} elapsed={}s".format(
-                index, len(target_columns),
-                model_type, y, ",".join(features),
-                f"#labels={len(labels)} " if len(labels) > 0 else "",
-                score,
-                elapsed_time))
 
             if self.checkpoint_path is not None:
                 checkpoint_prefix = f"{self.checkpoint_path}/{index}_{model_type}_{y}"
