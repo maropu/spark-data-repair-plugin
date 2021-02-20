@@ -1320,7 +1320,7 @@ class RepairModel():
             If set to ``True``, returns probabiity mass function of candidate
             repairs (default: ``False``).
         compute_repair_prob : bool
-            If set to ``True``, returns probabiity of a predicted repair (default: ``False``).
+            If set to ``True``, returns probabiity of predicted repairs (default: ``False``).
         compute_training_target_hist: bool
             If set to ``True``, returns a histogram to analyze training data (default: ``False``).
         repair_data : bool

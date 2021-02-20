@@ -210,7 +210,9 @@ scavenger.repair
   // Running Mode Parameters
   .run(
     detect_errors_only=boolean,                // whether to return detected error cells (default: False)
-    compute_repair_candidate_prob=boolean      // whether to return probabiity mass function of repairs (default: False)
+    compute_repair_candidate_prob=boolean,     // whether to return probabiity mass function of candidate repairs (default: False)
+    compute_repair_prob=boolean,               // whether to return probabiity of predicted repairs
+    repair_data=boolean                        // whether to return repaired data
   )
 ```
 
