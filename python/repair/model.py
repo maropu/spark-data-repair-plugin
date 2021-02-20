@@ -1027,7 +1027,7 @@ class RepairModel():
             logging.info("Building {}/{} ML model... (type={}, y={}, features={}{})".format(
                 index + 1, len(target_columns),
                 model_type, y, ",".join(features),
-                f" #labels={len(labels)}" if len(labels) > 0 else ""))
+                f", #labels={len(labels)}" if len(labels) > 0 else ""))
             (model, params, score), elapsed_time = \
                 self._build_model(X, train_pdf[y], is_discrete, labels)
             logging.info("[{}/{}] score={} elapsed={}s".format(
@@ -1193,7 +1193,8 @@ class RepairModel():
     @elapsed_time  # type: ignore
     def _run(self, env: Dict[str, str], input_df: DataFrame, continous_attrs: List[str],
              detect_errors_only: bool, compute_training_target_hist: bool,
-             compute_repair_candidate_prob: bool, repair_data: bool) -> DataFrame:
+             compute_repair_candidate_prob: bool, compute_repair_prob: bool,
+             repair_data: bool) -> DataFrame:
         #################################################################################
         # 1. Error Detection Phase
         #################################################################################
@@ -1263,7 +1264,18 @@ class RepairModel():
         # If `compute_repair_candidate_prob` is True, returns probability mass function
         # of repair candidates.
         if compute_repair_candidate_prob:
-            return self._compute_repair_pmf(repaired_df, error_cells_df)
+            pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df)
+            # If `compute_repair_prob` is true, returns a predicted repair with
+            # the highest probability only.
+            if compute_repair_prob:
+                return pmf_df.selectExpr(
+                    self.row_id,
+                    "attribute",
+                    "current.value AS current_value",
+                    "pmf[0].`0` AS repaired",
+                    "pmf[0].`1` AS prob")
+            else:
+                return pmf_df
 
         # If any discrete target columns and its probability distribution given,
         # computes scores to decide which cells should be repaired to follow the
@@ -1292,7 +1304,8 @@ class RepairModel():
             return clean_df
 
     def run(self, detect_errors_only: bool = False, compute_repair_candidate_prob: bool = False,
-            compute_training_target_hist: bool = False, repair_data: bool = False) -> DataFrame:
+            compute_repair_prob: bool = False, compute_training_target_hist: bool = False,
+            repair_data: bool = False) -> DataFrame:
         """
         Starts processing to detect error cells in given input data and build a statistical
         model to repair them.
@@ -1304,7 +1317,10 @@ class RepairModel():
         detect_errors_only : bool
             If set to ``True``, returns detected error cells (default: ``False``).
         compute_repair_candidate_prob : bool
-            If set to ``True``, returns probabiity mass function of repairs (default: ``False``).
+            If set to ``True``, returns probabiity mass function of candidate
+            repairs (default: ``False``).
+        compute_repair_prob : bool
+            If set to ``True``, returns probabiity of a predicted repair (default: ``False``).
         compute_training_target_hist: bool
             If set to ``True``, returns a histogram to analyze training data (default: ``False``).
         repair_data : bool
@@ -1325,6 +1341,21 @@ class RepairModel():
         |  5|   Income|         null|MoreThan50K|
         | 16|   Income|         null|MoreThan50K|
         +---+---------+-------------+-----------+
+
+        >>> df = scavenger.repair.setInput(spark.table("adult")).setRowId("tid")
+        ...    .run(compute_repair_prob=True)
+        >>> df.show()
+        +---+---------+-------------+-----------+-------------------+
+        |tid|attribute|current_value|   repaired|               prob|
+        +---+---------+-------------+-----------+-------------------+
+        |  5|      Age|         null|      31-50| 0.5142776979219954|
+        |  5|   Income|         null|LessThan50K| 0.9397100503416668|
+        |  3|      Sex|         null|     Female| 0.6664498420338913|
+        |  7|      Sex|         null|       Male| 0.7436767447201434|
+        | 12|      Age|         null|        >50|0.40970902247819213|
+        | 12|      Sex|         null|       Male| 0.7436767447201434|
+        | 16|   Income|         null|LessThan50K| 0.9446392404617634|
+        +---+---------+-------------+-----------+-------------------+
         """
         if self.input is None or self.row_id is None:
             raise ValueError("`setInput` and `setRowId` should be called before repairing")
@@ -1336,12 +1367,17 @@ class RepairModel():
                              "but `{self.inference_order}` found")
 
         exclusive_param_list = [
-            detect_errors_only, compute_repair_candidate_prob,
+            detect_errors_only, compute_repair_candidate_prob, compute_repair_prob,
             compute_training_target_hist, repair_data]
         if exclusive_param_list.count(True) > 1:
             raise ValueError("`detect_errors_only`, `compute_repair_candidate_prob`, "
-                             "`compute_training_target_hist`, and `repair_data` cannot "
-                             "be set to True simultaneously")
+                             "`compute_repair_prob`, `compute_training_target_hist`, and "
+                             "`repair_data` cannot be set to True simultaneously")
+
+        # To compute the probabiity of a predicted repair, we need to compute
+        # the probabiity mass function of candidate repairs.
+        if compute_repair_prob:
+            compute_repair_candidate_prob = True
 
         # A holder to keep runtime variables
         env: Dict[str, str] = {}
@@ -1360,7 +1396,7 @@ class RepairModel():
             df, elapsed_time = self._run(
                 env, input_df, continous_attrs, detect_errors_only,
                 compute_training_target_hist, compute_repair_candidate_prob,
-                repair_data)
+                compute_repair_prob, repair_data)
             logging.info(f"!!!Total Processing time is {elapsed_time}(s)!!!")
             return df
         finally:

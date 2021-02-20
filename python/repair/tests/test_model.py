@@ -121,6 +121,8 @@ class RepairModelTests(ReusedSQLTestCase):
             lambda: api.run(compute_repair_candidate_prob=True, compute_training_target_hist=True))
         _assert_exclusive_params(
             lambda: api.run(compute_repair_candidate_prob=True, repair_data=True))
+        _assert_exclusive_params(
+            lambda: api.run(compute_repair_candidate_prob=True, compute_repair_prob=True))
 
     def test_argtype_check(self):
         self.assertRaises(
@@ -408,6 +410,24 @@ class RepairModelTests(ReusedSQLTestCase):
             .collect()
         self.assertEqual(
             repaired_df.selectExpr("tid", "attribute", "current.value v").orderBy("tid").collect(),
+            expected_result)
+
+    def test_compute_repair_prob(self):
+        repaired_df = test_model = self._build_model() \
+            .setTableName("adult") \
+            .setRowId("tid") \
+            .run(compute_repair_prob=True)
+        self.assertEqual(
+            repaired_df.schema.simpleString(),
+            "struct<tid:string,attribute:string,current_value:string,"
+            "repaired:string,prob:double>")
+
+        expected_result = self.spark.table("adult_repair") \
+            .selectExpr("tid", "attribute", "current_value") \
+            .orderBy("tid")\
+            .collect()
+        self.assertEqual(
+            repaired_df.selectExpr("tid", "attribute", "current_value").orderBy("tid").collect(),
             expected_result)
 
 
