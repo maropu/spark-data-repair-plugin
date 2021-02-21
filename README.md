@@ -26,7 +26,7 @@ Welcome to
       ____              __
      / __/__  ___ _____/ /__
     _\ \/ _ \/ _ `/ __/  '_/
-   /__ / .__/\_,_/_/ /_/\_\   version 3.0.0
+   /__ / .__/\_,_/_/ /_/\_\   version 3.0.1
       /_/
 
 Using Python version 3.6.8 (default, Dec 29 2018 19:04:46)
@@ -34,8 +34,8 @@ SparkSession available as 'spark'.
 Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 
 # Loads CSV data having seven NULL cells
->>> dirty_df = spark.read.option("header", True).csv("./testdata/adult.csv")
->>> dirty_df.show()
+>>> spark.read.option("header", True).csv("./testdata/adult.csv").createOrReplaceTempView("adult")
+>>> spark.table("adult").show()
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 |tid|  Age|   Education|       Occupation| Relationship|   Sex|      Country|     Income|
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
@@ -63,7 +63,7 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 
 # Runs jobs to compute repair updates for the seven NULL cells above in `dirty_df`
 # A `repaired` column represents proposed updates to repiar them.
->>> repair_updates_df = scavenger.repair.setInput(dirty_df).setRowId("tid").run()
+>>> repair_updates_df = scavenger.repair.setInput("adult").setRowId("tid").run()
 >>> repair_updates_df.show()
 +---+---------+-------------+-----------+
 |tid|attribute|current_value|   repaired|
@@ -78,7 +78,7 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 +---+---------+-------------+-----------+
 
 # You need to set `True` to `repair_data` for getting repaired data
->>> clean_df = scavenger.repair.setInput(dirty_df).setRowId("tid").run(repair_data=True)
+>>> clean_df = scavenger.repair.setInput("adult").setRowId("tid").run(repair_data=True)
 >>> clean_df.show()
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 |tid|  Age|   Education|       Occupation| Relationship|   Sex|      Country|     Income|
@@ -106,10 +106,8 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 
 # Or, you can apply the computed repair updates into the input directly
->>> clean_df = scavenger.repair.setInput(dirty_df).setRowId("tid") \
-...   .setRepairUpdates(repair_updates_df) \
-...   .run()
-
+>>> repair_updates_df.createOrReplaceTempView("predicted")
+>>> clean_df = scavenger.misc.options({"repair_updates": "predicted", "table_name": "adult", "row_id": "tid"}).repair()
 >>> clean_df.show()
 <the same output above>
 ```
@@ -132,7 +130,7 @@ t1&EQ(t1.Sex,"Female")&EQ(t1.Relationship,"Husband")
 t1&EQ(t1.Sex,"Male")&EQ(t1.Relationship,"Wife")
 
 # Use the constraints to detect errors then repair them.
->>> repair_updates_df = scavenger.repair.setInput(dirty_df).setRowId("tid") \
+>>> repair_updates_df = scavenger.repair.setInput("adult").setRowId("tid") \
 ...   .setErrorDetector(ConstraintErrorDetector(constraint_path="./testdata/adult_constraints.txt")) \
 ...   .run()
 
@@ -161,7 +159,7 @@ for getting them in pre-processing as follows;
 
 ```
 # Runs jobs to detect error cells
->>> error_cells_df = scavenger.repair.setInput(dirty_df).setRowId("tid").run(detect_errors_only=True)
+>>> error_cells_df = scavenger.repair.setInput("adult").setRowId("tid").run(detect_errors_only=True)
 >>> error_cells_df.show()
 +---+---------+-------------+
 |tid|attribute|current_value|
@@ -174,6 +172,33 @@ for getting them in pre-processing as follows;
 | 16|   Income|         null|
 |  5|   Income|         null|
 +---+---------+-------------+
+```
+
+## Repairing based on Predicted Probabilities
+
+If you want to select some of repaired updates based on theier probabilities, you can set `True` to
+`compute_repair_prob` for getting the probabilities from built statistical models.
+```
+# To get predicted probabilities, computes repair updates with `compute_repair_prob`=`True`
+>>> repair_updates_df = scavenger.repair.setInput("adult").setRowId("tid").run(compute_repair_prob=True)
+>>> repair_updates_df.show()
++---+---------+-------------+-----------+------------------+
+|tid|attribute|current_value|   repaired|              prob|
++---+---------+-------------+-----------+------------------+
+|  3|      Sex|         null|     Female|0.6664498420338913|
+|  7|      Sex|         null|     Female|0.7436767447201434|
+| 16|   Income|         null|MoreThan50K|0.8721610530603738|
+|  5|      Age|         null|      18-21|0.3018171710707878|
+|  5|   Income|         null|MoreThan50K|0.8333912988626406|
+| 12|      Age|         null|      18-21|0.3598905853884847|
+| 12|      Sex|         null|     Female|0.7436767447201434|
++---+---------+-------------+-----------+------------------+
+
+# Applies the repair udpates whose probabilities are greater than 0.70
+>>> repair_updates_df.where("prob > 0.70").createOrReplaceTempView("predicted")
+>>> clean_df = scavenger.misc.options({"repair_updates": "predicted", "table_name": "adult", "row_id": "tid"}).repair()
+>>> clean_df.show()
+<output with the four cells repaired>
 ```
 
 ## Configurations
