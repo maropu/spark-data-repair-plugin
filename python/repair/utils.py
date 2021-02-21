@@ -30,13 +30,19 @@ def argtype_check(f):  # type: ignore
         for k, v in sig.bind(self, *args, **kwargs).arguments.items():
             annot = sig.parameters[k].annotation
 
+            # Union case
             if hasattr(annot, "__origin__") and annot.__origin__ is typing.Union:
                 if type(v) not in annot.__args__:
                     msg = "`{}` should be provided as {}, got {}"
                     request_types = "/".join(map(lambda x: x.__name__, annot.__args__))
                     raise TypeError(msg.format(k, request_types, type(v).__name__))
 
-            elif hasattr(annot, "__origin__") and annot.__origin__ is typing.List:
+            # List case
+            #
+            # NOTE: `typing.List[x].__origin__` is `typing.List` in Python 3.6,
+            # but it is `list` in Python 3.7+
+            elif hasattr(annot, "__origin__") and \
+                    annot.__origin__ in (list, typing.List):
                 request_elem_type = annot.__args__[0]
                 if type(v) is not list:
                     msg = "`{}` should be provided as list[{}], got {}"
@@ -51,7 +57,12 @@ def argtype_check(f):  # type: ignore
                             k, request_elem_type.__name__,
                             type(unmathed_elem_types[0]).__name__))
 
-            elif hasattr(annot, "__origin__") and annot.__origin__ is typing.Dict:
+            # Dict case
+            #
+            # NOTE: `typing.Dict[k, v].__origin__` is `typing.Dict` in Python 3.6,
+            # but it is `dict` in Python 3.7+
+            elif hasattr(annot, "__origin__") and \
+                    annot.__origin__ in (dict, typing.Dict):
                 request_key_type, request_value_type = annot.__args__
                 if type(v) is not dict:
                     msg = "`{}` should be provided as dict[{},{}], got {}"
@@ -80,7 +91,9 @@ def argtype_check(f):  # type: ignore
                             request_value_type.__name__,
                             type(unmathed_value_types[0]).__name__))
 
+            # Other regular cases
             elif annot is not inspect._empty:
+                assert not hasattr(annot, "__origin__"), "generics are not expected to reach this path"
                 if annot not in [type(v), typing.Any] and not isinstance(v, annot):
                     msg = "`{}` should be provided as {}, got {}"
                     raise TypeError(msg.format(k, annot.__name__, type(v).__name__))
