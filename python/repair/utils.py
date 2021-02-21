@@ -93,7 +93,8 @@ def argtype_check(f):  # type: ignore
 
             # Other regular cases
             elif annot is not inspect._empty:
-                assert not hasattr(annot, "__origin__"), "generics are not expected to reach this path"
+                assert not hasattr(annot, "__origin__"), \
+                    "generics are not expected to reach this path"
                 if annot not in [type(v), typing.Any] and not isinstance(v, annot):
                     msg = "`{}` should be provided as {}, got {}"
                     raise TypeError(msg.format(k, annot.__name__, type(v).__name__))
