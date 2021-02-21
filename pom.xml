@@ -42,7 +42,7 @@
     <maven.version>3.6.3</maven.version>
     <scala.version>2.12.10</scala.version>
     <scala.binary.version>2.12</scala.binary.version>
-    <spark.version>3.0.1</spark.version>
+    <spark.version>3.0.2</spark.version>
     <spark.binary.version>3.0</spark.binary.version>
     <sqlite-jdbc.version>3.28.0</sqlite-jdbc.version>
     <postgresql-jdbc.version>42.2.8</postgresql-jdbc.version>
