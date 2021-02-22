@@ -185,25 +185,23 @@ class RepairModelTests(ReusedSQLTestCase):
             self.spark.sql("SHOW VIEWS").count(),
             current_view_nums)
 
-    # TODO: Fix a test failure in the test below:
-    @unittest.skip(reason="")
     def test_table_input(self):
         expected_result = self.spark.table("adult_repair") \
             .orderBy("tid", "attribute").collect()
 
         with self.table("adult_table"):
+
             # Tests for `setDbName`
             self.spark.table("adult").write.mode("overwrite").saveAsTable("adult_table")
-            test_model = RepairModel() \
+            test_model = self._build_model() \
                 .setDbName("default") \
                 .setTableName("adult_table") \
                 .setRowId("tid")
+
             self.assertEqual(
                 test_model.run().orderBy("tid", "attribute").collect(),
                 expected_result)
 
-    # TODO: Fix a test failure in the test below:
-    @unittest.skip(reason="")
     def test_input_overwrite(self):
         expected_result = self.spark.table("adult_repair") \
             .orderBy("tid", "attribute").collect()
