@@ -1147,14 +1147,7 @@ class RepairModel():
 
         return pmf_df
 
-    def _maximal_likelihood_repair(self, env: Dict[str, str], repaired_df: DataFrame,
-                                   error_cells_df: DataFrame) -> DataFrame:
-        # A “Maximal Likelihood Repair” problem defined in the SCARE [2] paper is as follows;
-        # Given a scalar \delta and a database D = D_{e} \cup D_{c}, the problem is to
-        # find another database instance D' = D'_{e} \cup D_{c} such that L(D'_{e} \| D_{c})
-        # is maximum subject to the constraint Dist(D, D') <= \delta.
-        # L is a likelihood function and Dist is an arbitrary distance function
-        # (e.g., edit distances) between the two database instances D and D'.
+    def _compute_score(self, repaired_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
         pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df)
 
         broadcasted_distance = self._spark.sparkContext.broadcast(self.distance)
@@ -1175,6 +1168,18 @@ class RepairModel():
             .selectExpr(self.row_id, "attribute", "current.value current_value",
                         "repaired.value repaired", score_expr)
 
+        return score_df
+
+    def _maximal_likelihood_repair(self, env: Dict[str, str], repaired_df: DataFrame,
+                                   error_cells_df: DataFrame) -> DataFrame:
+        # A “Maximal Likelihood Repair” problem defined in the SCARE [2] paper is as follows;
+        # Given a scalar \delta and a database D = D_{e} \cup D_{c}, the problem is to
+        # find another database instance D' = D'_{e} \cup D_{c} such that L(D'_{e} \| D_{c})
+        # is maximum subject to the constraint Dist(D, D') <= \delta.
+        # L is a likelihood function and Dist is an arbitrary distance function
+        # (e.g., edit distances) between the two database instances D and D'.
+        score_df = self._compute_score(repaired_df, error_cells_df)
+
         assert self.repair_delta is not None
         num_error_cells = error_cells_df.count()
         percent = min(1.0, self.repair_delta / num_error_cells)
@@ -1194,7 +1199,7 @@ class RepairModel():
     def _run(self, env: Dict[str, str], input_df: DataFrame, continous_attrs: List[str],
              detect_errors_only: bool, compute_training_target_hist: bool,
              compute_repair_candidate_prob: bool, compute_repair_prob: bool,
-             repair_data: bool) -> DataFrame:
+             compute_repair_score: bool, repair_data: bool) -> DataFrame:
         #################################################################################
         # 1. Error Detection Phase
         #################################################################################
@@ -1274,6 +1279,8 @@ class RepairModel():
                     "current.value AS current_value",
                     "pmf[0].`0` AS repaired",
                     "pmf[0].`1` AS prob")
+            elif compute_repair_score:
+                return self._compute_score(repaired_df, error_cells_df)
             else:
                 return pmf_df
 
@@ -1304,7 +1311,8 @@ class RepairModel():
             return clean_df
 
     def run(self, detect_errors_only: bool = False, compute_repair_candidate_prob: bool = False,
-            compute_repair_prob: bool = False, compute_training_target_hist: bool = False,
+            compute_repair_prob: bool = False, compute_repair_score: bool = False,
+            compute_training_target_hist: bool = False,
             repair_data: bool = False) -> DataFrame:
         """
         Starts processing to detect error cells in given input data and build a statistical
@@ -1367,16 +1375,21 @@ class RepairModel():
                              "but `{self.inference_order}` found")
 
         exclusive_param_list = [
-            detect_errors_only, compute_repair_candidate_prob, compute_repair_prob,
-            compute_training_target_hist, repair_data]
-        if exclusive_param_list.count(True) > 1:
-            raise ValueError("`detect_errors_only`, `compute_repair_candidate_prob`, "
-                             "`compute_repair_prob`, `compute_training_target_hist`, and "
-                             "`repair_data` cannot be set to True simultaneously")
+            ("detect_errors_only", detect_errors_only),
+            ("compute_repair_candidate_prob", compute_repair_candidate_prob),
+            ("compute_repair_prob", compute_repair_prob),
+            ("compute_repair_score", compute_repair_score),
+            ("compute_training_target_hist", compute_training_target_hist),
+            ("repair_data", repair_data)
+        ]
+        selected_param = list(map(lambda x: x[0], filter(lambda x: x[1], exclusive_param_list)))
+        if len(selected_param) > 1:
+            raise ValueError("{} cannot be set to True simultaneously".format(
+                "/".join(map(lambda x: f"`{x}`", selected_param))))
 
-        # To compute the probabiity of a predicted repair, we need to compute
+        # To compute scores or the probabiity of predicted repairs, we need to compute
         # the probabiity mass function of candidate repairs.
-        if compute_repair_prob:
+        if compute_repair_prob or compute_repair_score:
             compute_repair_candidate_prob = True
 
         # A holder to keep runtime variables
@@ -1396,7 +1409,7 @@ class RepairModel():
             df, elapsed_time = self._run(
                 env, input_df, continous_attrs, detect_errors_only,
                 compute_training_target_hist, compute_repair_candidate_prob,
-                compute_repair_prob, repair_data)
+                compute_repair_prob, compute_repair_score, repair_data)
             logging.info(f"!!!Total Processing time is {elapsed_time}(s)!!!")
             return df
         finally:
