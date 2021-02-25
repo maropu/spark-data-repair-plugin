@@ -1134,14 +1134,33 @@ class RepairModel():
         return repaired_df
 
     def _compute_repair_pmf(self, repaired_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
+        broadcasted_cf = self._spark.sparkContext.broadcast(self.distance)
+
+        @functions.udf("array<double>")
+        def cost_func(s1: str, s2: List[str]) -> List[float]:
+            if s1 is not None:
+                cf = broadcasted_cf.value
+                return [cf.compute(s1, s) for s in s2]
+            else:
+                return [0.0] * len(s2)
+
+        def _pmf_weight() -> float:
+            return float(self._get_option("pfm.weight", "1.0"))
+
         parse_pmf_json_expr = "from_json(value, 'classes array<string>, probs array<double>') pmf"
-        to_pmf_expr = "arrays_zip(pmf.classes, pmf.probs) pmf"
+        to_weighted_probs = f"zip_with(pmf.probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * c))) probs"
+        sum_probs = "aggregate(probs, double(0.0), (acc, x) -> acc + x) norm"
+        to_pmf_expr = "arrays_zip(c, p) pmf"
         to_current_expr = "named_struct('value', current_value, 'prob', " \
-            "coalesce(pmf.probs[array_position(pmf.classes, current_value) - 1], 0.0)) current"
-        sorted_pmf_expr = "array_sort(pmf, (left, right) -> if(left.`1` < right.`1`, 1, -1)) pmf"
+            "coalesce(p[array_position(c, current_value) - 1], 0.0)) current"
+        sorted_pmf_expr = "array_sort(pmf, (left, right) -> if(left.p < right.p, 1, -1)) pmf"
         pmf_df = self._flatten(self._create_temp_view(repaired_df)) \
             .join(error_cells_df, [self.row_id, "attribute"], "inner") \
             .selectExpr(self.row_id, "attribute", "current_value", parse_pmf_json_expr) \
+            .withColumn("costs", cost_func(col("current_value"), col("pmf.classes"))) \
+            .selectExpr(self.row_id, "attribute", "current_value", "pmf.classes classes", to_weighted_probs) \
+            .selectExpr(self.row_id, "attribute", "current_value", "classes", "probs", sum_probs) \
+            .selectExpr(self.row_id, "attribute", "current_value", "classes c", "transform(probs, p -> p / norm) p") \
             .selectExpr(self.row_id, "attribute", to_current_expr, to_pmf_expr) \
             .selectExpr(self.row_id, "attribute", "current", sorted_pmf_expr)
 
@@ -1158,8 +1177,7 @@ class RepairModel():
             dists = [distance.compute(x, y) for x, y in zip(xs, ys)]
             return pd.Series(dists)
 
-        maximal_likelihood_repair_expr = "named_struct('value', pmf[0].`0`, " \
-            "'prob', pmf[0].`1`) repaired"
+        maximal_likelihood_repair_expr = "named_struct('value', pmf[0].c, 'prob', pmf[0].p) repaired"
         current_expr = "IF(ISNOTNULL(current.value), current.value, repaired.value)"
         score_expr = "ln(repaired.prob / IF(current.prob > 0.0, current.prob, 1e-6)) " \
             "* (1.0 / (1.0 + distance)) score"
@@ -1276,8 +1294,8 @@ class RepairModel():
                     self.row_id,
                     "attribute",
                     "current.value AS current_value",
-                    "pmf[0].`0` AS repaired",
-                    "pmf[0].`1` AS prob")
+                    "pmf[0].c AS repaired",
+                    "pmf[0].p AS prob")
             elif compute_repair_score:
                 return self._compute_score(repaired_df, error_cells_df)
             else:

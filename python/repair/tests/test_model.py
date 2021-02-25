@@ -416,7 +416,7 @@ class RepairModelTests(ReusedSQLTestCase):
         self._check_repair_prob_and_score(
             repaired_df,
             "struct<tid:string,attribute:string,current:struct<value:string,prob:double>,"
-            "pmf:array<struct<0:string,1:double>>>")
+            "pmf:array<struct<c:string,p:double>>>")
 
     def test_compute_repair_prob(self):
         repaired_df = test_model = self._build_model() \
