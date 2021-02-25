@@ -17,11 +17,21 @@
 
 import unittest
 
-from repair.distances import Levenshtein
+from repair.costs import Levenshtein, NoCost
 from repair.tests.testutils import ReusedSQLTestCase
 
 
-class DistanceTests(ReusedSQLTestCase):
+class CostsTests(ReusedSQLTestCase):
+
+    def test_NoCost(self):
+        f = NoCost()
+        self.assertEqual(f.compute('111', '123'), 0.0)
+        self.assertEqual(f.compute(111, 123), 0.0)
+        self.assertEqual(f.compute('111', 123), 0.0)
+        self.assertEqual(f.compute(111, '123'), 0.0)
+        self.assertEqual(f.compute(1.11, 1.23), 0.0)
+        self.assertEqual(f.compute('1.11', 1.23), 0.0)
+        self.assertEqual(f.compute(1.11, '1.23'), 0.0)
 
     def test_Levenshtein(self):
         f = Levenshtein()

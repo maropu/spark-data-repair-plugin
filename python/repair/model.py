@@ -33,8 +33,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from pyspark.sql import DataFrame, Row, SparkSession, functions  # type: ignore[import]
 from pyspark.sql.functions import col, expr  # type: ignore[import]
 
+from repair.costs import UpdateCostFunction, NoCost
 from repair.detectors import ErrorDetector, NullErrorDetector
-from repair.distances import Distance, Levenshtein
 from repair.utils import argtype_check, elapsed_time
 
 
@@ -84,13 +84,13 @@ class RepairModel():
 
         # Defines a class to compute cost of updates.
         #
-        # TODO: Needs a sophisticated way to compute distances between a current value and a repair
-        # candidate. For example, the HoloDetect paper [1] proposes a noisy channel model for the
-        # data augmentation methodology of training data. This model consists of transformation rule
-        # and and data augmentation policies (i.e., distribution over those data transformation).
+        # TODO: Needs a sophisticated way to compute update costs from a current value to a repair candidate.
+        # For example, the HoloDetect paper [1] proposes a noisy channel model for the data augmentation
+        # methodology of training data. This model consists of transformation rule and and data augmentation
+        # policies (i.e., distribution over those data transformation).
         # This model can be re-used to compute this cost. For more details, see the section 5,
         # 'DATA AUGMENTATION LEARNING', in the paper.
-        self.distance: Distance = Levenshtein()
+        self.cf: UpdateCostFunction = NoCost()
 
         # Options for internal behaviours
         self.opts: Dict[str, str] = {}
@@ -1134,7 +1134,7 @@ class RepairModel():
         return repaired_df
 
     def _compute_repair_pmf(self, repaired_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
-        broadcasted_cf = self._spark.sparkContext.broadcast(self.distance)
+        broadcasted_cf = self._spark.sparkContext.broadcast(self.cf)
 
         @functions.udf("array<double>")
         def cost_func(s1: str, s2: List[str]) -> List[float]:
@@ -1169,21 +1169,21 @@ class RepairModel():
     def _compute_score(self, repaired_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
         pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df)
 
-        broadcasted_distance = self._spark.sparkContext.broadcast(self.distance)
+        broadcasted_cf = self._spark.sparkContext.broadcast(self.cf)
 
         @functions.pandas_udf("double")
-        def distance(xs: pd.Series, ys: pd.Series) -> pd.Series:
-            distance = broadcasted_distance.value
-            dists = [distance.compute(x, y) for x, y in zip(xs, ys)]
+        def cost_func(xs: pd.Series, ys: pd.Series) -> pd.Series:
+            cf = broadcasted_cf.value
+            dists = [cf.compute(x, y) for x, y in zip(xs, ys)]
             return pd.Series(dists)
 
         maximal_likelihood_repair_expr = "named_struct('value', pmf[0].c, 'prob', pmf[0].p) repaired"
         current_expr = "IF(ISNOTNULL(current.value), current.value, repaired.value)"
         score_expr = "ln(repaired.prob / IF(current.prob > 0.0, current.prob, 1e-6)) " \
-            "* (1.0 / (1.0 + distance)) score"
+            "* (1.0 / (1.0 + cost)) score"
         score_df = pmf_df \
             .selectExpr(self.row_id, "attribute", "current", maximal_likelihood_repair_expr) \
-            .withColumn("distance", distance(expr(current_expr), col("repaired.value"))) \
+            .withColumn("cost", cost_func(expr(current_expr), col("repaired.value"))) \
             .selectExpr(self.row_id, "attribute", "current.value current_value",
                         "repaired.value repaired", score_expr)
 
@@ -1194,8 +1194,8 @@ class RepairModel():
         # A “Maximal Likelihood Repair” problem defined in the SCARE [2] paper is as follows;
         # Given a scalar \delta and a database D = D_{e} \cup D_{c}, the problem is to
         # find another database instance D' = D'_{e} \cup D_{c} such that L(D'_{e} \| D_{c})
-        # is maximum subject to the constraint Dist(D, D') <= \delta.
-        # L is a likelihood function and Dist is an arbitrary distance function
+        # is maximum subject to the constraint Cost(D, D') <= \delta.
+        # L is a likelihood function and Cost is an arbitrary update cost function
         # (e.g., edit distances) between the two database instances D and D'.
         score_df = self._compute_score(repaired_df, error_cells_df)
 

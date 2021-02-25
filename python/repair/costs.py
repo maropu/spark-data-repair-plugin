@@ -21,7 +21,7 @@ from abc import ABCMeta, abstractmethod
 from typing import Union
 
 
-class Distance(metaclass=ABCMeta):
+class UpdateCostFunction(metaclass=ABCMeta):
 
     def __init__(self, name: str) -> None:
         self.name: str = name
@@ -31,15 +31,24 @@ class Distance(metaclass=ABCMeta):
         pass
 
     def compute(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
-        distance = self._compute_impl(x, y)
-        assert type(distance) is float
-        return distance
+        cost = self._compute_impl(x, y)
+        assert type(cost) is float
+        return cost
 
 
-class Levenshtein(Distance):
+class NoCost(UpdateCostFunction):
 
     def __init__(self) -> None:
-        Distance.__init__(self, 'Levenshtein')
+        UpdateCostFunction.__init__(self, 'NoCost')
+
+    def _compute_impl(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
+        return 0.0
+
+
+class Levenshtein(UpdateCostFunction):
+
+    def __init__(self) -> None:
+        UpdateCostFunction.__init__(self, 'Levenshtein')
 
     def _compute_impl(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
         import Levenshtein  # type: ignore[import]
