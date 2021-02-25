@@ -31,7 +31,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pyspark.sql import DataFrame, Row, SparkSession, functions  # type: ignore[import]
-from pyspark.sql.functions import col  # type: ignore[import]
+from pyspark.sql.functions import col, expr  # type: ignore[import]
 
 from repair.detectors import ErrorDetector, NullErrorDetector
 from repair.distances import Distance, Levenshtein
@@ -1160,11 +1160,12 @@ class RepairModel():
 
         maximal_likelihood_repair_expr = "named_struct('value', pmf[0].`0`, " \
             "'prob', pmf[0].`1`) repaired"
+        current_expr = "IF(ISNOTNULL(current.value), current.value, repaired.value)"
         score_expr = "ln(repaired.prob / IF(current.prob > 0.0, current.prob, 1e-6)) " \
             "* (1.0 / (1.0 + distance)) score"
         score_df = pmf_df \
             .selectExpr(self.row_id, "attribute", "current", maximal_likelihood_repair_expr) \
-            .withColumn("distance", distance(col("current.value"), col("repaired.value"))) \
+            .withColumn("distance", distance(expr(current_expr), col("repaired.value"))) \
             .selectExpr(self.row_id, "attribute", "current.value current_value",
                         "repaired.value repaired", score_expr)
 
@@ -1182,14 +1183,12 @@ class RepairModel():
 
         assert self.repair_delta is not None
         num_error_cells = error_cells_df.count()
-        percent = min(1.0, self.repair_delta / num_error_cells)
+        percent = min(1.0, 1.0 - self.repair_delta / num_error_cells)
         percentile = score_df.selectExpr(f"percentile(score, {percent}) thres").collect()[0]
-        top_delta_repairs_expr = \
-            f"IF(score <= {percentile.thres}, repaired, current_value) repaired"
-        top_delta_repairs_df = score_df.selectExpr(self.row_id, "attribute", top_delta_repairs_expr)
+        top_delta_repairs_df = score_df.where(f"score >= {percentile.thres}")
         logging.info("[Repairing Phase] {} repair updates (delta={}) selected "
-                     "among {} candidates...".format(
-                         score_df.where(f"score <= {percentile.thres}").count(),
+                     "among {} candidates".format(
+                         top_delta_repairs_df.count(),
                          self.repair_delta,
                          num_error_cells))
 
