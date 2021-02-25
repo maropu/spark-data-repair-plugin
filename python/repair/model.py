@@ -88,7 +88,7 @@ class RepairModel():
         # For example, the HoloDetect paper [1] proposes a noisy channel model for the data augmentation
         # methodology of training data. This model consists of transformation rule and and data augmentation
         # policies (i.e., distribution over those data transformation).
-        # This model can be re-used to compute this cost. For more details, see the section 5,
+        # This model might be able to represent this cost. For more details, see the section 5,
         # 'DATA AUGMENTATION LEARNING', in the paper.
         self.cf: UpdateCostFunction = NoCost()
 
@@ -1145,7 +1145,7 @@ class RepairModel():
                 return [0.0] * len(s2)
 
         def _pmf_weight() -> float:
-            return float(self._get_option("pfm.weight", "1.0"))
+            return float(self._get_option("pmf.cost_weight", "1.0"))
 
         parse_pmf_json_expr = "from_json(value, 'classes array<string>, probs array<double>') pmf"
         to_weighted_probs = f"zip_with(pmf.probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * c))) probs"
