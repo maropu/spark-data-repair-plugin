@@ -1149,7 +1149,7 @@ class RepairModel():
 
         parse_pmf_json_expr = "from_json(value, 'classes array<string>, probs array<double>') pmf"
         slice_probs = "slice(pmf.probs, 1, size(pmf.classes)) probs"
-        to_weighted_probs = f"zip_with(probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * c))) probs"
+        to_weighted_probs = f"zip_with(probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * log(c)))) probs"
         sum_probs = "aggregate(probs, double(0.0), (acc, x) -> acc + x) norm"
         to_pmf_expr = "arrays_zip(c, p) pmf"
         normalize_probs = "transform(probs, p -> p / norm) p"
