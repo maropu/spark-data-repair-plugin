@@ -19,7 +19,6 @@ package org.apache.spark.api.python
 
 import org.apache.spark.SparkException
 import org.apache.spark.sql._
-import org.apache.spark.sql.catalyst.plans.logical.LeafNode
 import org.apache.spark.util.RepairUtils._
 import org.apache.spark.util.{Utils => SparkUtils}
 

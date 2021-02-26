@@ -90,7 +90,7 @@ class RepairModel():
         # policies (i.e., distribution over those data transformation).
         # This model might be able to represent this cost. For more details, see the section 5,
         # 'DATA AUGMENTATION LEARNING', in the paper.
-        self.cf: UpdateCostFunction = NoCost()
+        self.cf: UpdateCostFunction = NoCost()  # `NoCost` or `Levenshtein`
 
         # Options for internal behaviours
         self.opts: Dict[str, str] = {}
@@ -1145,22 +1145,25 @@ class RepairModel():
                 return [0.0] * len(s2)
 
         def _pmf_weight() -> float:
-            return float(self._get_option("pmf.cost_weight", "1.0"))
+            return float(self._get_option("pmf.cost_weight", "0.1"))
 
         parse_pmf_json_expr = "from_json(value, 'classes array<string>, probs array<double>') pmf"
-        to_weighted_probs = f"zip_with(pmf.probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * c))) probs"
+        slice_probs = "slice(pmf.probs, 1, size(pmf.classes)) probs"
+        to_weighted_probs = f"zip_with(probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * c))) probs"
         sum_probs = "aggregate(probs, double(0.0), (acc, x) -> acc + x) norm"
         to_pmf_expr = "arrays_zip(c, p) pmf"
+        normalize_probs = "transform(probs, p -> p / norm) p"
         to_current_expr = "named_struct('value', current_value, 'prob', " \
             "coalesce(p[array_position(c, current_value) - 1], 0.0)) current"
         sorted_pmf_expr = "array_sort(pmf, (left, right) -> if(left.p < right.p, 1, -1)) pmf"
         pmf_df = self._flatten(self._create_temp_view(repaired_df)) \
             .join(error_cells_df, [self.row_id, "attribute"], "inner") \
             .selectExpr(self.row_id, "attribute", "current_value", parse_pmf_json_expr) \
-            .withColumn("costs", cost_func(col("current_value"), col("pmf.classes"))) \
-            .selectExpr(self.row_id, "attribute", "current_value", "pmf.classes classes", to_weighted_probs) \
+            .selectExpr(self.row_id, "attribute", "current_value", "pmf.classes classes", slice_probs) \
+            .withColumn("costs", cost_func(col("current_value"), col("classes"))) \
+            .selectExpr(self.row_id, "attribute", "current_value", "classes", to_weighted_probs) \
             .selectExpr(self.row_id, "attribute", "current_value", "classes", "probs", sum_probs) \
-            .selectExpr(self.row_id, "attribute", "current_value", "classes c", "transform(probs, p -> p / norm) p") \
+            .selectExpr(self.row_id, "attribute", "current_value", "classes c", normalize_probs) \
             .selectExpr(self.row_id, "attribute", to_current_expr, to_pmf_expr) \
             .selectExpr(self.row_id, "attribute", "current", sorted_pmf_expr)
 
