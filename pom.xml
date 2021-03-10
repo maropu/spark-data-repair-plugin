@@ -27,7 +27,7 @@
 
   <groupId>io.github.maropu</groupId>
   <artifactId>spark-data-repair-plugin_2.12</artifactId>
-  <version>0.1.0-spark3.0-EXPERIMENTAL</version>
+  <version>0.1.0-spark3.1-EXPERIMENTAL</version>
   <packaging>jar</packaging>
   <name>A toolkit to provide data repair functinalities in Spark</name>
 

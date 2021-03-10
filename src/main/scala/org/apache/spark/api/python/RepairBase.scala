@@ -26,6 +26,7 @@ import org.apache.spark.sql.types._
 
 private[python] case class JsonEncoder(v: Seq[(String, AnyRef)]) {
 
+  // TODO: We need a smarter way to convert Scala data to a json string
   def asJson: String = v.map {
     case (k, v: String) => s""""$k":"$v""""
     case (k, map: Map[AnyRef, AnyRef]) =>

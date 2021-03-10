@@ -1,7 +1,7 @@
 # Synced with ./bin/conda.yml
-pyspark==3.0.2
-pyarrow==0.17.1
-pandas==0.25.3
+pyspark==3.1.1
+pyarrow==1.0.0
+pandas==0.23.2
 lightgbm==2.3.1
 scikit-learn==0.23.2
 hyperopt==0.2.5

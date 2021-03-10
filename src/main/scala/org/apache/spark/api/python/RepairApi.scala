@@ -17,7 +17,12 @@
 
 package org.apache.spark.api.python
 
+import java.net.URI
+
+import scala.io.Source
+
 import org.apache.spark.SparkException
+import org.apache.spark.python.DenialConstraints
 import org.apache.spark.sql._
 import org.apache.spark.util.RepairUtils._
 import org.apache.spark.util.{Utils => SparkUtils}
@@ -99,6 +104,65 @@ object RepairApi extends RepairBase {
     }
     val discreteDf = inputDf.selectExpr(discreteExprs: _*)
     (discreteDf, statMap)
+  }
+
+  def computeFunctionalDeps(inputView: String, constraintFilePath: String): String = {
+    logBasedOnLevel(s"computeFunctionalDep called with: discreteAttrView=$inputView " +
+      s"constraintFilePath=$constraintFilePath")
+
+    val (inputDf, qualifiedName) = checkAndGetQualifiedInputName("", inputView)
+
+    var file: Source = null
+    val constraints = try {
+      file = Source.fromFile(new URI(constraintFilePath).getPath)
+      file.getLines()
+      DenialConstraints.parseAndVerifyConstraints(file.getLines(), qualifiedName, inputDf.columns)
+    } finally {
+      if (file != null) {
+        file.close()
+      }
+    }
+
+    // TODO: Reuse the previous computation result
+    val domainSizes = computeAndGetTableStats(inputView).mapValues(_.distinctCount)
+
+    val fds = constraints.predicates.filter { preds =>
+      // Filters predicate candidates that might mean functional deps
+      preds.length == 2 && preds.flatMap(_.references).distinct.length == 2
+    }.flatMap {
+      case Seq(p1, p2) if Set(p1.sign, p2.sign) == Set("EQ", "IQ") &&
+          p1.references.length == 1 && p2.references.length == 1 =>
+        val ref1 = p1.references.head
+        val ref2 = p2.references.head
+        (domainSizes.get(ref1), domainSizes.get(ref2)) match {
+          case (Some(ds1), Some(ds2)) if ds1 < ds2 => Seq(ref1 -> ref2)
+          case (Some(_), Some(_)) => Seq(ref2 -> ref1)
+          case _ => Nil
+        }
+      case _ => Nil
+    }
+
+    // TODO: We need a smarter way to convert Scala data to a json string
+    fds.groupBy(_._1).map { case (k, v) =>
+      s""""$k": [${v.map(_._2).distinct.map { v => s""""$v"""" }.mkString(",")}]"""
+    }.mkString("{", ",", "}")
+  }
+
+  def computeFunctionDepMap(inputView: String, X: String, Y: String): String = {
+    val df = spark.sql(
+      s"""
+         |SELECT CAST($X AS STRING) x, CAST(y[0] AS STRING) y FROM (
+         |  SELECT $X, collect_set($Y) y
+         |  FROM $inputView
+         |  GROUP BY $X
+         |  HAVING size(y) = 1
+         |)
+       """.stripMargin)
+
+    // TODO: We need a smarter way to convert Scala data to a json string
+    df.collect.map { case Row(x: String, y: String) =>
+      s""""$x": "$y""""
+    }.mkString("{", ",", "}")
   }
 
   def convertToHistogram(inputView: String, discreteThres: Int): String = {

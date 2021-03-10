@@ -32,6 +32,10 @@ class RepairSuite extends QueryTest with SharedSparkSession {
     spark.sql(s"SET ${SQLConf.CBO_ENABLED.key}=true")
   }
 
+  private def resourcePath(f: String): String = {
+    Thread.currentThread().getContextClassLoader.getResource(f).getPath
+  }
+
   test("checkInputTable - unsupported types") {
     Seq("DATE", "TIMESTAMP", "ARRAY<INT>", "STRUCT<a: INT, b: DOUBLE>", "MAP<INT, INT>")
         .foreach { tpe =>
@@ -81,6 +85,86 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       val jsonObj = parse(jsonString)
       val data = jsonObj.asInstanceOf[JObject].values
       assert(data("distinct_stats") === Map("v0" -> 3, "v1" -> 8, "v2" -> 6, "v3" -> 9))
+    }
+  }
+
+  test("convertToDiscreteFeatures") {
+    withTable("adult") {
+      val hospitalFilePath = resourcePath("hospital.csv")
+      spark.read.option("header", true).format("csv").load(hospitalFilePath).write.saveAsTable("hospital")
+      val jsonString = RepairApi.convertToDiscreteFeatures("default.hospital", "tid", 20)
+      val jsonObj = parse(jsonString)
+      val data = jsonObj.asInstanceOf[JObject].values
+
+      val discreteFeatures = data("discrete_features").toString
+      assert(discreteFeatures.startsWith("discrete_features_"))
+      val discreteCols = spark.table(discreteFeatures).columns
+      assert(discreteCols.toSet === Set("tid", "HospitalType", "EmergencyService", "State"))
+
+      assert(data("distinct_stats") === Map(
+        "HospitalOwner" -> 28,
+        "MeasureName" -> 63,
+        "Address2" -> 0,
+        "Condition" -> 28,
+        "Address3" -> 0,
+        "PhoneNumber" -> 72,
+        "CountyName" -> 65,
+        "ProviderNumber" -> 71,
+        "HospitalName" -> 68,
+        "Sample" -> 355,
+        "HospitalType" -> 13,
+        "EmergencyService" -> 6,
+        "City" -> 72,
+        "Score" -> 71,
+        "ZipCode" -> 67,
+        "Address1" -> 78,
+        "State" -> 4,
+        "tid" -> 1000,
+        "Stateavg" -> 74,
+        "MeasureCode" -> 56))
+    }
+  }
+
+  test("computeFunctionalDeps") {
+    withTempView("hospital") {
+      val hospitalFilePath = resourcePath("hospital.csv")
+      spark.read.option("header", true).format("csv").load(hospitalFilePath).createOrReplaceTempView("hospital")
+      val constraintFilePath = resourcePath("hospital_constraints.txt")
+      val jsonString = RepairApi.computeFunctionalDeps("hospital", constraintFilePath)
+      val jsonObj = parse(jsonString)
+      val data = jsonObj.asInstanceOf[JObject].values
+
+      assert(data === Map(
+        "HospitalOwner" -> Seq("HospitalName"),
+        "Condition" -> Seq("MeasureCode"),
+        "CountyName" -> Seq("City"),
+        "HospitalName" -> Seq("PhoneNumber", "ProviderNumber", "Address1", "City"),
+        "EmergencyService" -> Seq("ZipCode"),
+        "ZipCode" -> Seq("HospitalName"),
+        "MeasureCode" -> Seq("MeasureName", "Stateavg")))
+    }
+  }
+
+  test("computeFunctionalDepMap") {
+    withTempView("tempView") {
+      spark.sql(
+        s"""
+           |CREATE TEMPORARY VIEW tempView(tid, x, y) AS SELECT * FROM VALUES
+           |  (1, 1, "test-1"),
+           |  (2, 2, "test-2"),
+           |  (3, 3, "test-3"),
+           |  (4, 2, "test-2"),
+           |  (5, 1, "test-1"),
+           |  (6, 1, "test-1"),
+           |  (7, 3, "test-3"),
+           |  (8, 3, "test-3"),
+           |  (9, 2, "test-2a")
+         """.stripMargin)
+
+      val jsonString = RepairApi.computeFunctionDepMap("tempView", "x", "y")
+      val jsonObj = parse(jsonString)
+      val data = jsonObj.asInstanceOf[JObject].values
+      assert(data === Map("3" -> "test-3", "1" -> "test-1"))
     }
   }
 }

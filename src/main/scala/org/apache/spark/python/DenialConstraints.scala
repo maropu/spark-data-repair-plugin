@@ -30,13 +30,17 @@ case class Constant(value: String) extends Expr {
   override def toString: String = value
 }
 
-case class Predicate(genCmp: (String, String) => String, leftExpr: Expr, rightExpr: Expr) {
+case class Predicate(
+  sign: String,
+  genCmp: (String, String) => String,
+  leftExpr: Expr,
+  rightExpr: Expr) {
 
   def references: Seq[String] =  {
-    Seq(leftExpr, rightExpr).filter(_.isInstanceOf[AttrRef]).map(_.toString)
+    Seq(leftExpr, rightExpr).filter(_.isInstanceOf[AttrRef]).map(_.toString).distinct
   }
 
-  private def toStringWithQualifier(expr: Expr, qualifier: String): String  = expr match {
+  private def toStringWithQualifier(expr: Expr, qualifier: String): String = expr match {
     case ref: AttrRef => s"$qualifier.$ref"
     case constant => s"$constant"
   }
@@ -107,7 +111,8 @@ object DenialConstraints extends Logging {
             val predicateDef = s"""(${opSigns.mkString("|")})\\s*\\(\\s*$t1\\.(.*)\\s*,\\s*$t2\\.(.*)\\s*\\)""".r
             val parsed = constraints.map {
               case predicateDef(cmp, leftAttr, rightAttr) =>
-                ParseResult(Some(Predicate(signMap(cmp), AttrRef(leftAttr.trim), AttrRef(rightAttr.trim))))
+                ParseResult(Some(Predicate(cmp, signMap(cmp),
+                  AttrRef(leftAttr.trim), AttrRef(rightAttr.trim))))
               case s =>
                 ParseResult(None, s)
             }
@@ -128,7 +133,8 @@ object DenialConstraints extends Logging {
             val predicateDef = s"""(${opSigns.mkString("|")})\\s*\\(\\s*$t1\\.(.*)\\s*,\\s*(.*)\\)""".r
             val parsed = constraints.map {
               case predicateDef(cmp, leftAttr, value) =>
-                ParseResult(Some(Predicate(signMap(cmp), AttrRef(leftAttr.trim), Constant(value.trim))))
+                ParseResult(Some(Predicate(cmp, signMap(cmp),
+                  AttrRef(leftAttr.trim), Constant(value.trim))))
               case s =>
                 ParseResult(None, s)
             }
