@@ -474,6 +474,24 @@ class RepairModel():
         return self
 
     @argtype_check  # type: ignore
+    def setUpdateCostFunction(self, cf: UpdateCostFunction) -> "RepairModel":
+        """
+        Specifies the :class:`UpdateCostFunction` derived class to implement
+        a logic to compute update costs for repairs.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        cf: derived class of :class:`UpdateCostFunction`.
+        """
+        if not isinstance(cf, UpdateCostFunction):
+            raise TypeError("`cf` should be provided as repair.costs.UpdateCostFunction, "
+                            "got {type(cf)}")
+        self.cf = cf
+        return self
+
+    @argtype_check  # type: ignore
     def option(self, key: str, value: str) -> "RepairModel":
         """Adds an input option for internal functionalities (e.g., model learning).
 

@@ -53,6 +53,7 @@ model to repair them.
     RepairModel.setTableName
     RepairModel.setTrainingDataSampleRatio
     RepairModel.setTargets
+    RepairModel.setUpdateCostFunction
 
 Repair Misc APIs
 -----------------
