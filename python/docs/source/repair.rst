@@ -44,7 +44,6 @@ model to repair them.
     RepairModel.setErrorDetector
     RepairModel.setInferenceOrder
     RepairModel.setInput
-    RepairModel.setMaxTrainingColumnNum
     RepairModel.setMaximalLikelihoodRepairEnabled
     RepairModel.setMinCorrThreshold
     RepairModel.setRepairDelta

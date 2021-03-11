@@ -109,7 +109,6 @@ class RepairModel():
         # Parameters for repair model training
         self.training_data_sample_ratio: float = 1.0
         self.min_training_row_ratio: float = 0.10
-        self.max_training_column_num: Optional[int] = None
         self.small_domain_threshold: int = 12
         self.inference_order: str = "entropy"
 
@@ -399,20 +398,6 @@ class RepairModel():
             sampling ratio (default: 1.0).
         """
         self.training_data_sample_ratio = ratio
-        return self
-
-    @argtype_check  # type: ignore
-    def setMaxTrainingColumnNum(self, n: int) -> "RepairModel":
-        """Specifies the max number of columns used to build models.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        n: int
-            the max number of columns (default: None).
-        """
-        self.max_training_column_num = n
         return self
 
     @argtype_check  # type: ignore
@@ -709,16 +694,16 @@ class RepairModel():
         fig.tight_layout()
         fig.show()
 
-    def _select_training_rows(self, fixed_df: DataFrame) -> DataFrame:
+    def _select_training_rows(self, train_df: DataFrame) -> DataFrame:
         # Prepares training data to repair the remaining error cells
         # TODO: Needs more smart sampling, e.g., down-sampling
-        train_df = fixed_df.sample(self.training_data_sample_ratio).drop(str(self.row_id)).cache()
-        logging.info("[Repair Model Training Phase] Sampling {} training data (ratio={}) "
-                     "from {} clean rows...".format(
-                         train_df.count(),
+        sampled_train_df = train_df.sample(self.training_data_sample_ratio)
+        logging.info("[Repair Model Training Phase] Sampling {} rows (ratio={}) "
+                     "from {} training rows...".format(
+                         sampled_train_df.count(),
                          self.training_data_sample_ratio,
-                         fixed_df.count()))
-        return train_df
+                         train_df.count()))
+        return sampled_train_df
 
     def _error_num_based_order(self, error_attrs: List[Row]) -> List[str]:
         # Sorts target columns by the number of errors
@@ -980,11 +965,13 @@ class RepairModel():
         return model, params, -min_loss
 
     def _build_stat_model(self, env: Dict[str, str], index: int, metadata: Dict[str, Any],
-                          train_pdf: pd.DataFrame, target_columns: List[str], y: str, features: List[str],
+                          train_df: DataFrame, target_columns: List[str], y: str, features: List[str],
                           continous_attrs: List[str], labels: List[str]) -> Any:
         # The previous implementation selected a subset of features among given `features`.
         # But, this kind of feature selections in tree-baed models seems meaningless and
         # we now pass the given `features` into `_build_lgb_model` as they are.
+        train_pdf = train_df.toPandas()
+
         X, transformers = self._transform_features(
             env, train_pdf[features], features, continous_attrs)
 
@@ -1041,23 +1028,23 @@ class RepairModel():
         # have been proposed recently, e.g., a Markov logic network based model in HoloClean [4].
         # Therefore, we might be able to improve our model more baesd on
         # the-state-of-the-art approaches.
-
-        # Computes a inference order based on dependencies between `error_attrs` and the others
-        target_columns = self._compute_inference_order(env, train_df, error_attrs)
-
-        # If `use_rules` is `True`, try to analyze Functional deps on training data
-        functional_deps = self._get_functional_deps(env, train_df) if use_rules else None
-        if functional_deps is not None:
-            logging.debug(f"Functional deps found: {functional_deps}")
-
-        sampled_train_df = self._select_training_rows(train_df)
-        min_training_row_num = int(float(env["num_input_rows"]) * self.min_training_row_ratio)
+        sampled_train_df = self._select_training_rows(train_df) \
+            .drop(str(self.row_id)).cache()
+        min_training_row_num = train_df.count() * self.min_training_row_ratio
         if sampled_train_df.count() <= min_training_row_num:
             raise ValueError("Number of training rows must be greater than {} "
                              "(the {}%% number of input rows), but {} rows found".format(
                                  min_training_row_num,
                                  int(self.min_training_row_ratio * 100),
                                  sampled_train_df.count()))
+
+        # Computes a inference order based on dependencies between `error_attrs` and the others
+        target_columns = self._compute_inference_order(env, sampled_train_df, error_attrs)
+
+        # If `use_rules` is `True`, try to analyze Functional deps on training data
+        functional_deps = self._get_functional_deps(env, sampled_train_df) if use_rules else None
+        if functional_deps is not None:
+            logging.debug(f"Functional deps found: {functional_deps}")
 
         # Builds multiple repair models to repair error cells
         logging.info("[Repair Model Training Phase] Building {} models "
@@ -1080,7 +1067,7 @@ class RepairModel():
                     "train_table": train_temp_view,
                     "#rows": train_df.count(),
                     "sample_ratio": self.training_data_sample_ratio,
-                    "columns": train_df.columns,
+                    "columns": sampled_train_df.columns,
                     "inference_order": self.inference_order,
                     "target_columns": target_columns,
                     "pairwise_stats": env["pairwise_attr_stats"],
@@ -1089,16 +1076,15 @@ class RepairModel():
                 json.dump(metadata, f, indent=2)
 
         models = {}
-        train_pdf = sampled_train_df.toPandas()
         excluded_columns = copy.deepcopy(target_columns)
         for index, y in enumerate(target_columns):
             # Filters out excluded columns first
-            input_columns = [c for c in train_pdf.columns if c not in excluded_columns]  # type: ignore
+            input_columns = [c for c in sampled_train_df.columns if c not in excluded_columns]  # type: ignore
             excluded_columns.remove(y)
 
             is_discrete = y not in continous_attrs
             model_type = "classifier" if is_discrete else "regressor"
-            labels = train_df.selectExpr(f"collect_set(`{y}`) labels").collect()[0].labels \
+            labels = sampled_train_df.selectExpr(f"collect_set(`{y}`) labels").collect()[0].labels \
                 if is_discrete else []
 
             metadata = {"model_type": model_type, "y": y, "labels": labels}
@@ -1108,14 +1094,15 @@ class RepairModel():
             if functional_deps is not None and y in functional_deps:
                 fx = list(filter(lambda x: x in input_columns, functional_deps[y]))
                 if len(fx) > 0:
-                    model = self._build_rule_model(index, metadata, train_df, target_columns, fx[0], y)
+                    model = self._build_rule_model(index, metadata, sampled_train_df, target_columns, fx[0], y)
                     models[y] = (model, [fx[0]], None)
 
             # Otherwise, builds a statistical model by `input_columns`
             if y not in models:
-                model, features, transformers = self._build_stat_model(
-                    env, index, metadata, train_pdf, target_columns, y, input_columns, continous_attrs, labels)
-                models[y] = (model, features, transformers)
+                df = sampled_train_df.where(f"{y} IS NOT NULL")
+                logging.debug(f"# of samples to use training for {y}: {df.count()}")
+                models[y] = self._build_stat_model(
+                    env, index, metadata, df, target_columns, y, input_columns, continous_attrs, labels)
 
             if self.checkpoint_path is not None:
                 checkpoint_name = f"{self.checkpoint_path}/{index}_{model_type}_{y}"
@@ -1326,7 +1313,6 @@ class RepairModel():
         #################################################################################
 
         # Selects rows for training, build models, and repair cells
-        # TODO: Use a part of `dirty_df` as training data by treating NULL as it is
         fixed_df, dirty_df, error_attrs = self._split_clean_and_dirty_rows(env, error_cells_df)
         if compute_training_target_hist:
             target_columns = list(map(lambda row: row.attribute, error_attrs))
@@ -1343,8 +1329,9 @@ class RepairModel():
             raise ValueError("At least one feature is needed to repair error cells, "
                              "but no features found")
 
-        models, target_columns = \
-            self._build_repair_models(env, fixed_df, error_attrs, continous_attrs)
+        partial_repaired_df = self._spark.table(env["partial_repaired"])
+        models, target_columns = self._build_repair_models(
+            env, partial_repaired_df, error_attrs, continous_attrs)
 
         #################################################################################
         # 3. Repair Phase
