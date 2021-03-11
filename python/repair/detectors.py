@@ -20,7 +20,7 @@
 from abc import ABCMeta, abstractmethod
 from typing import Optional
 
-from pyspark.sql import DataFrame, SparkSession  # type: ignore[import]
+from pyspark.sql import DataFrame, SparkSession  # type: ignore
 
 
 class ErrorDetector(metaclass=ABCMeta):
@@ -32,7 +32,7 @@ class ErrorDetector(metaclass=ABCMeta):
 
         # For Spark/JVM interactions
         self._spark = SparkSession.builder.getOrCreate()
-        self._detector_api = self._spark.sparkContext._active_spark_context._jvm.ErrorDetectorApi
+        self._detector_api = self._spark.sparkContext._active_spark_context._jvm.ErrorDetectorApi  # type: ignore
 
     def setUp(self, row_id: str, qualified_input_name: str) -> "ErrorDetector":
         self.row_id = row_id
@@ -57,7 +57,7 @@ class NullErrorDetector(ErrorDetector):
 
     def _detect_impl(self) -> DataFrame:
         jdf = self._detector_api.detectNullCells(self.qualified_input_name, self.row_id)
-        return DataFrame(jdf, self._spark._wrapped)
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
 
 class RegExErrorDetector(ErrorDetector):
@@ -71,7 +71,7 @@ class RegExErrorDetector(ErrorDetector):
         jdf = self._detector_api.detectErrorCellsFromRegEx(
             self.qualified_input_name, self.row_id, self.error_pattern,
             self.error_cells_as_string)
-        return DataFrame(jdf, self._spark._wrapped)
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
 
 class ConstraintErrorDetector(ErrorDetector):
@@ -83,7 +83,7 @@ class ConstraintErrorDetector(ErrorDetector):
     def _detect_impl(self) -> DataFrame:
         jdf = self._detector_api.detectErrorCellsFromConstraints(
             self.qualified_input_name, self.row_id, self.constraint_path)
-        return DataFrame(jdf, self._spark._wrapped)
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
 
 class OutlierErrorDetector(ErrorDetector):
@@ -95,4 +95,4 @@ class OutlierErrorDetector(ErrorDetector):
     def _detect_impl(self) -> DataFrame:
         jdf = self._detector_api.detectErrorCellsFromOutliers(
             self.qualified_input_name, self.row_id, self.approx_enabled)
-        return DataFrame(jdf, self._spark._wrapped)
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore

@@ -19,12 +19,13 @@ import os
 import glob
 import tempfile
 import unittest
+import pandas as pd  # type: ignore[import]
 
 from pyspark import SparkConf
 from pyspark.sql import Row
 
 from repair.misc import RepairMisc
-from repair.model import RepairModel
+from repair.model import FunctionalDepModel, RepairModel
 from repair.detectors import ConstraintErrorDetector, RegExErrorDetector
 from repair.tests.requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
@@ -439,6 +440,18 @@ class RepairModelTests(ReusedSQLTestCase):
             repaired_df,
             "struct<tid:string,attribute:string,current_value:string,"
             "repaired:string,score:double>")
+
+    def test_FunctionalDepModel(self):
+        model = FunctionalDepModel("x", {1: "test-1", 2: "test-2", 3: "test-3"})
+        pdf = pd.DataFrame([[3], [1], [2], [4]], columns=["x"])
+        self.assertEqual(model.classes_.tolist(), ["test-1", "test-2", "test-3"])
+        self.assertEqual(model.predict(pdf), ["test-3", "test-1", "test-2", None])
+        pmf = model.predict_proba(pdf)
+        self.assertEqual(len(pmf), 4)
+        self.assertEqual(pmf[0].tolist(), [0.0, 0.0, 1.0])
+        self.assertEqual(pmf[1].tolist(), [1.0, 0.0, 0.0])
+        self.assertEqual(pmf[2].tolist(), [0.0, 1.0, 0.0])
+        self.assertEqual(pmf[3].tolist(), [0.0, 0.0, 0.0])
 
 
 if __name__ == "__main__":

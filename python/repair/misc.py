@@ -37,7 +37,7 @@ class RepairMisc():
 
         # JVM interfaces for Data Repair APIs
         self._spark = SparkSession.builder.getOrCreate()
-        self._misc_api_ = self._spark.sparkContext._active_spark_context._jvm.RepairMiscApi
+        self._misc_api_ = self._spark.sparkContext._active_spark_context._jvm.RepairMiscApi  # type: ignore
 
     @argtype_check
     def option(self, key: str, value: str) -> "RepairMisc":
@@ -129,7 +129,7 @@ class RepairMisc():
             self._db_name,
             self.opts["table_name"],
             self.opts["row_id"])
-        return DataFrame(jdf, self._spark._wrapped)
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
     def describe(self) -> DataFrame:
         """Computes column stats for an input table.
@@ -156,7 +156,7 @@ class RepairMisc():
         self._check_required_options(["table_name"])
         jdf = self._misc_api_.computeAndGetStats(
             self._db_name, self.opts["table_name"], self._num_bins)
-        return DataFrame(jdf, self._spark._wrapped)
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
     def flatten(self) -> DataFrame:
         """Converts an input table into a flatten <row_id, attribute, vaue> table.
@@ -179,7 +179,7 @@ class RepairMisc():
         self._check_required_options(["table_name", "row_id"])
         jdf = self._misc_api_.flattenTable(
             self._db_name, self.opts["table_name"], self.opts["row_id"])
-        return DataFrame(jdf, self._spark._wrapped)
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
     def splitInputTable(self) -> DataFrame:
         """Splits an input table into multiple tables with similar rows.
@@ -214,7 +214,7 @@ class RepairMisc():
             int(self.opts["k"]), self._db_name, self.opts["table_name"], self.opts["row_id"],
             self._target_attr_list, param_options)
 
-        return DataFrame(jdf, self._spark._wrapped)
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
     def injectNull(self) -> DataFrame:
         """Randomly injects NULL into given attributes.
@@ -259,7 +259,7 @@ class RepairMisc():
         jdf = self._misc_api_.injectNullAt(
             self._db_name, self.opts["table_name"], self._target_attr_list,
             param_null_ratio, self._seed)
-        return DataFrame(jdf, self._spark._wrapped)
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
     def toErrorMap(self) -> DataFrame:
         """Converts an input table into an error map.
@@ -301,4 +301,4 @@ class RepairMisc():
         jdf = self._misc_api_.toErrorMap(
             self.opts["error_cells"], self._db_name, self.opts["table_name"],
             self.opts["row_id"])
-        return DataFrame(jdf, self._spark._wrapped)
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore

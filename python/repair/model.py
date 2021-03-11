@@ -34,8 +34,43 @@ from pyspark.sql import DataFrame, Row, SparkSession, functions  # type: ignore[
 from pyspark.sql.functions import col, expr  # type: ignore[import]
 
 from repair.costs import UpdateCostFunction, NoCost
-from repair.detectors import ErrorDetector, NullErrorDetector
+from repair.detectors import ConstraintErrorDetector, ErrorDetector, NullErrorDetector
 from repair.utils import argtype_check, elapsed_time
+
+
+class FunctionalDepModel():
+    """
+    Model class to mimic the scikit-learn APIs to predict values
+    based on the rules of functional dependencies.
+
+    .. versionchanged:: 0.1.0
+    """
+
+    def __init__(self, x: str, fd_map: Dict[str, str]) -> None:
+        self.fd_map = fd_map
+        self.classes = list(fd_map.values())
+        self.x = x
+
+        # Creates a var to map keys into their indexes on `fd_map.keys()`
+        self.fd_keypos_map = {}
+        for index, c in enumerate(self.classes):
+            self.fd_keypos_map[c] = index
+
+    @property
+    def classes_(self) -> Any:
+        return np.array(self.classes)
+
+    def predict(self, X: pd.DataFrame) -> Any:
+        return list(map(lambda x: self.fd_map[x] if x in self.fd_map else None, X[self.x]))
+
+    def predict_proba(self, X: pd.DataFrame) -> Any:
+        pmf = []
+        for x in X[self.x]:
+            probs = np.zeros(len(self.classes))
+            if x in self.fd_map.keys():
+                probs[self.fd_keypos_map[self.fd_map[x]]] = 1.0
+            pmf.append(probs)
+        return pmf
 
 
 class RepairModel():
@@ -103,7 +138,7 @@ class RepairModel():
 
         # JVM interfaces for Data Repair APIs
         self._spark = SparkSession.builder.getOrCreate()
-        self._jvm = self._spark.sparkContext._active_spark_context._jvm
+        self._jvm = self._spark.sparkContext._active_spark_context._jvm  # type: ignore
         self._repair_api = self._jvm.RepairApi
 
     @argtype_check  # type: ignore
@@ -456,7 +491,7 @@ class RepairModel():
     def _error_cells(self) -> str:
         df = self.error_cells if type(self.error_cells) is DataFrame \
             else self._spark.table(str(self.error_cells))
-        if not all(c in df.columns for c in (self.row_id, "attribute")):  # type: ignore
+        if not all(c in df.columns for c in (str(self.row_id), "attribute")):  # type: ignore
             raise ValueError(f"Error cells must have `{self.row_id}` and "
                              "`attribute` in columns")
         return self._create_temp_view(df, "error_cells")
@@ -466,15 +501,15 @@ class RepairModel():
 
     def _clear_job_group(self) -> None:
         # TODO: Uses `SparkContext.clearJobGroup()` instead
-        self._spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)
-        self._spark.sparkContext.setLocalProperty("spark.job.description", None)
-        self._spark.sparkContext.setLocalProperty("spark.job.interruptOnCancel", None)
+        self._spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)  # type: ignore
+        self._spark.sparkContext.setLocalProperty("spark.job.description", None)  # type: ignore
+        self._spark.sparkContext.setLocalProperty("spark.job.interruptOnCancel", None)  # type: ignore
 
     def _spark_job_group(name: str):  # type: ignore
         def decorator(f):  # type: ignore
             @functools.wraps(f)
             def wrapper(self, *args, **kwargs):  # type: ignore
-                self._spark.sparkContext.setJobGroup(name, name)
+                self._spark.sparkContext.setJobGroup(name, name)  # type: ignore
                 start_time = time.time()
                 ret = f(self, *args, **kwargs)
                 logging.info(f"Elapsed time (name: {name}) is {time.time() - start_time}(s)")
@@ -488,7 +523,8 @@ class RepairModel():
         self._intermediate_views_on_runtime.append(view_name)
         return self._spark.table(view_name)
 
-    def _create_temp_view(self, df: DataFrame, prefix: str = "temp") -> str:
+    def _create_temp_view(self, df: Any, prefix: str = "temp") -> str:
+        assert isinstance(df, DataFrame)
         temp_name = f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
         df.createOrReplaceTempView(temp_name)
         self._intermediate_views_on_runtime.append(temp_name)
@@ -496,12 +532,12 @@ class RepairModel():
 
     def _repair_attrs(self, repair_updates: str, base_table: str) -> DataFrame:
         jdf = self._jvm.RepairMiscApi.repairAttrsFrom(
-            repair_updates, "", base_table, self.row_id)
-        return DataFrame(jdf, self._spark._wrapped)
+            repair_updates, "", base_table, str(self.row_id))
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
     def _flatten(self, input_table: str) -> DataFrame:
-        jdf = self._jvm.RepairMiscApi.flattenTable("", input_table, self.row_id)
-        return DataFrame(jdf, self._spark._wrapped)
+        jdf = self._jvm.RepairMiscApi.flattenTable("", input_table, str(self.row_id))
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
     def _release_resources(self) -> None:
         while self._intermediate_views_on_runtime:
@@ -509,9 +545,9 @@ class RepairModel():
             logging.debug(f"Dropping an auto-generated view: {v}")
             self._spark.sql(f"DROP VIEW IF EXISTS {v}")
 
-    def _check_input_table(self, env: Dict[str, str]) -> Tuple[str, List[str]]:
+    def _check_input_table(self, env: Dict[str, str]) -> Tuple[DataFrame, List[str]]:
         ret_as_json = self._repair_api.checkInputTable(
-            self.db_name, self._input_table, self.row_id)
+            self.db_name, self._input_table, str(self.row_id))
         env.update(json.loads(ret_as_json))
         continous_attrs = env["continous_attrs"].split(",")
         return self._spark.table(env["input_table"]), \
@@ -520,7 +556,7 @@ class RepairModel():
     def _detect_error_cells(self, input_table: str) -> str:
         # Initializes the given error detectors with the input params
         for d in self.error_detectors:
-            d.setUp(self.row_id, input_table)  # type: ignore
+            d.setUp(str(self.row_id), input_table)  # type: ignore
 
         error_cells_dfs = [d.detect() for d in self.error_detectors]
 
@@ -533,7 +569,7 @@ class RepairModel():
         # If `self.error_cells` provided, just uses it
         if self.error_cells is not None:
             # TODO: Even in this case, we need to use a NULL detector because
-            # `_build_model` will fial if `y` has NULL.
+            # `_build_stat_model` will fail if `y` has NULL.
             gray_cells_view = self._error_cells
             logging.info(f'[Error Detection Phase] Error cells provided by `{gray_cells_view}`')
 
@@ -564,7 +600,7 @@ class RepairModel():
             gray_cells_df.count(), int(env["num_input_rows"]) * int(env["num_attrs"])))
         env.update(json.loads(self._repair_api.convertErrorCellsToNull(
             env["input_table"], env["gray_cells"],
-            self.row_id)))
+            str(self.row_id))))
 
         return self._register_and_get_df(env["repair_base"])
 
@@ -572,7 +608,7 @@ class RepairModel():
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
         env.update(json.loads(self._repair_api.convertToDiscreteFeatures(
-            env["input_table"], self.row_id, self.discrete_thres)))
+            env["input_table"], str(self.row_id), self.discrete_thres)))
 
         discrete_ft_df = self._register_and_get_df(env["discrete_features"])
         logging.debug("Valid {} attributes ({}) found in the {} input attributes ({}) and "
@@ -588,7 +624,7 @@ class RepairModel():
 
     def _compute_attr_stats(self, env: Dict[str, str]) -> str:
         ret = json.loads(self._repair_api.computeAttrStats(
-            env["discrete_features"], env["gray_cells"], self.row_id,
+            env["discrete_features"], env["gray_cells"], str(self.row_id),
             self.attr_stat_sample_ratio,
             self.attr_stat_threshold))
         self._intermediate_views_on_runtime.append(ret["attr_stats"])
@@ -596,7 +632,7 @@ class RepairModel():
 
     @_spark_job_group(name="cell domain analysis")
     def _analyze_error_cell_domain(self, env: Dict[str, str], gray_cells_df: DataFrame,
-                                   continous_attrs: List[str]) -> str:
+                                   continous_attrs: List[str]) -> DataFrame:
         # Checks if attributes are discrete or not, and discretizes continous ones
         discrete_ft_df = self._preprocess(env, continous_attrs)
 
@@ -611,7 +647,7 @@ class RepairModel():
 
         logging.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
         env.update(json.loads(self._repair_api.computeDomainInErrorCells(
-            env["discrete_features"], attr_stats, env["gray_cells"], self.row_id,
+            env["discrete_features"], attr_stats, env["gray_cells"], str(self.row_id),
             env["continous_attrs"],
             self.max_attrs_to_compute_domains,
             self.min_corr_thres,
@@ -625,10 +661,10 @@ class RepairModel():
         # Fixes cells if an inferred value is the same with an initial one
         fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) value"
         weak_df = cell_domain_df.selectExpr(
-            self.row_id, "attribute", "current_value", fix_cells_expr).cache()
+            str(self.row_id), "attribute", "current_value", fix_cells_expr).cache()
         error_cells_df = weak_df.where("value IS NULL").drop("value").cache()
         weak_df = weak_df.where("value IS NOT NULL") \
-            .selectExpr(self.row_id, "attribute", "value repaired")
+            .selectExpr(str(self.row_id), "attribute", "value repaired")
         env["weak"] = self._create_temp_view(weak_df.cache(), "weak")
         env["partial_repaired"] = self._create_temp_view(
             self._repair_attrs(env["weak"], env["repair_base"]),
@@ -643,11 +679,11 @@ class RepairModel():
 
     def _split_clean_and_dirty_rows(
             self, env: Dict, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame, List[Row]]:
-        error_rows_df = error_cells_df.selectExpr(self.row_id).distinct().cache()
+        error_rows_df = error_cells_df.selectExpr(str(self.row_id)).distinct().cache()
         fixed_df = self._spark.table(env["partial_repaired"]) \
-            .join(error_rows_df, self.row_id, "left_anti").cache()
+            .join(error_rows_df, str(self.row_id), "left_anti").cache()
         dirty_df = self._spark.table(env["partial_repaired"]) \
-            .join(error_rows_df, self.row_id, "left_semi").cache()
+            .join(error_rows_df, str(self.row_id), "left_semi").cache()
         error_attrs = error_cells_df.groupBy("attribute") \
             .agg(functions.count("attribute").alias("cnt")).collect()
         assert len(error_attrs) > 0
@@ -676,7 +712,7 @@ class RepairModel():
     def _select_training_rows(self, fixed_df: DataFrame) -> DataFrame:
         # Prepares training data to repair the remaining error cells
         # TODO: Needs more smart sampling, e.g., down-sampling
-        train_df = fixed_df.sample(self.training_data_sample_ratio).drop(self.row_id).cache()
+        train_df = fixed_df.sample(self.training_data_sample_ratio).drop(str(self.row_id)).cache()
         logging.info("[Repair Model Training Phase] Sampling {} training data (ratio={}) "
                      "from {} clean rows...".format(
                          train_df.count(),
@@ -702,7 +738,7 @@ class RepairModel():
                                  error_attrs: List[Row]) -> List[str]:
         # Computes domain sizes for training data
         logging.info("[Repair Model Training Phase] Collecting training data stats before "
-                     "building ML models...")
+                     "building repair models...")
         env["train"] = self._create_temp_view(train_df, "train")
         env.update(json.loads(self._repair_api.computeDomainSizes(env["train"])))
 
@@ -720,12 +756,12 @@ class RepairModel():
                              error_attrs: List[Row]) -> List[str]:
         # Sorts target columns by correlations
         target_columns: List[str] = []
-        error_attrs = list(map(lambda row: row.attribute, error_attrs))
+        error_attr_names = list(map(lambda row: row.attribute, error_attrs))
 
-        for index in range(len(error_attrs)):
-            features = [c for c in train_df.columns if c not in error_attrs]
+        for index in range(len(error_attr_names)):
+            features = [c for c in train_df.columns if c not in error_attr_names]
             targets: List[Tuple[float, str]] = []
-            for c in error_attrs:
+            for c in error_attr_names:
                 total_corr = 0.0
                 for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][c]):
                     if f in features:
@@ -736,12 +772,12 @@ class RepairModel():
             t = heapq.heappop(targets)
             target_columns.append(t[1])
             logging.debug("corr={}, y({})<=X({})".format(-t[0], t[1], ",".join(features)))
-            error_attrs.remove(t[1])
+            error_attr_names.remove(t[1])
 
         return target_columns
 
     def _compute_inference_order(self, env: Dict[str, str], train_df: DataFrame,
-                                 error_attrs: List[str]) -> List[str]:
+                                 error_attrs: List[Row]) -> List[str]:
         # Defines a inference order based on `train_df`.
         #
         # TODO: Needs to analyze more dependencies (e.g., based on graph algorithms) between
@@ -761,16 +797,12 @@ class RepairModel():
         assert self.inference_order == "entropy"
         return self._entropy_based_order(env, train_df, error_attrs)
 
-    def _select_features(self, env: Dict[str, str], input_columns: List[str], y: pd.DataFrame,
-                         excluded_columns: List[str]) -> List[str]:
-        # All the available features
-        features = [c for c in input_columns if c not in excluded_columns]
-
-        # Selects features if necessary
+    def _select_features(self, env: Dict[str, str], y: str, features: List[str]) -> List[str]:
+        # Selects features among input columns if necessary
         if self.max_training_column_num is not None and \
                 int(self.max_training_column_num) < len(features):
             heap: List[Tuple[float, str]] = []
-            for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][y]):
+            for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][y]):  # type: ignore
                 if f in features:
                     # Converts to a negative value for extracting higher values
                     heapq.heappush(heap, (-float(corr), f))
@@ -815,8 +847,8 @@ class RepairModel():
         return X, transformers
 
     @elapsed_time  # type: ignore
-    def _build_model(self, X: pd.DataFrame, y: pd.Series, is_discrete: bool,
-                     labels: List[str]) -> pd.DataFrame:
+    def _build_lgb_model(self, X: pd.DataFrame, y: pd.Series, is_discrete: bool,
+                         labels: List[str]) -> Any:
         import lightgbm as lgb  # type: ignore[import]
 
         # TODO: Validate given parameter values
@@ -883,6 +915,8 @@ class RepairModel():
         # we forcibly disable some optimizations.
         disable_opts = is_discrete and len(labels) < 2
         if disable_opts:
+            # TODO: In this case, returns a deterministic model
+            # to return the same value
             logging.warn(
                 f"Only {len(labels)} labels found, so forcibly disable learning optimizations "
                 "(e.g., hyper param searches) when building a classifier")
@@ -962,9 +996,55 @@ class RepairModel():
 
         return model, params, -min_loss
 
+    def _build_stat_model(self, env: Dict[str, str], index: int, metadata: Dict[str, Any],
+                          train_pdf: pd.DataFrame, target_columns: List[str], y: str, input_columns: List[str],
+                          continous_attrs: List[str], labels: List[str]) -> Any:
+        # TODO: Removes `_select_features`
+        features = self._select_features(env, y, input_columns)
+        X, transformers = self._transform_features(
+            env, train_pdf[features], features, continous_attrs)
+
+        logging.info("Building {}/{} model... type={} y={} features={}{}".format(
+            index + 1, len(target_columns),
+            metadata["model_type"], y, ",".join(features),
+            f" #labels={len(labels)}" if len(labels) > 0 else ""))
+        is_discrete = y not in continous_attrs
+        (model, params, score), elapsed_time = \
+            self._build_lgb_model(X, train_pdf[y], is_discrete, labels)
+        logging.info("[{}/{}] score={} elapsed={}s".format(
+            index + 1, len(target_columns), score, elapsed_time))
+
+        metadata.update({
+            "score": score,
+            "params": params,
+            "features": features
+        })
+
+        return model, features, transformers
+
+    def _build_rule_model(self, index: int, metadata: Dict[str, Any], train_df: DataFrame,
+                          target_columns: List[str], x: str, y: str) -> Any:
+        logging.info("Building {}/{} model... type=classifier(rule-based) y={} feature={}".format(
+            index + 1, len(target_columns), y, x))
+        input_view = self._create_temp_view(train_df)
+        ret_as_json = self._repair_api.computeFunctionDepMap(input_view, x, y)
+        fd_map = json.loads(ret_as_json)
+        return FunctionalDepModel(x, fd_map)
+
+    def _get_functional_deps(self, env: Dict[str, str], train_df: DataFrame) -> Optional[Dict[str, List[str]]]:
+        constraint_detectors = list(filter(lambda x: isinstance(x, ConstraintErrorDetector), self.error_detectors))
+        # TODO: Supports the case where `self.error_detectors` has multiple `ConstraintErrorDetector`s
+        if len(constraint_detectors) == 1:
+            input_view = self._create_temp_view(train_df)
+            constraint_path = constraint_detectors[0].constraint_path  # type: ignore
+            ret_as_json = self._repair_api.computeFunctionalDeps(input_view, constraint_path)
+            return json.loads(ret_as_json)
+        else:
+            return None
+
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame, error_attrs: List[Row],
-                             continous_attrs: List[str]) -> Tuple[Dict[str, Any], List[str]]:
+                             continous_attrs: List[str], use_rules: bool = True) -> Tuple[Dict[str, Any], List[str]]:
         # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
         # on Apache Spark. Given a database tuple t = ce (c: correct attribute values,
         # e: error attribute values), the conditional probability of each combination of the
@@ -981,8 +1061,22 @@ class RepairModel():
         # Computes a inference order based on dependencies between `error_attrs` and the others
         target_columns = self._compute_inference_order(env, train_df, error_attrs)
 
-        # Builds multiple ML models to repair error cells
-        logging.info("[Repair Model Training Phase] Building {} ML models "
+        # If `use_rules` is `True`, try to analyze Functional deps on training data
+        functional_deps = self._get_functional_deps(env, train_df) if use_rules else None
+        if functional_deps is not None:
+            logging.debug(f"Functional deps found: {functional_deps}")
+
+        sampled_train_df = self._select_training_rows(train_df)
+        min_training_row_num = int(float(env["num_input_rows"]) * self.min_training_row_ratio)
+        if sampled_train_df.count() <= min_training_row_num:
+            raise ValueError("Number of training rows must be greater than {} "
+                             "(the {}%% number of input rows), but {} rows found".format(
+                                 min_training_row_num,
+                                 int(self.min_training_row_ratio * 100),
+                                 sampled_train_df.count()))
+
+        # Builds multiple repair models to repair error cells
+        logging.info("[Repair Model Training Phase] Building {} models "
                      "to repair the cells in {} (order={})"
                      .format(len(target_columns), ",".join(target_columns), self.inference_order))
 
@@ -1011,12 +1105,11 @@ class RepairModel():
                 json.dump(metadata, f, indent=2)
 
         models = {}
-        train_pdf = train_df.toPandas()
+        train_pdf = sampled_train_df.toPandas()
         excluded_columns = copy.deepcopy(target_columns)
         for index, y in enumerate(target_columns):
-            features = self._select_features(env, train_pdf.columns, y, excluded_columns)
-            X, transformers = self._transform_features(
-                env, train_pdf[features], features, continous_attrs)
+            # Filters out excluded columns first
+            input_columns = [c for c in train_pdf.columns if c not in excluded_columns]  # type: ignore
             excluded_columns.remove(y)
 
             is_discrete = y not in continous_attrs
@@ -1024,37 +1117,34 @@ class RepairModel():
             labels = train_df.selectExpr(f"collect_set(`{y}`) labels").collect()[0].labels \
                 if is_discrete else []
 
-            logging.info("Building {}/{} ML model... (type={}, y={}, features={}{})".format(
-                index + 1, len(target_columns),
-                model_type, y, ",".join(features),
-                f", #labels={len(labels)}" if len(labels) > 0 else ""))
-            (model, params, score), elapsed_time = \
-                self._build_model(X, train_pdf[y], is_discrete, labels)
-            logging.info("[{}/{}] score={} elapsed={}s".format(
-                index + 1, len(target_columns), score, elapsed_time))
+            metadata = {"model_type": model_type, "y": y, "labels": labels}
 
-            models[y] = (model, features, transformers)
+            # If `y` is functionally-dependent on an attribute of `input_columns`,
+            # builds a model based on the rule.
+            if functional_deps is not None and y in functional_deps:
+                fx = list(filter(lambda x: x in input_columns, functional_deps[y]))
+                if len(fx) > 0:
+                    model = self._build_rule_model(index, metadata, train_df, target_columns, fx[0], y)
+                    models[y] = (model, [fx[0]], None)
+
+            # Otherwise, builds a statistical model by `input_columns`
+            if y not in models:
+                model, features, transformers = self._build_stat_model(
+                    env, index, metadata, train_pdf, target_columns, y, input_columns, continous_attrs, labels)
+                models[y] = (model, features, transformers)
 
             if self.checkpoint_path is not None:
-                checkpoint_prefix = f"{self.checkpoint_path}/{index}_{model_type}_{y}"
+                checkpoint_name = f"{self.checkpoint_path}/{index}_{model_type}_{y}"
                 # TODO: An error below happens when using `open` and `pickle` together:
                 #   Argument 2 to "dump" has incompatible type "TextIO"; expected "IO[bytes]"
-                # with open(f"{checkpoint_prefix}.pkl", mode='wb') as f:
+                # with open(f"{checkpoint_name}.pkl", mode='wb') as f:
                 #     pickle.dump(model, f)
                 try:
-                    fd = open(f"{checkpoint_prefix}.pkl", mode='wb')
+                    fd = open(f"{checkpoint_name}.pkl", mode='wb')
                     pickle.dump(model, fd)
                 finally:
                     fd.close()
-                with open(f"{checkpoint_prefix}.json", mode='w') as f:
-                    metadata = {
-                        "score": score,
-                        "type": model_type,
-                        "params": params,
-                        "y": y,
-                        "features": features,
-                        "labels": labels
-                    }
+                with open(f"{checkpoint_name}.json", mode='w') as f:
                     json.dump(metadata, f, indent=2)
 
         return models, target_columns
@@ -1112,6 +1202,7 @@ class RepairModel():
                     else:
                         if row[y] is None:
                             if compute_repair_candidate_prob or maximal_likelihood_repair_enabled:
+                                # TODO: Filters out top-k values to reduce the amount of data
                                 predicted = model.predict_proba(X)
                                 pmf = {"classes": model.classes_.tolist(),
                                        "probs": predicted[0].tolist()}
@@ -1149,23 +1240,23 @@ class RepairModel():
 
         parse_pmf_json_expr = "from_json(value, 'classes array<string>, probs array<double>') pmf"
         slice_probs = "slice(pmf.probs, 1, size(pmf.classes)) probs"
-        to_weighted_probs = f"zip_with(probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * log(c)))) probs"
+        to_weighted_probs = f"zip_with(probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * c))) probs"
         sum_probs = "aggregate(probs, double(0.0), (acc, x) -> acc + x) norm"
-        to_pmf_expr = "arrays_zip(c, p) pmf"
+        to_pmf_expr = "filter(arrays_zip(c, p), x -> x.p > 0.01) pmf"
         normalize_probs = "transform(probs, p -> p / norm) p"
         to_current_expr = "named_struct('value', current_value, 'prob', " \
             "coalesce(p[array_position(c, current_value) - 1], 0.0)) current"
         sorted_pmf_expr = "array_sort(pmf, (left, right) -> if(left.p < right.p, 1, -1)) pmf"
         pmf_df = self._flatten(self._create_temp_view(repaired_df)) \
-            .join(error_cells_df, [self.row_id, "attribute"], "inner") \
-            .selectExpr(self.row_id, "attribute", "current_value", parse_pmf_json_expr) \
-            .selectExpr(self.row_id, "attribute", "current_value", "pmf.classes classes", slice_probs) \
+            .join(error_cells_df, [str(self.row_id), "attribute"], "inner") \
+            .selectExpr(str(self.row_id), "attribute", "current_value", parse_pmf_json_expr) \
+            .selectExpr(str(self.row_id), "attribute", "current_value", "pmf.classes classes", slice_probs) \
             .withColumn("costs", cost_func(col("current_value"), col("classes"))) \
-            .selectExpr(self.row_id, "attribute", "current_value", "classes", to_weighted_probs) \
-            .selectExpr(self.row_id, "attribute", "current_value", "classes", "probs", sum_probs) \
-            .selectExpr(self.row_id, "attribute", "current_value", "classes c", normalize_probs) \
-            .selectExpr(self.row_id, "attribute", to_current_expr, to_pmf_expr) \
-            .selectExpr(self.row_id, "attribute", "current", sorted_pmf_expr)
+            .selectExpr(str(self.row_id), "attribute", "current_value", "classes", to_weighted_probs) \
+            .selectExpr(str(self.row_id), "attribute", "current_value", "classes", "probs", sum_probs) \
+            .selectExpr(str(self.row_id), "attribute", "current_value", "classes c", normalize_probs) \
+            .selectExpr(str(self.row_id), "attribute", to_current_expr, to_pmf_expr) \
+            .selectExpr(str(self.row_id), "attribute", "current", sorted_pmf_expr)
 
         return pmf_df
 
@@ -1174,7 +1265,7 @@ class RepairModel():
 
         broadcasted_cf = self._spark.sparkContext.broadcast(self.cf)
 
-        @functions.pandas_udf("double")
+        @functions.pandas_udf("double")  # type: ignore
         def cost_func(xs: pd.Series, ys: pd.Series) -> pd.Series:
             cf = broadcasted_cf.value
             dists = [cf.compute(x, y) for x, y in zip(xs, ys)]
@@ -1185,9 +1276,9 @@ class RepairModel():
         score_expr = "ln(repaired.prob / IF(current.prob > 0.0, current.prob, 1e-6)) " \
             "* (1.0 / (1.0 + cost)) score"
         score_df = pmf_df \
-            .selectExpr(self.row_id, "attribute", "current", maximal_likelihood_repair_expr) \
+            .selectExpr(str(self.row_id), "attribute", "current", maximal_likelihood_repair_expr) \
             .withColumn("cost", cost_func(expr(current_expr), col("repaired.value"))) \
-            .selectExpr(self.row_id, "attribute", "current.value current_value",
+            .selectExpr(str(self.row_id), "attribute", "current.value current_value",
                         "repaired.value repaired", score_expr)
 
         return score_df
@@ -1251,6 +1342,7 @@ class RepairModel():
         #################################################################################
 
         # Selects rows for training, build models, and repair cells
+        # TODO: Use a part of `dirty_df` as training data by treating NULL as it is
         fixed_df, dirty_df, error_attrs = self._split_clean_and_dirty_rows(env, error_cells_df)
         if compute_training_target_hist:
             target_columns = list(map(lambda row: row.attribute, error_attrs))
@@ -1259,25 +1351,16 @@ class RepairModel():
             # self._show_histogram(hist_df)
             return hist_df
 
-        train_df = self._select_training_rows(fixed_df)
-        min_training_row_num = int(float(env["num_input_rows"]) * self.min_training_row_ratio)
-        if train_df.count() <= min_training_row_num:
-            raise ValueError("Number of training rows must be greater than {} "
-                             "(the {}%% number of input rows), but {} rows found".format(
-                                 min_training_row_num,
-                                 int(self.min_training_row_ratio * 100),
-                                 train_df.count()))
-
         # Checks if we have the enough number of features for inference
         # TODO: In case of `num_features == 0`, we might be able to select the most accurate and
         # predictable column as a staring feature.
-        num_features = len(train_df.columns) - len(error_attrs)
+        num_features = len(fixed_df.columns) - len(error_attrs)
         if num_features == 0:
             raise ValueError("At least one feature is needed to repair error cells, "
                              "but no features found")
 
         models, target_columns = \
-            self._build_repair_models(env, train_df, error_attrs, continous_attrs)
+            self._build_repair_models(env, fixed_df, error_attrs, continous_attrs)
 
         #################################################################################
         # 3. Repair Phase
@@ -1294,7 +1377,7 @@ class RepairModel():
             # the highest probability only.
             if compute_repair_prob:
                 return pmf_df.selectExpr(
-                    self.row_id,
+                    str(self.row_id),
                     "attribute",
                     "current.value AS current_value",
                     "pmf[0].c AS repaired",
@@ -1321,7 +1404,7 @@ class RepairModel():
         # value is the same with `current_value`.
         if not repair_data:
             repair_candidates_df = self._flatten(self._create_temp_view(repaired_df)) \
-                .join(error_cells_df, [self.row_id, "attribute"], "inner") \
+                .join(error_cells_df, [str(self.row_id), "attribute"], "inner") \
                 .selectExpr("tid", "attribute", "current_value", "value repaired") \
                 .where("not(current_value <=> repaired)")
             return repair_candidates_df
