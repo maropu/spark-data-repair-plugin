@@ -797,23 +797,6 @@ class RepairModel():
         assert self.inference_order == "entropy"
         return self._entropy_based_order(env, train_df, error_attrs)
 
-    def _select_features(self, env: Dict[str, str], y: str, features: List[str]) -> List[str]:
-        # Selects features among input columns if necessary
-        if self.max_training_column_num is not None and \
-                int(self.max_training_column_num) < len(features):
-            heap: List[Tuple[float, str]] = []
-            for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][y]):  # type: ignore
-                if f in features:
-                    # Converts to a negative value for extracting higher values
-                    heapq.heappush(heap, (-float(corr), f))
-
-            fts = [heapq.heappop(heap)[1] for i in range(int(self.max_training_column_num))]
-            logging.debug("Select {} relevant features ({}) from available ones ({})".format(
-                len(fts), ",".join(fts), ",".join(features)))
-            features = fts
-
-        return features
-
     def _transform_features(self, env: Dict[str, str], X: pd.DataFrame, features: List[str],
                             continous_attrs: List[str]) -> Tuple[pd.DataFrame, Any]:
         # Transforms discrete attributes with some categorical encoders if necessary
@@ -997,10 +980,11 @@ class RepairModel():
         return model, params, -min_loss
 
     def _build_stat_model(self, env: Dict[str, str], index: int, metadata: Dict[str, Any],
-                          train_pdf: pd.DataFrame, target_columns: List[str], y: str, input_columns: List[str],
+                          train_pdf: pd.DataFrame, target_columns: List[str], y: str, features: List[str],
                           continous_attrs: List[str], labels: List[str]) -> Any:
-        # TODO: Removes `_select_features`
-        features = self._select_features(env, y, input_columns)
+        # The previous implementation selected a subset of features among given `features`.
+        # But, this kind of feature selections in tree-baed models seems meaningless and
+        # we now pass the given `features` into `_build_lgb_model` as they are.
         X, transformers = self._transform_features(
             env, train_pdf[features], features, continous_attrs)
 
