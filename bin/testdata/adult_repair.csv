@@ -1,8 +1,8 @@
 tid,attribute,current_value,repaired
 12,Age,"",18-21
-12,Sex,"",Female
+12,Sex,"",Male
 16,Income,"",MoreThan50K
 5,Age,"",18-21
 5,Income,"",MoreThan50K
-3,Sex,"",Female
-7,Sex,"",Female
+3,Sex,"",Male
+7,Sex,"",Male
