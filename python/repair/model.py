@@ -1146,7 +1146,7 @@ class RepairModel():
                 #     pickle.dump(model, f)
                 try:
                     fd = open(f"{checkpoint_name}.pkl", mode='wb')
-                    pickle.dump(model, fd)
+                    pickle.dump(models[y], fd)
                 finally:
                     fd.close()
                 with open(f"{checkpoint_name}.json", mode='w') as f:
