@@ -213,18 +213,17 @@ scavenger.repair
   .setTargets(list)                            // target attribute list to repair
 
   // Parameters for Error Detection
-  .setErrorCells(df)                           // user-specified error cells
+  .setErrorCells(str)                          // user-specified error cells
   .setErrorDetector(impl)                      // error detector implementation (`RegExErrorDetector`, `ConstraintErrorDetector`, or `OutlierErrorDetector`)
   .setDiscreteThreshold(float)                 // max domain size of discrete values (default: 80)
   .setMinCorrThreshold(float)                  // threshold to decide which columns are used to compute domains (default: 0.70)
   .setDomainThresholds(float, float)           // thresholds to reduce domain size (default: 0.0, 0.70)
   .setAttrMaxNumToComputeDomains(int)          // max number of attributes to compute posterior probabiity based on the Naive Bayes assumption (default: 4)
-  .setAttrStatSampleRatio(float )              // sample ratio for table used to compute co-occurrence frequency (default: 1.0)
+  .setAttrStatSampleRatio(float)               // sample ratio for table used to compute co-occurrence frequency (default: 1.0)
   .setAttrStatThreshold(float)                 // threshold for filtering out low frequency (default: 0.0)
 
   // Parameters for Repair Model Training
   .setTrainingDataSampleRatio(float)           // sample ratio for table used to build statistical models (default: 1.0)
-  .setMaxTrainingColumnNum(int)                // max number of columns used when building models
   .setSmallDomainThreshold(int)                // max domain size for low-cardinality catogory encoding (default: 12)
   .setInferenceOrder(str)                      // how to order target columns to build models (default: 'entropy')
 
