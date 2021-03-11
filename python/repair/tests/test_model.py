@@ -376,6 +376,40 @@ class RepairModelTests(ReusedSQLTestCase):
             test_model.run(repair_data=True).orderBy("tid").collect(),
             expected_result)
 
+    def test_setRuleBasedModelEnabled(self):
+        with self.tempView("inputView", "errorCells"):
+            rows = [
+                (1, "1", "test-1"),
+                (2, "2", "test-2"),
+                (3, "1", None),
+                (4, "2", "test-2"),
+                (5, "2", None),
+                (6, "3", None)
+            ]
+            self.spark.createDataFrame(rows, ["tid", "x", "y"]) \
+                .createOrReplaceTempView("inputView")
+
+            self.spark.createDataFrame([(3, "y"), (5, "y"), (6, "y")], ["tid", "attribute"]) \
+                .createOrReplaceTempView("errorCells")
+
+            with tempfile.NamedTemporaryFile("w+t") as f:
+                # Creates a file for constraints
+                f.write("t1&t2&EQ(t1.x,t2.x)&IQ(t1.y,t2.y)")
+                f.flush()
+
+                test_model = self._build_model() \
+                    .setTableName("inputView") \
+                    .setRowId("tid") \
+                    .setErrorCells("errorCells") \
+                    .setErrorDetector(ConstraintErrorDetector(f.name)) \
+                    .setRuleBasedModelEnabled(True)
+
+                self.assertEqual(
+                    test_model.run().orderBy("tid", "attribute").collect(), [
+                        Row(tid=3, attribute="y", current_value=None, repaired="test-1"),
+                        Row(tid=5, attribute="y", current_value=None, repaired="test-2"),
+                        Row(tid=6, attribute="y", current_value=None, repaired=None)])
+
     def test_setRepairUpdates(self):
         expected_result = self.spark.table("adult_clean") \
             .orderBy("tid").collect()

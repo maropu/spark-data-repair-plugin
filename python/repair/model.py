@@ -110,6 +110,7 @@ class RepairModel():
         self.training_data_sample_ratio: float = 1.0
         self.min_training_row_ratio: float = 0.10
         self.small_domain_threshold: int = 12
+        self.rule_based_model_enabled: bool = False
         self.inference_order: str = "entropy"
 
         # Parameters for repairing
@@ -412,6 +413,20 @@ class RepairModel():
             threshold value (default: 12).
         """
         self.small_domain_threshold = thres
+        return self
+
+    @argtype_check  # type: ignore
+    def setRuleBasedModelEnabled(self, enabled: bool) -> "RepairModel":
+        """Specifies whether to enable rule-based models based on functional dependencies.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        enabled: bool
+            If set to ``True``, uses rule-based models if possible (default: ``False``).
+        """
+        self.rule_based_model_enabled = enabled
         return self
 
     @argtype_check  # type: ignore
@@ -1015,7 +1030,7 @@ class RepairModel():
 
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame, error_attrs: List[Row],
-                             continous_attrs: List[str], use_rules: bool = True) -> Tuple[Dict[str, Any], List[str]]:
+                             continous_attrs: List[str]) -> Tuple[Dict[str, Any], List[str]]:
         # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
         # on Apache Spark. Given a database tuple t = ce (c: correct attribute values,
         # e: error attribute values), the conditional probability of each combination of the
@@ -1041,8 +1056,9 @@ class RepairModel():
         # Computes a inference order based on dependencies between `error_attrs` and the others
         target_columns = self._compute_inference_order(env, sampled_train_df, error_attrs)
 
-        # If `use_rules` is `True`, try to analyze Functional deps on training data
-        functional_deps = self._get_functional_deps(env, sampled_train_df) if use_rules else None
+        # If `self.rule_based_model_enabled` is `True`, try to analyze Functional deps on training data
+        functional_deps = self._get_functional_deps(env, sampled_train_df) \
+            if self.rule_based_model_enabled else None
         if functional_deps is not None:
             logging.debug(f"Functional deps found: {functional_deps}")
 
@@ -1377,7 +1393,7 @@ class RepairModel():
             repair_candidates_df = self._flatten(self._create_temp_view(repaired_df)) \
                 .join(error_cells_df, [str(self.row_id), "attribute"], "inner") \
                 .selectExpr("tid", "attribute", "current_value", "value repaired") \
-                .where("not(current_value <=> repaired)")
+                .where("repaired IS NULL OR not(current_value <=> repaired)")
             return repair_candidates_df
         else:
             clean_df = fixed_df.union(repaired_df)

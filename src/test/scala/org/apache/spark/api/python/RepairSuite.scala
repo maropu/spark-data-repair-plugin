@@ -150,15 +150,15 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       spark.sql(
         s"""
            |CREATE TEMPORARY VIEW tempView(tid, x, y) AS SELECT * FROM VALUES
-           |  (1, 1, "test-1"),
-           |  (2, 2, "test-2"),
-           |  (3, 3, "test-3"),
-           |  (4, 2, "test-2"),
-           |  (5, 1, "test-1"),
-           |  (6, 1, "test-1"),
-           |  (7, 3, "test-3"),
-           |  (8, 3, "test-3"),
-           |  (9, 2, "test-2a")
+           |  (1, "1", "test-1"),
+           |  (2, "2", "test-2"),
+           |  (3, "3", "test-3"),
+           |  (4, "2", "test-2"),
+           |  (5, "1", "test-1"),
+           |  (6, "1", "test-1"),
+           |  (7, "3", "test-3"),
+           |  (8, "3", "test-3"),
+           |  (9, "2", "test-2a")
          """.stripMargin)
 
       val jsonString = RepairApi.computeFunctionDepMap("tempView", "x", "y")

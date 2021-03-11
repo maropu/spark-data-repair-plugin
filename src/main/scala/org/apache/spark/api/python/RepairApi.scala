@@ -24,6 +24,7 @@ import scala.io.Source
 import org.apache.spark.SparkException
 import org.apache.spark.python.DenialConstraints
 import org.apache.spark.sql._
+import org.apache.spark.sql.types.StringType
 import org.apache.spark.util.RepairUtils._
 import org.apache.spark.util.{Utils => SparkUtils}
 
@@ -124,7 +125,12 @@ object RepairApi extends RepairBase {
     }
 
     // TODO: Reuse the previous computation result
-    val domainSizes = computeAndGetTableStats(inputView).mapValues(_.distinctCount)
+    val domainSizes = {
+      // TODO: `StringType` only supported now
+      val supported = inputDf.schema.filter(_.dataType == StringType).map(_.name).toSet
+      computeAndGetTableStats(inputView).mapValues(_.distinctCount)
+        .filter(kv => supported.contains(kv._1))
+    }
 
     val fds = constraints.predicates.filter { preds =>
       // Filters predicate candidates that might mean functional deps

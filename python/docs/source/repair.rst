@@ -48,6 +48,7 @@ model to repair them.
     RepairModel.setMinCorrThreshold
     RepairModel.setRepairDelta
     RepairModel.setRowId
+    RepairModel.setRuleBasedModelEnabled
     RepairModel.setSmallDomainThreshold
     RepairModel.setTableName
     RepairModel.setTrainingDataSampleRatio
