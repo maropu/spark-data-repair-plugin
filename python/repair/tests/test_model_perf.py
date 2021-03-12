@@ -93,6 +93,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .collect()[0] \
             .rmse
 
+    @unittest.skip(reason="")
     def test_perf_iris_target_num_1(self):
         test_params = [
             ("sepal_width", 0.3455068740271313),
@@ -108,6 +109,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 logging.info(f"target:iris({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.01)
 
+    @unittest.skip(reason="")
     def test_perf_iris_target_num_2(self):
         test_params = [
             ("sepal_width", "sepal_length", 0.6595452979136459),
@@ -123,6 +125,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 logging.info(f"target:iris({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.01)
 
+    @unittest.skip(reason="")
     def test_perf_boston_target_num_1(self):
         test_params = [
             ("NOX", 0.03053089633885037),
@@ -138,6 +141,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 logging.info(f"target:boston({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.01)
 
+    @unittest.skip(reason="")
     def test_perf_boston_target_num_2(self):
         test_params = [
             ("NOX", "PTRATIO", 0.4691041696958255),
