@@ -25,7 +25,7 @@ from pyspark import SparkConf
 from pyspark.sql import Row
 
 from repair.misc import RepairMisc
-from repair.model import FunctionalDepModel, RepairModel
+from repair.model import FunctionalDepModel, RepairModel, PoorModel
 from repair.detectors import ConstraintErrorDetector, RegExErrorDetector
 from repair.tests.requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
@@ -486,6 +486,29 @@ class RepairModelTests(ReusedSQLTestCase):
         self.assertEqual(pmf[1].tolist(), [1.0, 0.0, 0.0])
         self.assertEqual(pmf[2].tolist(), [0.0, 1.0, 0.0])
         self.assertEqual(pmf[3].tolist(), [0.0, 0.0, 0.0])
+
+    def test_PoorModel(self):
+        model = PoorModel(None)
+        pdf = pd.DataFrame([[3], [1], [2], [4]], columns=["x"])
+        self.assertEqual(model.classes_.tolist(), [None])
+        self.assertEqual(model.predict(pdf), [None, None, None, None])
+        pmf = model.predict_proba(pdf)
+        self.assertEqual(len(pmf), 4)
+        self.assertEqual(pmf[0].tolist(), [1.0])
+        self.assertEqual(pmf[1].tolist(), [1.0])
+        self.assertEqual(pmf[2].tolist(), [1.0])
+        self.assertEqual(pmf[3].tolist(), [1.0])
+
+        model = PoorModel("test")
+        pdf = pd.DataFrame([[3], [1], [2], [4]], columns=["x"])
+        self.assertEqual(model.classes_.tolist(), ["test"])
+        self.assertEqual(model.predict(pdf), ["test", "test", "test", "test"])
+        pmf = model.predict_proba(pdf)
+        self.assertEqual(len(pmf), 4)
+        self.assertEqual(pmf[0].tolist(), [1.0])
+        self.assertEqual(pmf[1].tolist(), [1.0])
+        self.assertEqual(pmf[2].tolist(), [1.0])
+        self.assertEqual(pmf[3].tolist(), [1.0])
 
 
 if __name__ == "__main__":

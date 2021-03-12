@@ -73,6 +73,26 @@ class FunctionalDepModel():
         return pmf
 
 
+class PoorModel():
+    """Model to return the same value regardless of an input value.
+
+    .. versionchanged:: 0.1.0
+    """
+
+    def __init__(self, v: Any) -> None:
+        self.v = v
+
+    @property
+    def classes_(self) -> Any:
+        return np.array([self.v])
+
+    def predict(self, X: pd.DataFrame) -> Any:
+        return [self.v] * len(X)
+
+    def predict_proba(self, X: pd.DataFrame) -> Any:
+        return [np.array([1.0])] * len(X)
+
+
 class RepairModel():
     """
     Interface to detect error cells in given input data and build a statistical
@@ -912,16 +932,6 @@ class RepairModel():
         model_class = lgb.LGBMClassifier if is_discrete \
             else lgb.LGBMRegressor
 
-        # If a task is clasification and #labels if less than 2,
-        # we forcibly disable some optimizations.
-        disable_opts = is_discrete and len(labels) < 2
-        if disable_opts:
-            # TODO: In this case, returns a deterministic model
-            # to return the same value
-            logging.warn(
-                f"Only {len(labels)} labels found, so forcibly disable learning optimizations "
-                "(e.g., hyper param searches) when building a classifier")
-
         params: Dict[str, Any] = {}
         min_loss = float("nan")
 
@@ -934,62 +944,61 @@ class RepairModel():
             p.update(params)
             return model_class(**p)
 
-        if not disable_opts:
-            from hyperopt import hp, tpe, Trials  # type: ignore[import]
-            from hyperopt.early_stop import no_progress_loss  # type: ignore[import]
-            from hyperopt.fmin import fmin  # type: ignore[import]
-            from sklearn.model_selection import (  # type: ignore[import]
-                cross_val_score, KFold, StratifiedKFold
-            )
+        from hyperopt import hp, tpe, Trials  # type: ignore[import]
+        from hyperopt.early_stop import no_progress_loss  # type: ignore[import]
+        from hyperopt.fmin import fmin  # type: ignore[import]
+        from sklearn.model_selection import (  # type: ignore[import]
+            cross_val_score, KFold, StratifiedKFold
+        )
 
-            # Forcibly disable INFO-level logging in the `hyperopt` module
-            logger = logging.getLogger("hyperopt")
-            logger.setLevel(logging.WARN)
+        # Forcibly disable INFO-level logging in the `hyperopt` module
+        logger = logging.getLogger("hyperopt")
+        logger.setLevel(logging.WARN)
 
-            param_space = {
-                "num_leaves": hp.quniform("num_leaves", 2, 100, 1),
-                "subsample": hp.uniform("subsample", 0.5, 1.0),
-                "subsample_freq": hp.quniform("subsample_freq", 1, 20, 1),
-                "colsample_bytree": hp.uniform("colsample_bytree", 0.01, 1.0),
-                "min_child_samples": hp.quniform("min_child_samples", 1, 50, 1),
-                "min_child_weight": hp.loguniform("min_child_weight", -3, 1),
-                "reg_lambda": hp.loguniform("reg_lambda", -2, 3)
+        param_space = {
+            "num_leaves": hp.quniform("num_leaves", 2, 100, 1),
+            "subsample": hp.uniform("subsample", 0.5, 1.0),
+            "subsample_freq": hp.quniform("subsample_freq", 1, 20, 1),
+            "colsample_bytree": hp.uniform("colsample_bytree", 0.01, 1.0),
+            "min_child_samples": hp.quniform("min_child_samples", 1, 50, 1),
+            "min_child_weight": hp.loguniform("min_child_weight", -3, 1),
+            "reg_lambda": hp.loguniform("reg_lambda", -2, 3)
+        }
+
+        scorer = "f1_macro" if is_discrete else "neg_mean_squared_error"
+        cv = StratifiedKFold(n_splits=_n_splits(), shuffle=True) if is_discrete \
+            else KFold(n_splits=_n_splits(), shuffle=True)
+
+        # TODO: Columns where domain size is small are assumed to be categorical
+        categorical_feature = "auto"
+
+        def _objective(params: Dict[str, Any]) -> float:
+            model = _create_model(params)
+            fit_params = {
+                "categorical_feature": categorical_feature,
+                "verbose": 0
             }
+            # TODO: Replace with `lgb.cv` to remove the `sklearn` dependency
+            scores = cross_val_score(
+                model, X, y, scoring=scorer, cv=cv, fit_params=fit_params, n_jobs=-1)
+            return -scores.mean()
 
-            scorer = "f1_macro" if is_discrete else "neg_mean_squared_error"
-            cv = StratifiedKFold(n_splits=_n_splits(), shuffle=True) if is_discrete \
-                else KFold(n_splits=_n_splits(), shuffle=True)
+        trials = Trials()
 
-            # TODO: Columns where domain size is small are assumed to be categorical
-            categorical_feature = "auto"
+        best_params = fmin(
+            fn=_objective,
+            space=param_space,
+            algo=tpe.suggest,
+            trials=trials,
+            max_evals=_max_eval(),
+            early_stop_fn=no_progress_loss(_no_progress_loss()),
+            rstate=np.random.RandomState(42),
+            show_progressbar=False,
+            verbose=False)
 
-            def _objective(params: Dict[str, Any]) -> float:
-                model = _create_model(params)
-                fit_params = {
-                    "categorical_feature": categorical_feature,
-                    "verbose": 0
-                }
-                # TODO: Replace with `lgb.cv` to remove the `sklearn` dependency
-                scores = cross_val_score(
-                    model, X, y, scoring=scorer, cv=cv, fit_params=fit_params, n_jobs=-1)
-                return -scores.mean()
-
-            trials = Trials()
-
-            best_params = fmin(
-                fn=_objective,
-                space=param_space,
-                algo=tpe.suggest,
-                trials=trials,
-                max_evals=_max_eval(),
-                early_stop_fn=no_progress_loss(_no_progress_loss()),
-                rstate=np.random.RandomState(42),
-                show_progressbar=False,
-                verbose=False)
-
-            sorted_lst = sorted(trials.trials, key=lambda x: x['result']['loss'])
-            min_loss = sorted_lst[0]['result']['loss']
-            params = best_params
+        sorted_lst = sorted(trials.trials, key=lambda x: x['result']['loss'])
+        min_loss = sorted_lst[0]['result']['loss']
+        params = best_params
 
         # Builds a model with `best_params`
         model = _create_model(params)
@@ -1004,6 +1013,8 @@ class RepairModel():
         # But, this kind of feature selections in tree-baed models seems meaningless and
         # we now pass the given `features` into `_build_lgb_model` as they are.
         train_pdf = train_df.toPandas()
+
+        assert len(labels) > 1
 
         X, transformers = self._transform_features(
             env, train_pdf[features], features, continous_attrs)
@@ -1123,12 +1134,20 @@ class RepairModel():
 
             metadata = {"model_type": model_type, "y": y, "labels": labels}
 
+            # Skips building a model if #labels <= 1
+            if len(labels) <= 1:
+                logging.info("Skipping {}/{} model because the number of labels is {}".format(
+                    index + 1, len(target_columns), len(labels)))
+                v = labels[0] if len(labels) == 1 else None
+                models[y] = (PoorModel(v), input_columns, None)
+
             # If `y` is functionally-dependent on an attribute of `input_columns`,
             # builds a model based on the rule.
-            if functional_deps is not None and y in functional_deps:
+            if y not in models and functional_deps is not None and y in functional_deps:
                 fx = list(filter(lambda x: x in input_columns, functional_deps[y]))
                 if len(fx) > 0:
-                    model = self._build_rule_model(index, metadata, sampled_train_df, target_columns, fx[0], y)
+                    model = self._build_rule_model(
+                        index, metadata, sampled_train_df, target_columns, fx[0], y)
                     models[y] = (model, [fx[0]], None)
 
             # Otherwise, builds a statistical model by `input_columns`
