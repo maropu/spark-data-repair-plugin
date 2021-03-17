@@ -1334,7 +1334,7 @@ class RepairModel():
     def _run(self, env: Dict[str, str], input_df: DataFrame, continous_attrs: List[str],
              detect_errors_only: bool, compute_training_target_hist: bool,
              compute_repair_candidate_prob: bool, compute_repair_prob: bool,
-             compute_repair_score: bool, repair_data: bool) -> DataFrame:
+             compute_repair_score: bool, repair_data: bool, train_clean_data_only: bool = False) -> DataFrame:
         #################################################################################
         # 1. Error Detection Phase
         #################################################################################
@@ -1383,8 +1383,8 @@ class RepairModel():
                              "but no features found")
 
         partial_repaired_df = self._spark.table(env["partial_repaired"])
-        models, target_columns = self._build_repair_models(
-            env, partial_repaired_df, error_attrs, continous_attrs)
+        train_df = fixed_df if train_clean_data_only else partial_repaired_df
+        models, target_columns = self._build_repair_models(env, train_df, error_attrs, continous_attrs)
 
         #################################################################################
         # 3. Repair Phase
