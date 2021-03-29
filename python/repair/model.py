@@ -1058,8 +1058,9 @@ class RepairModel():
             return None
 
     @_spark_job_group(name="repair model training")
-    def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame, error_attrs: List[Row],
-                             continous_attrs: List[str]) -> Tuple[Dict[str, Any], List[str]]:
+    def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame,
+                             error_attrs: List[Row], continous_attrs: List[str],
+                             train_clean_cols_only: bool = False) -> Tuple[Dict[str, Any], List[str]]:
         # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
         # on Apache Spark. Given a database tuple t = ce (c: correct attribute values,
         # e: error attribute values), the conditional probability of each combination of the
@@ -1123,9 +1124,12 @@ class RepairModel():
         models = {}
         excluded_columns = copy.deepcopy(target_columns)
         for index, y in enumerate(target_columns):
-            # Filters out excluded columns first
-            input_columns = [c for c in sampled_train_df.columns if c not in excluded_columns]  # type: ignore
-            excluded_columns.remove(y)
+            if train_clean_cols_only:
+                # Filters out excluded columns first
+                input_columns = [c for c in sampled_train_df.columns if c not in excluded_columns]  # type: ignore
+                excluded_columns.remove(y)
+            else:
+                input_columns = [c for c in sampled_train_df.columns if c != y]  # type: ignore
 
             is_discrete = y not in continous_attrs
             model_type = "classifier" if is_discrete else "regressor"
@@ -1334,7 +1338,7 @@ class RepairModel():
     def _run(self, env: Dict[str, str], input_df: DataFrame, continous_attrs: List[str],
              detect_errors_only: bool, compute_training_target_hist: bool,
              compute_repair_candidate_prob: bool, compute_repair_prob: bool,
-             compute_repair_score: bool, repair_data: bool, train_clean_data_only: bool = False) -> DataFrame:
+             compute_repair_score: bool, repair_data: bool, train_clean_rows_only: bool = False) -> DataFrame:
         #################################################################################
         # 1. Error Detection Phase
         #################################################################################
@@ -1383,7 +1387,7 @@ class RepairModel():
                              "but no features found")
 
         partial_repaired_df = self._spark.table(env["partial_repaired"])
-        train_df = fixed_df if train_clean_data_only else partial_repaired_df
+        train_df = fixed_df if train_clean_rows_only else partial_repaired_df
         models, target_columns = self._build_repair_models(env, train_df, error_attrs, continous_attrs)
 
         #################################################################################
