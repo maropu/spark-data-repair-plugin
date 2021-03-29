@@ -1060,19 +1060,33 @@ class RepairModel():
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame,
                              error_attrs: List[Row], continous_attrs: List[str],
-                             train_clean_cols_only: bool = False) -> Tuple[Dict[str, Any], List[str]]:
+                             train_clean_cols_only: bool) -> Tuple[Dict[str, Any], List[str]]:
         # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
-        # on Apache Spark. Given a database tuple t = ce (c: correct attribute values,
+        # on Apache Spark. In the paper, given a database tuple t = ce (c: correct attribute values,
         # e: error attribute values), the conditional probability of each combination of the
-        # error attribute values c can be computed the product rule:
+        # error attribute values c can be computed using the product rule:
         #
-        #  P(e\|c)=P(e[E_{1}]\|c)\prod_{i=2}^{K}P(e[E_{i}]\|c,e[E_{1}...E_{i-1}])
+        #  P(e\|c)=P(e[E_{1}]\|c)\prod_{i=2}^{|e|}P(e[E_{i}]\|c, r_{1}, ..., r_{i-1})
+        #      , where r_{j} = if j = 1 then \arg\max_{e[E_{j}]} P(e[E_{j}]\|c)
+        #                      else \arg\max_{e[E_{j}]} P(e[E_{j}]\|c, r_{1}, ..., r_{j-1})
         #
-        # where K is the number of error attributes, `len(error_attrs)`, and {E_[1], ..., E_[K]} is
-        # a particular dependency order in error attributes. More sophisticated repair models
-        # have been proposed recently, e.g., a Markov logic network based model in HoloClean [4].
-        # Therefore, we might be able to improve our model more baesd on
-        # the-state-of-the-art approaches.
+        # {E_{1}, ..., E_{|e|}} is an order to repair error attributes and it is determined by
+        # a dependency graph of attributes. The SCARE repair model splits a database instance
+        # into two parts: a subset D_{c} \subset D of clean (or correct) tuples and
+        # D_{e} = D − D_{c} represents the remaining possibly dirty tuples.
+        # Then, it trains the repair model P(e\|c) by using D_{c} and the model is used
+        # to predict error attribute values in D_{e}.
+        #
+        # In our repair model, two minor improvements below are applied to enhance
+        # precision and training speeds:
+        #
+        # - (1) Use NULL/weak-labeled cells for repair model training
+        # - (2) Use functional dependency if possible
+        #
+        # In our model, we strongly assume error detectors can enumerate all the error cells,
+        # that is, we can assume that non-blank cells are clean. Therefore, if c[x] -> e[y] in P(e[y]\|c)
+        # and c[x] \in c (the value e[y] is determined by the value c[x]), we simply folow
+        # this rule to skip expensive training costs.
         sampled_train_df = self._select_training_rows(train_df) \
             .drop(str(self.row_id)).cache()
         min_training_row_num = train_df.count() * self.min_training_row_ratio
@@ -1338,7 +1352,8 @@ class RepairModel():
     def _run(self, env: Dict[str, str], input_df: DataFrame, continous_attrs: List[str],
              detect_errors_only: bool, compute_training_target_hist: bool,
              compute_repair_candidate_prob: bool, compute_repair_prob: bool,
-             compute_repair_score: bool, repair_data: bool, train_clean_rows_only: bool = False) -> DataFrame:
+             compute_repair_score: bool, repair_data: bool,
+             train_clean_rows_only: bool = False, train_clean_cols_only: bool = False) -> DataFrame:
         #################################################################################
         # 1. Error Detection Phase
         #################################################################################
@@ -1382,13 +1397,14 @@ class RepairModel():
         # TODO: In case of `num_features == 0`, we might be able to select the most accurate and
         # predictable column as a staring feature.
         num_features = len(fixed_df.columns) - len(error_attrs)
-        if num_features == 0:
+        if train_clean_cols_only and num_features == 0:
             raise ValueError("At least one feature is needed to repair error cells, "
                              "but no features found")
 
         partial_repaired_df = self._spark.table(env["partial_repaired"])
         train_df = fixed_df if train_clean_rows_only else partial_repaired_df
-        models, target_columns = self._build_repair_models(env, train_df, error_attrs, continous_attrs)
+        models, target_columns = self._build_repair_models(
+            env, train_df, error_attrs, continous_attrs, train_clean_cols_only)
 
         #################################################################################
         # 3. Repair Phase
