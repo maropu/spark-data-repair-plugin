@@ -39,11 +39,13 @@ logging.basicConfig(
 )
 # spark.sql("SET spark.scavenger.logLevel=TRACE")
 
-# Since 3.0, `spark.sql.crossJoin.enabled` is set to true by default
-spark.sql("SET spark.sql.crossJoin.enabled=true")
+# Sets Spark configs for data repairing
 spark.sql("SET spark.sql.cbo.enabled=true")
 spark.sql("SET spark.sql.statistics.histogram.enabled=true")
 spark.sql("SET spark.sql.statistics.histogram.numBins=254")
+# TODO: The tests fail because the plan structural integrity is broken
+spark.sql("SET spark.sql.optimizer.excludedRules="
+          "org.apache.spark.sql.catalyst.optimizer.PropagateEmptyRelation")
 
 # Tunes # shuffle partitions
 num_tasks_per_core = 1
