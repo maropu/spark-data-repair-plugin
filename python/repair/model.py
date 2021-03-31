@@ -747,17 +747,6 @@ class RepairModel():
         fig.tight_layout()
         fig.show()
 
-    def _select_training_rows(self, train_df: DataFrame) -> DataFrame:
-        # Prepares training data to repair the remaining error cells
-        # TODO: Needs more smart sampling, e.g., down-sampling
-        sampled_train_df = train_df.sample(self.training_data_sample_ratio)
-        logging.info("[Repair Model Training Phase] Sampling {} rows (ratio={}) "
-                     "from {} training rows...".format(
-                         sampled_train_df.count(),
-                         self.training_data_sample_ratio,
-                         train_df.count()))
-        return sampled_train_df
-
     def _error_num_based_order(self, error_attrs: List[Row]) -> List[str]:
         # Sorts target columns by the number of errors
         error_num_map = {}
@@ -1087,15 +1076,15 @@ class RepairModel():
         # that is, we can assume that non-blank cells are clean. Therefore, if c[x] -> e[y] in P(e[y]\|c)
         # and c[x] \in c (the value e[y] is determined by the value c[x]), we simply folow
         # this rule to skip expensive training costs.
-        sampled_train_df = self._select_training_rows(train_df) \
-            .drop(str(self.row_id)).cache()
-        min_training_row_num = train_df.count() * self.min_training_row_ratio
-        if sampled_train_df.count() <= min_training_row_num:
-            raise ValueError("Number of training rows must be greater than {} "
-                             "(the {}%% number of input rows), but {} rows found".format(
-                                 min_training_row_num,
-                                 int(self.min_training_row_ratio * 100),
-                                 sampled_train_df.count()))
+        sampled_train_df = train_df.sample(self.training_data_sample_ratio).drop(str(self.row_id)).cache()
+        if not sampled_train_df.count() > 0:
+            raise ValueError("Number of training rows must be positive")
+
+        logging.info("[Repair Model Training Phase] Sampling {} rows (ratio={}) "
+                     "from {} training rows...".format(
+                         sampled_train_df.count(),
+                         self.training_data_sample_ratio,
+                         train_df.count()))
 
         # Computes a inference order based on dependencies between `error_attrs` and the others
         target_columns = self._compute_inference_order(env, sampled_train_df, error_attrs)
