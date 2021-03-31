@@ -1017,6 +1017,7 @@ class RepairModel():
         sampling_ratio = float(self.max_training_data_num) / training_data_num \
             if training_data_num > self.max_training_data_num else 1.0
 
+        # TODO: Needs more smart sampling, e.g., stratified sampling
         train_pdf = train_df.sample(sampling_ratio).toPandas()
 
         X, transformers = self._transform_features(
