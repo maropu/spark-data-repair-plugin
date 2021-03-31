@@ -1048,6 +1048,7 @@ class RepairModel():
         input_view = self._create_temp_view(train_df)
         ret_as_json = self._repair_api.computeFunctionDepMap(input_view, x, y)
         fd_map = json.loads(ret_as_json)
+        metadata.update({"func_deps": ret_as_json})
         return FunctionalDepModel(x, fd_map)
 
     def _get_functional_deps(self, env: Dict[str, str], train_df: DataFrame) -> Optional[Dict[str, List[str]]]:
