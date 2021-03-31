@@ -127,8 +127,7 @@ class RepairModel():
         self.attr_stat_threshold: float = 0.0
 
         # Parameters for repair model training
-        self.training_data_sample_ratio: float = 1.0
-        self.min_training_row_ratio: float = 0.10
+        self.max_training_data_num: int = 10000
         self.small_domain_threshold: int = 12
         self.rule_based_model_enabled: bool = False
         self.inference_order: str = "entropy"
@@ -364,7 +363,7 @@ class RepairModel():
         return self
 
     @argtype_check  # type: ignore
-    def setAttrMaxNumToComputeDomains(self, max: int) -> "RepairModel":
+    def setAttrMaxNumToComputeDomains(self, n: int) -> "RepairModel":
         """
         Specifies the max number of attributes to compute posterior probabiity
         based on the Naive Bayes assumption.
@@ -373,10 +372,10 @@ class RepairModel():
 
         Parameters
         ----------
-        thres: int
+        n: int
             the max number of attributes (default: 4).
         """
-        self.max_attrs_to_compute_domains = max
+        self.max_attrs_to_compute_domains = n
         return self
 
     @argtype_check  # type: ignore
@@ -408,17 +407,18 @@ class RepairModel():
         return self
 
     @argtype_check  # type: ignore
-    def setTrainingDataSampleRatio(self, ratio: float) -> "RepairModel":
-        """Specifies a sample ratio for table used to build statistical models.
+    def setMaxTrainingDataNum(self, n: int) -> "RepairModel":
+        """
+        Specifies the max number of training data to build statistical models.
 
         .. versionchanged:: 0.1.0
 
         Parameters
         ----------
-        ratio: float
-            sampling ratio (default: 1.0).
+        n: int
+            the max number of training data (default: 10000).
         """
-        self.training_data_sample_ratio = ratio
+        self.max_training_data_num = n
         return self
 
     @argtype_check  # type: ignore
@@ -1001,16 +1001,26 @@ class RepairModel():
         # The previous implementation selected a subset of features among given `features`.
         # But, this kind of feature selections in tree-baed models seems meaningless and
         # we now pass the given `features` into `_build_lgb_model` as they are.
-        train_pdf = train_df.toPandas()
-
         assert len(labels) > 1
+
+        train_df = train_df.where(f"{y} IS NOT NULL")
+        training_data_num = train_df.count()
+        if not training_data_num > 0:
+            raise ValueError("Number of training data must be positive")
+
+        # `max_training_data_num` should be set according to
+        # the performance of pandas and lightgbm.
+        sampling_ratio = float(self.max_training_data_num) / training_data_num \
+            if training_data_num > self.max_training_data_num else 1.0
+
+        train_pdf = train_df.sample(sampling_ratio).toPandas()
 
         X, transformers = self._transform_features(
             env, train_pdf[features], features, continous_attrs)
 
-        logging.info("Building {}/{} model... type={} y={} features={}{}".format(
+        logging.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
             index + 1, len(target_columns),
-            metadata["model_type"], y, ",".join(features),
+            metadata["model_type"], y, ",".join(features), len(train_pdf),
             f" #labels={len(labels)}" if len(labels) > 0 else ""))
         is_discrete = y not in continous_attrs
         (model, params, score), elapsed_time = \
@@ -1076,21 +1086,13 @@ class RepairModel():
         # that is, we can assume that non-blank cells are clean. Therefore, if c[x] -> e[y] in P(e[y]\|c)
         # and c[x] \in c (the value e[y] is determined by the value c[x]), we simply folow
         # this rule to skip expensive training costs.
-        sampled_train_df = train_df.sample(self.training_data_sample_ratio).drop(str(self.row_id)).cache()
-        if not sampled_train_df.count() > 0:
-            raise ValueError("Number of training rows must be positive")
-
-        logging.info("[Repair Model Training Phase] Sampling {} rows (ratio={}) "
-                     "from {} training rows...".format(
-                         sampled_train_df.count(),
-                         self.training_data_sample_ratio,
-                         train_df.count()))
+        train_df = train_df.drop(str(self.row_id)).cache()
 
         # Computes a inference order based on dependencies between `error_attrs` and the others
-        target_columns = self._compute_inference_order(env, sampled_train_df, error_attrs)
+        target_columns = self._compute_inference_order(env, train_df, error_attrs)
 
         # If `self.rule_based_model_enabled` is `True`, try to analyze Functional deps on training data
-        functional_deps = self._get_functional_deps(env, sampled_train_df) \
+        functional_deps = self._get_functional_deps(env, train_df) \
             if self.rule_based_model_enabled else None
         if functional_deps is not None:
             logging.debug(f"Functional deps found: {functional_deps}")
@@ -1115,8 +1117,8 @@ class RepairModel():
                 metadata = {
                     "train_table": train_temp_view,
                     "#rows": train_df.count(),
-                    "sample_ratio": self.training_data_sample_ratio,
-                    "columns": sampled_train_df.columns,
+                    "max_training_data_num": self.max_training_data_num,
+                    "columns": train_df.columns,
                     "inference_order": self.inference_order,
                     "target_columns": target_columns,
                     "pairwise_stats": env["pairwise_attr_stats"],
@@ -1129,14 +1131,14 @@ class RepairModel():
         for index, y in enumerate(target_columns):
             if train_clean_cols_only:
                 # Filters out excluded columns first
-                input_columns = [c for c in sampled_train_df.columns if c not in excluded_columns]  # type: ignore
+                input_columns = [c for c in train_df.columns if c not in excluded_columns]  # type: ignore
                 excluded_columns.remove(y)
             else:
-                input_columns = [c for c in sampled_train_df.columns if c != y]  # type: ignore
+                input_columns = [c for c in train_df.columns if c != y]  # type: ignore
 
             is_discrete = y not in continous_attrs
             model_type = "classifier" if is_discrete else "regressor"
-            labels = sampled_train_df.selectExpr(f"collect_set(`{y}`) labels").collect()[0].labels \
+            labels = train_df.selectExpr(f"collect_set(`{y}`) labels").collect()[0].labels \
                 if is_discrete else []
 
             metadata = {"model_type": model_type, "y": y, "labels": labels}
@@ -1154,15 +1156,14 @@ class RepairModel():
                 fx = list(filter(lambda x: x in input_columns, functional_deps[y]))
                 if len(fx) > 0:
                     model = self._build_rule_model(
-                        index, metadata, sampled_train_df, target_columns, fx[0], y)
+                        index, metadata, train_df, target_columns, fx[0], y)
                     models[y] = (model, [fx[0]], None)
 
             # Otherwise, builds a statistical model by `input_columns`
             if y not in models:
-                df = sampled_train_df.where(f"{y} IS NOT NULL")
-                logging.debug(f"# of samples to use training for {y}: {df.count()}")
                 models[y] = self._build_stat_model(
-                    env, index, metadata, df, target_columns, y, input_columns, continous_attrs, labels)
+                    env, index, metadata, train_df, target_columns, y, input_columns,
+                    continous_attrs, labels)
 
             if self.checkpoint_path is not None:
                 checkpoint_name = f"{self.checkpoint_path}/{index}_{model_type}_{y}"

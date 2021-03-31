@@ -45,13 +45,13 @@ model to repair them.
     RepairModel.setInferenceOrder
     RepairModel.setInput
     RepairModel.setMaximalLikelihoodRepairEnabled
+    RepairModel.setMaxTrainingDataNum
     RepairModel.setMinCorrThreshold
     RepairModel.setRepairDelta
     RepairModel.setRowId
     RepairModel.setRuleBasedModelEnabled
     RepairModel.setSmallDomainThreshold
     RepairModel.setTableName
-    RepairModel.setTrainingDataSampleRatio
     RepairModel.setTargets
     RepairModel.setUpdateCostFunction
 
