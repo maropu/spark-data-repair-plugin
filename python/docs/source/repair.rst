@@ -41,7 +41,7 @@ model to repair them.
     RepairModel.setDiscreteThreshold
     RepairModel.setDomainThresholds
     RepairModel.setErrorCells
-    RepairModel.setErrorDetector
+    RepairModel.setErrorDetectors
     RepairModel.setInferenceOrder
     RepairModel.setInput
     RepairModel.setMaximalLikelihoodRepairEnabled

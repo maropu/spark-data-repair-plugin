@@ -31,13 +31,16 @@ spark.table("adult_clean").show(1)
 spark.table("error_cells_ground_truth").show(1)
 
 # Detects error cells then repairs them
-from repair.detectors import ConstraintErrorDetector
+from repair.detectors import NullErrorDetector, ConstraintErrorDetector
+error_detectors = [
+    ConstraintErrorDetector(constraint_path="./testdata/adult_constraints.txt"),
+    NullErrorDetector()
+]
 repaired_df = scavenger.repair \
     .setDbName("default") \
     .setTableName("adult") \
     .setRowId("tid") \
-    .setErrorDetector(ConstraintErrorDetector(
-        constraint_path="./testdata/adult_constraints.txt")) \
+    .setErrorDetectors(error_detectors) \
     .run()
 
 # Computes performance numbers (precision & recall)

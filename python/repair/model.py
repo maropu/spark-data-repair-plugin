@@ -291,27 +291,30 @@ class RepairModel():
         return self
 
     @argtype_check  # type: ignore
-    def setErrorDetector(self, detector: ErrorDetector) -> "RepairModel":
+    def setErrorDetectors(self, detectors: List[Any]) -> "RepairModel":
         """
-        Specifies the :class:`ErrorDetector` derived class to implement
+        Specifies the list of :class:`ErrorDetector` derived classes to implement
         a logic to detect error cells.
 
         .. versionchanged:: 0.1.0
 
         Parameters
         ----------
-        detector: derived class of :class:`ErrorDetector`
+        detectors: list of :class:`ErrorDetector` derived classes
             specifies how to detect error cells. Available classes are as follows:
 
+            * :class:`NullErrorDetector`: detects error cells based on NULL cells.
             * :class:`RegExErrorDetector`: detects error cells based on a regular expresson.
             * :class:`OutlierErrorDetector`: detects error cells based on the Gaussian distribution.
             * :class:`ConstraintErrorDetector`: detects error cells based on integrity rules
               defined by denial constraints.
         """
-        if not isinstance(detector, ErrorDetector):
-            raise TypeError("`detector` should be provided as repair.detectors.ErrorDetector, "
-                            "got {type(detector)}")
-        self.error_detectors.append(detector)
+        # TODO: Removes this if `argtype_check` can handle this
+        unknown_detectors = list(filter(lambda d: not isinstance(d, ErrorDetector), detectors))
+        if len(unknown_detectors) > 0:
+            raise TypeError("`detectors` should be provided as list[ErrorDetector], "
+                            f"got {type(unknown_detectors[0]).__name__} in elements")
+        self.error_detectors = detectors
         return self
 
     @argtype_check  # type: ignore
@@ -505,9 +508,10 @@ class RepairModel():
         ----------
         cf: derived class of :class:`UpdateCostFunction`.
         """
+        # TODO: Removes this if `argtype_check` can handle this
         if not isinstance(cf, UpdateCostFunction):
-            raise TypeError("`cf` should be provided as repair.costs.UpdateCostFunction, "
-                            "got {type(cf)}")
+            raise TypeError("`cf` should be provided as UpdateCostFunction, "
+                            f"got {type(cf)}")
         self.cf = cf
         return self
 

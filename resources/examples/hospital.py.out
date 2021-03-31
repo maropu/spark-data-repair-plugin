@@ -74,12 +74,16 @@ only showing top 1 row
 
 >>> 
 >>> # Detects error cells then repairs them
+... from repair.detectors import NullErrorDetector, ConstraintErrorDetector
+... error_detectors = [
+...     ConstraintErrorDetector(constraint_path="./testdata/hospital_constraints.txt"),
+...     NullErrorDetector()
+... ]
 ... val repaired_df = scavenger.repair \
 ...   .setDbName("default") \
 ...   .setTableName("hospital") \
 ...   .setRowId("tid") \
-...   .setErrorDetector(ConstraintErrorDetector(
-...       constraint_path="./testdata/hospital_constraints.txt")) \
+...   .setErrorDetectors(error_detectors) \
 ...   .setDiscreteThreshold(100) \
 ...   .setInferenceOrder("entropy") \
 ...   .option("hp.no_progress_loss", "1000") \

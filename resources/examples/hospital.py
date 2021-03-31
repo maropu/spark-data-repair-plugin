@@ -31,13 +31,16 @@ spark.table("hospital_clean").show(1)
 spark.table("error_cells_ground_truth").show(1)
 
 # Detects error cells then repairs them
-from repair.detectors import ConstraintErrorDetector
+from repair.detectors import NullErrorDetector, ConstraintErrorDetector
+error_detectors = [
+    ConstraintErrorDetector(constraint_path="./testdata/hospital_constraints.txt"),
+    NullErrorDetector()
+]
 repaired_df = scavenger.repair \
     .setDbName("default") \
     .setTableName("hospital") \
     .setRowId("tid") \
-    .setErrorDetector(ConstraintErrorDetector(
-        constraint_path="./testdata/hospital_constraints.txt")) \
+    .setErrorDetectors(error_detectors) \
     .setDiscreteThreshold(100) \
     .setInferenceOrder("entropy") \
     .option("hp.no_progress_loss", "1000") \

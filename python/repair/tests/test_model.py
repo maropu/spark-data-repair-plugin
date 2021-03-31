@@ -26,7 +26,7 @@ from pyspark.sql import Row
 
 from repair.misc import RepairMisc
 from repair.model import FunctionalDepModel, RepairModel, PoorModel
-from repair.detectors import ConstraintErrorDetector, RegExErrorDetector
+from repair.detectors import ConstraintErrorDetector, NullErrorDetector, RegExErrorDetector
 from repair.tests.requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
 from repair.tests.testutils import ReusedSQLTestCase, load_testdata
@@ -161,6 +161,14 @@ class RepairModelTests(ReusedSQLTestCase):
             TypeError,
             "`attrs` should be provided as list[str], got int in elements",
             lambda: RepairModel().setTargets(["a", 1]))
+        self.assertRaises(
+            TypeError,
+            "`detectors` should be provided as list[ErrorDetector], got int in elements",
+            lambda: RepairModel().setErrorDetectors([1]))
+        self.assertRaises(
+            TypeError,
+            "`cf` should be provided as UpdateCostFunction, got int",
+            lambda: RepairModel().setUpdateCostFunction([1]))
 
     # TODO: We fix a seed for building a repair model, but inferred values fluctuate run-by-run.
     # So, to avoid it, we set 1 to `hp.max_evals` for now.
@@ -339,11 +347,15 @@ class RepairModelTests(ReusedSQLTestCase):
                 Row(tid="7", attribute="Sex", current_value=None)])
 
         # Tests for `RegExErrorDetector`
+        error_detectors = [
+            NullErrorDetector(),
+            RegExErrorDetector("Exec-managerial"),
+            RegExErrorDetector("India")
+        ]
         regex_errors = self._build_model() \
             .setInput("adult") \
             .setRowId("tid") \
-            .setErrorDetector(RegExErrorDetector("Exec-managerial")) \
-            .setErrorDetector(RegExErrorDetector("India")) \
+            .setErrorDetectors(error_detectors) \
             .run(detect_errors_only=True)
         self.assertEqual(
             regex_errors.subtract(null_errors).orderBy("tid", "attribute").collect(), [
@@ -355,10 +367,14 @@ class RepairModelTests(ReusedSQLTestCase):
 
         # Tests for `ConstraintErrorDetector`
         constraint_path = "{}/adult_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
+        error_detectors = [
+            NullErrorDetector(),
+            ConstraintErrorDetector(constraint_path)
+        ]
         constraint_errors = self._build_model() \
             .setInput("adult") \
             .setRowId("tid") \
-            .setErrorDetector(ConstraintErrorDetector(constraint_path)) \
+            .setErrorDetectors(error_detectors) \
             .run(detect_errors_only=True)
         self.assertEqual(
             constraint_errors.subtract(null_errors).orderBy("tid", "attribute").collect(), [
@@ -398,11 +414,15 @@ class RepairModelTests(ReusedSQLTestCase):
                 f.write("t1&t2&EQ(t1.x,t2.x)&IQ(t1.y,t2.y)")
                 f.flush()
 
+                error_detectors = [
+                    NullErrorDetector(),
+                    ConstraintErrorDetector(f.name)
+                ]
                 test_model = self._build_model() \
                     .setTableName("inputView") \
                     .setRowId("tid") \
                     .setErrorCells("errorCells") \
-                    .setErrorDetector(ConstraintErrorDetector(f.name)) \
+                    .setErrorDetectors(error_detectors) \
                     .setRuleBasedModelEnabled(True)
 
                 self.assertEqual(
