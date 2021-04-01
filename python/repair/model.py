@@ -565,9 +565,12 @@ class RepairModel():
         self._intermediate_views_on_runtime.append(view_name)
         return self._spark.table(view_name)
 
+    def _create_temp_name(self, prefix: str = "temp") -> str:
+        return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
+
     def _create_temp_view(self, df: Any, prefix: str = "temp") -> str:
         assert isinstance(df, DataFrame)
-        temp_name = f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
+        temp_name = self._create_temp_name(prefix)
         df.createOrReplaceTempView(temp_name)
         self._intermediate_views_on_runtime.append(temp_name)
         return temp_name
@@ -1012,8 +1015,8 @@ class RepairModel():
         if not training_data_num > 0:
             raise ValueError("Number of training data must be positive")
 
-        # `max_training_data_num` should be set according to
-        # the performance of pandas and lightgbm.
+        # The value of `max_training_data_num` highly depends on
+        # the performance of pandas and LightGBM.
         sampling_ratio = float(self.max_training_data_num) / training_data_num \
             if training_data_num > self.max_training_data_num else 1.0
 
@@ -1110,7 +1113,7 @@ class RepairModel():
 
         if self.checkpoint_path is not None:
             # Keep a training table so that users can check later
-            train_temp_view = f'train_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
+            train_temp_view = self._create_temp_name("train")
             train_df.createOrReplaceTempView(train_temp_view)
 
             # Path to store models that will be built by the training process
@@ -1202,9 +1205,7 @@ class RepairModel():
 
         # Sets a grouping key for inference
         num_parallelism = self._spark.sparkContext.defaultParallelism
-        # TODO: Fix this
-        # grouping_key = self._temp_name("__grouping_key")
-        grouping_key = "__grouping_key"
+        grouping_key = self._create_temp_name("grouping_key")
         env["dirty"] = self._create_temp_view(dirty_df, "dirty")
         dirty_df = dirty_df.withColumn(
             grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
