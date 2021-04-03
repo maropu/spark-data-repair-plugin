@@ -971,7 +971,8 @@ class RepairModel():
         def _objective(params: Dict[str, Any]) -> float:
             model = _create_model(params)
             fit_params = {
-                "categorical_feature": categorical_feature,
+                # TODO: Raises an error if a single regregressor is used
+                # "categorical_feature": categorical_feature,
                 "verbose": 0
             }
             # TODO: Replace with `lgb.cv` to remove the `sklearn` dependency
@@ -1240,7 +1241,7 @@ class RepairModel():
                     # TODO: Filters out top-k values to reduce the amount of data
                     predicted = model.predict_proba(X)
                     pmf = map(lambda p: {"classes": model.classes_.tolist(), "probs": p.tolist()}, predicted)
-                    pmf = map(lambda p: json.dumps(p), pmf)
+                    pmf = map(lambda p: json.dumps(p), pmf)  # type: ignore
                     pdf[y] = pdf[y].where(pdf[y].notna(), list(pmf))
                 else:
                     predicted = model.predict(X)

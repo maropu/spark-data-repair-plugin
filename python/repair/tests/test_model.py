@@ -393,7 +393,56 @@ class RepairModelTests(ReusedSQLTestCase):
             test_model.run(repair_data=True).orderBy("tid").collect(),
             expected_result)
 
-    def test_setRuleBasedModelEnabled(self):
+    @unittest.skip(reason="TODO: Fix a bug that throws a SQL exception")
+    def test_poor_model(self):
+        with self.tempView("inputView"):
+            rows = [
+                (1, "1", None),
+                (2, "1", None),
+                (3, "1", "test-1"),
+                (4, "1", "test-1"),
+                (5, "1", "test-1"),
+                (6, "1", None)
+            ]
+            self.spark.createDataFrame(rows, ["tid", "x", "y"]) \
+                .createOrReplaceTempView("inputView")
+            test_model = self._build_model() \
+                .setTableName("inputView") \
+                .setRowId("tid")
+
+            self.assertEqual(
+                test_model.run().orderBy("tid", "attribute").collect(), [
+                    Row(tid=1, attribute="y", current_value=None, repaired="test-1"),
+                    Row(tid=2, attribute="y", current_value=None, repaired="test-1"),
+                    Row(tid=6, attribute="y", current_value=None, repaired="test-1")])
+
+    def test_regressor_model(self):
+        with self.tempView("inputView"):
+            rows = [
+                (1, 1.0, 1.0, 1.0),
+                (2, 1.5, 1.5, 1.5),
+                (3, 1.4, 1.4, None),
+                (4, 1.3, 1.3, 1.3),
+                (5, 1.1, 1.1, 1.1),
+                (6, 1.2, 1.2, None)
+            ]
+            self.spark.createDataFrame(rows, ["tid", "x", "y", "z"]) \
+                .createOrReplaceTempView("inputView")
+            test_model = self._build_model() \
+                .setTableName("inputView") \
+                .setRowId("tid")
+
+            df = test_model.run().orderBy("tid", "attribute")
+            self.assertEqual(
+                df.selectExpr("tid", "attribute", "current_value").collect(), [
+                    Row(tid=3, attribute="z", current_value=None),
+                    Row(tid=6, attribute="z", current_value=None)])
+
+            rows = df.selectExpr("repaired").collect()
+            self.assertTrue(rows[0].repaired is not None)
+            self.assertTrue(rows[1].repaired is not None)
+
+    def test_rule_based_model(self):
         with self.tempView("inputView", "errorCells"):
             rows = [
                 (1, "1", "test-1"),
