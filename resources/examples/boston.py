@@ -40,7 +40,6 @@ repaired_df = scavenger.repair \
     .setTableName("boston") \
     .setRowId("tid") \
     .setDiscreteThreshold(30) \
-    .setMaxTrainingColumnNum(14) \
     .setInferenceOrder("entropy") \
     .run()
 

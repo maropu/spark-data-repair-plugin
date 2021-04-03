@@ -1008,7 +1008,9 @@ class RepairModel():
         # The previous implementation selected a subset of features among given `features`.
         # But, this kind of feature selections in tree-baed models seems meaningless and
         # we now pass the given `features` into `_build_lgb_model` as they are.
-        assert len(labels) > 1
+        is_discrete = y not in continous_attrs
+
+        assert not(is_discrete and len(labels) <= 1)
 
         train_df = train_df.where(f"{y} IS NOT NULL")
         training_data_num = train_df.count()
@@ -1030,7 +1032,6 @@ class RepairModel():
             index + 1, len(target_columns),
             metadata["model_type"], y, ",".join(features), len(train_pdf),
             f" #labels={len(labels)}" if len(labels) > 0 else ""))
-        is_discrete = y not in continous_attrs
         (model, params, score), elapsed_time = \
             self._build_lgb_model(X, train_pdf[y], is_discrete, labels)
         logging.info("[{}/{}] score={} elapsed={}s".format(
@@ -1153,7 +1154,7 @@ class RepairModel():
             metadata = {"model_type": model_type, "y": y, "labels": labels}
 
             # Skips building a model if #labels <= 1
-            if len(labels) <= 1:
+            if is_discrete and len(labels) <= 1:
                 logging.info("Skipping {}/{} model because the number of labels is {}".format(
                     index + 1, len(target_columns), len(labels)))
                 v = labels[0] if len(labels) == 1 else None
@@ -1219,40 +1220,31 @@ class RepairModel():
             compute_repair_candidate_prob = broadcasted_compute_repair_candidate_prob.value
             maximal_likelihood_repair_enabled = \
                 broadcasted_maximal_likelihood_repair_enabled.value
-            rows: List[Row] = []
-            for index, row in pdf.iterrows():
-                for y in target_columns:
-                    (model, features, transformers) = models[y]
 
-                    # Preprocesses the input row for prediction
-                    X = pd.DataFrame(row[features]).T
-                    for c in [f for f in features if f in continous_attrs]:
-                        X[c] = X[c].astype("float64")
+            for y in target_columns:
+                (model, features, transformers) = models[y]
 
-                    # Transforms an input row to a feature
-                    if transformers:
-                        for transformer in transformers:
-                            X = transformer.transform(X)
+                # Preprocesses the input row for prediction
+                X = pdf[features]
 
-                    if y in continous_attrs:
-                        if np.isnan(row[y]):
-                            predicted = model.predict(X)
-                            row[y] = float(predicted[0])
-                    else:
-                        if row[y] is None:
-                            if compute_repair_candidate_prob or maximal_likelihood_repair_enabled:
-                                # TODO: Filters out top-k values to reduce the amount of data
-                                predicted = model.predict_proba(X)
-                                pmf = {"classes": model.classes_.tolist(),
-                                       "probs": predicted[0].tolist()}
-                                row[y] = json.dumps(pmf)
-                            else:
-                                predicted = model.predict(X)
-                                row[y] = predicted[0]
+                # Transforms an input row to a feature
+                if transformers:
+                    for transformer in transformers:
+                        X = transformer.transform(X)
 
-                rows.append(row)
+                need_to_compute_pmf = y not in continous_attrs and \
+                    (compute_repair_candidate_prob or maximal_likelihood_repair_enabled)
+                if need_to_compute_pmf:
+                    # TODO: Filters out top-k values to reduce the amount of data
+                    predicted = model.predict_proba(X)
+                    pmf = map(lambda p: {"classes": model.classes_.tolist(), "probs": p.tolist()}, predicted)
+                    pmf = map(lambda p: json.dumps(p), pmf)
+                    pdf[y] = pdf[y].where(pdf[y].notna(), list(pmf))
+                else:
+                    predicted = model.predict(X)
+                    pdf[y] = pdf[y].where(pdf[y].notna(), predicted)
 
-            return pd.DataFrame(rows)
+            return pdf
 
         # Predicts the remaining error cells based on the trained models.
         # TODO: Might need to compare repair costs (cost of an update, c) to
