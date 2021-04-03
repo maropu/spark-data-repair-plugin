@@ -992,6 +992,8 @@ class RepairModel():
             show_progressbar=False,
             verbose=False)
 
+        logging.info("hyperopt: #eval={}/{}".format(len(trials.trials), _max_eval()))
+
         sorted_lst = sorted(trials.trials, key=lambda x: x['result']['loss'])
         min_loss = sorted_lst[0]['result']['loss']
         params = best_params
