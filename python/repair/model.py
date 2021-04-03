@@ -127,7 +127,8 @@ class RepairModel():
         self.attr_stat_threshold: float = 0.0
 
         # Parameters for repair model training
-        self.max_training_data_num: int = 10000
+        self.max_training_row_num: int = 10000
+        self.max_training_column_num: Optional[int] = None
         self.small_domain_threshold: int = 12
         self.rule_based_model_enabled: bool = False
         self.inference_order: str = "entropy"
@@ -410,9 +411,9 @@ class RepairModel():
         return self
 
     @argtype_check  # type: ignore
-    def setMaxTrainingDataNum(self, n: int) -> "RepairModel":
+    def setMaxTrainingRowNum(self, n: int) -> "RepairModel":
         """
-        Specifies the max number of training data to build statistical models.
+        Specifies the max number of training rows to build statistical models.
 
         .. versionchanged:: 0.1.0
 
@@ -421,7 +422,22 @@ class RepairModel():
         n: int
             the max number of training data (default: 10000).
         """
-        self.max_training_data_num = n
+        self.max_training_row_num = n
+        return self
+
+    @argtype_check  # type: ignore
+    def setMaxTrainingColumnNum(self, n: int) -> "RepairModel":
+        """
+        Specifies the max number of training columns to build statistical models.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        n: int
+            the max number of columns (default: None).
+        """
+        self.max_training_column_num = n
         return self
 
     @argtype_check  # type: ignore
@@ -831,6 +847,24 @@ class RepairModel():
         assert self.inference_order == "entropy"
         return self._entropy_based_order(env, train_df, error_attrs)
 
+    # Selects relevant features if necessary. To reduce model training time,
+    # it is important to drop non-relevant in advance.
+    def _select_features(self, env: Dict[str, str], y: str, features: List[str]) -> List[str]:
+        if self.max_training_column_num is not None and \
+                int(self.max_training_column_num) < len(features):
+            heap: List[Tuple[float, str]] = []
+            for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][y]):  # type: ignore
+                if f in features:
+                    # Converts to a negative value for extracting higher values
+                    heapq.heappush(heap, (-float(corr), f))
+
+            fts = [heapq.heappop(heap)[1] for i in range(int(self.max_training_column_num))]
+            logging.debug("Select {} relevant features ({}) from available ones ({})".format(
+                len(fts), ",".join(fts), ",".join(features)))
+            features = fts
+
+        return features
+
     def _transform_features(self, env: Dict[str, str], X: pd.DataFrame, features: List[str],
                             continous_attrs: List[str]) -> Tuple[pd.DataFrame, Any]:
         # Transforms discrete attributes with some categorical encoders if necessary
@@ -1006,11 +1040,8 @@ class RepairModel():
         return model, params, -min_loss
 
     def _build_stat_model(self, env: Dict[str, str], index: int, metadata: Dict[str, Any],
-                          train_df: DataFrame, target_columns: List[str], y: str, features: List[str],
+                          train_df: DataFrame, target_columns: List[str], y: str, input_columns: List[str],
                           continous_attrs: List[str], labels: List[str]) -> Any:
-        # The previous implementation selected a subset of features among given `features`.
-        # But, this kind of feature selections in tree-baed models seems meaningless and
-        # we now pass the given `features` into `_build_lgb_model` as they are.
         is_discrete = y not in continous_attrs
 
         assert not(is_discrete and len(labels) <= 1)
@@ -1020,14 +1051,16 @@ class RepairModel():
         if not training_data_num > 0:
             raise ValueError("Number of training data must be positive")
 
-        # The value of `max_training_data_num` highly depends on
+        # The value of `max_training_row_num` highly depends on
         # the performance of pandas and LightGBM.
-        sampling_ratio = float(self.max_training_data_num) / training_data_num \
-            if training_data_num > self.max_training_data_num else 1.0
+        sampling_ratio = float(self.max_training_row_num) / training_data_num \
+            if training_data_num > self.max_training_row_num else 1.0
 
         # TODO: Needs more smart sampling, e.g., stratified sampling
         train_pdf = train_df.sample(sampling_ratio).toPandas()
 
+        # Selects features among input columns if necessary
+        features = self._select_features(env, y, input_columns)
         X, transformers = self._transform_features(
             env, train_pdf[features], features, continous_attrs)
 
@@ -1130,7 +1163,7 @@ class RepairModel():
                 metadata = {
                     "train_table": train_temp_view,
                     "#rows": train_df.count(),
-                    "max_training_data_num": self.max_training_data_num,
+                    "max_training_row_num": self.max_training_row_num,
                     "columns": train_df.columns,
                     "inference_order": self.inference_order,
                     "target_columns": target_columns,

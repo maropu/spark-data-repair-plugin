@@ -223,7 +223,8 @@ scavenger.repair
   .setAttrStatThreshold(float)                 // threshold for filtering out low frequency (default: 0.0)
 
   // Parameters for Repair Model Training
-  .setMaxTrainingDataNum(int)                  // max number of training data to build statistical models (default: 10000)
+  .setMaxTrainingRowNum(int)                   // max number of training rows to build statistical models (default: 10000)
+  .setMaxTrainingColumnNum(int)                // max number of training columns to build statistical models (default: None)
   .setSmallDomainThreshold(int)                // max domain size for low-cardinality catogory encoding (default: 12)
   .setInferenceOrder(str)                      // how to order target columns to build models (default: 'entropy')
 
