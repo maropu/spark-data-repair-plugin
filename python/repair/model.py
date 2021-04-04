@@ -732,9 +732,10 @@ class RepairModel():
             "partial_repaired")
 
         logging.info('[Error Detection Phase] {} suspicious cells fixed and '
-                     '{} error cells remaining...'.format(
+                     '{} error cells ({}%) remaining...'.format(
                          self._spark.table(env["weak"]).count(),
-                         error_cells_df.count()))
+                         error_cells_df.count(),
+                         error_cells_df.count() * 100.0 / (int(env["num_attrs"]) * int(env["num_input_rows"]))))
 
         return error_cells_df
 
@@ -858,10 +859,10 @@ class RepairModel():
                     # Converts to a negative value for extracting higher values
                     heapq.heappush(heap, (-float(corr), f))
 
-            fts = [heapq.heappop(heap)[1] for i in range(int(self.max_training_column_num))]
-            logging.debug("Select {} relevant features ({}) from available ones ({})".format(
-                len(fts), ",".join(fts), ",".join(features)))
-            features = fts
+            fts = [heapq.heappop(heap) for i in range(int(self.max_training_column_num))]
+            logging.info("{} features ({}) selected from {} available ones".format(
+                len(fts), ",".join(map(lambda f: f"{f[1]}:{-f[0]}", fts)), len(features)))
+            features = list(map(lambda f: f[1], fts))
 
         return features
 
