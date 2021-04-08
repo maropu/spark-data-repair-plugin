@@ -631,15 +631,15 @@ class RepairModel():
         if self.error_cells is not None:
             # TODO: Even in this case, we need to use a NULL detector because
             # `_build_stat_model` will fail if `y` has NULL.
-            gray_cells_view = self._error_cells
-            logging.info(f'[Error Detection Phase] Error cells provided by `{gray_cells_view}`')
+            noisy_cells_view = self._error_cells
+            logging.info(f'[Error Detection Phase] Error cells provided by `{noisy_cells_view}`')
 
             # We assume that the given error cells are true, so we skip computing error domains
             # with probability because the computational cost is much high.
             self.domain_threshold_beta = 1.0
         else:
-            # Applys error detectors to get gray cells
-            gray_cells_view = self._detect_error_cells(env["input_table"])
+            # Applys error detectors to get noisy cells
+            noisy_cells_view = self._detect_error_cells(env["input_table"])
             logging.info(f'[Error Detection Phase] Detecting errors '
                          f'in a table `{env["input_table"]}` '
                          f'({env["num_attrs"]} cols x {env["num_input_rows"]} rows)...')
@@ -648,19 +648,19 @@ class RepairModel():
         if len(self.targets) > 0:
             in_list = ",".join(map(lambda x: f"'{x}'", self.targets))
             df = self._spark.sql("SELECT * FROM {} WHERE attribute IN ({})".format(
-                gray_cells_view, in_list))
-            env["gray_cells"] = self._create_temp_view(df, "gray_cells")
+                noisy_cells_view, in_list))
+            env["noisy_cells"] = self._create_temp_view(df, "noisy_cells")
         else:
-            env["gray_cells"] = gray_cells_view
+            env["noisy_cells"] = noisy_cells_view
 
-        return self._spark.table(env["gray_cells"])
+        return self._spark.table(env["noisy_cells"])
 
-    def _prepare_repair_base(self, env: Dict[str, str], gray_cells_df: DataFrame) -> DataFrame:
-        # Sets NULL at the detected gray cells
-        logging.debug("{}/{} suspicious cells found, then converts them into NULL cells...".format(
-            gray_cells_df.count(), int(env["num_input_rows"]) * int(env["num_attrs"])))
+    def _prepare_repair_base(self, env: Dict[str, str], noisy_cells_df: DataFrame) -> DataFrame:
+        # Sets NULL at the detected noisy cells
+        logging.debug("{}/{} noisy cells found, then converts them into NULL cells...".format(
+            noisy_cells_df.count(), int(env["num_input_rows"]) * int(env["num_attrs"])))
         env.update(json.loads(self._repair_api.convertErrorCellsToNull(
-            env["input_table"], env["gray_cells"],
+            env["input_table"], env["noisy_cells"],
             str(self.row_id))))
 
         return self._register_and_get_df(env["repair_base"])
@@ -685,14 +685,14 @@ class RepairModel():
 
     def _compute_attr_stats(self, env: Dict[str, str]) -> str:
         ret = json.loads(self._repair_api.computeAttrStats(
-            env["discrete_features"], env["gray_cells"], str(self.row_id),
+            env["discrete_features"], env["noisy_cells"], str(self.row_id),
             self.attr_stat_sample_ratio,
             self.attr_stat_threshold))
         self._intermediate_views_on_runtime.append(ret["attr_stats"])
         return ret["attr_stats"]
 
     @_spark_job_group(name="cell domain analysis")
-    def _analyze_error_cell_domain(self, env: Dict[str, str], gray_cells_df: DataFrame,
+    def _analyze_error_cell_domain(self, env: Dict[str, str], noisy_cells_df: DataFrame,
                                    continous_attrs: List[str]) -> DataFrame:
         # Checks if attributes are discrete or not, and discretizes continous ones
         discrete_ft_df = self._preprocess(env, continous_attrs)
@@ -708,7 +708,7 @@ class RepairModel():
 
         logging.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
         env.update(json.loads(self._repair_api.computeDomainInErrorCells(
-            env["discrete_features"], attr_stats, env["gray_cells"], str(self.row_id),
+            env["discrete_features"], attr_stats, env["noisy_cells"], str(self.row_id),
             env["continous_attrs"],
             self.max_attrs_to_compute_domains,
             self.min_corr_thres,
@@ -731,7 +731,7 @@ class RepairModel():
             self._repair_attrs(env["weak"], env["repair_base"]),
             "partial_repaired")
 
-        logging.info('[Error Detection Phase] {} suspicious cells fixed and '
+        logging.info('[Error Detection Phase] {} noisy cells fixed and '
                      '{} error cells ({}%) remaining...'.format(
                          self._spark.table(env["weak"]).count(),
                          error_cells_df.count(),
@@ -1430,16 +1430,16 @@ class RepairModel():
         #################################################################################
 
         # If no error found, we don't need to do nothing
-        gray_cells_df = self._detect_errors(env)
-        if gray_cells_df.count() == 0:  # type: ignore
+        noisy_cells_df = self._detect_errors(env)
+        if noisy_cells_df.count() == 0:  # type: ignore
             logging.info("Any error cells not found, so the input data is already clean")
-            return gray_cells_df if not repair_data else input_df
+            return noisy_cells_df if not repair_data else input_df
 
-        # Sets NULL to suspicious cells
-        repair_base_df = self._prepare_repair_base(env, gray_cells_df)
+        # Sets NULL to noisy cells
+        repair_base_df = self._prepare_repair_base(env, noisy_cells_df)
 
         # Selects error cells based on the result of domain analysis
-        cell_domain_df = self._analyze_error_cell_domain(env, gray_cells_df, continous_attrs)
+        cell_domain_df = self._analyze_error_cell_domain(env, noisy_cells_df, continous_attrs)
 
         # If `detect_errors_only` is True, returns found error cells
         error_cells_df = self._extract_error_cells(env, cell_domain_df, repair_base_df)
