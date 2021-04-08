@@ -554,7 +554,7 @@ class RepairModel():
                              "`attribute` in columns")
         return self._create_temp_view(df, "error_cells")
 
-    def _get_option(self, key: str, default_value: Optional[str]) -> str:
+    def _get_option(self, key: str, default_value: Optional[str]) -> Any:
         return self.opts[str(key)] if str(key) in self.opts else default_value
 
     def _clear_job_group(self) -> None:
@@ -942,11 +942,11 @@ class RepairModel():
             opt_value = self._get_option("hp.parallel", None)
             return True if opt_value is not None else False
 
-        def _parallelism() -> int:
+        def _parallelism() -> Optional[int]:
             opt_value = self._get_option("hp.parallelism", None)
             return int(opt_value) if opt_value is not None else None
 
-        def _timeout() -> int:
+        def _timeout() -> Optional[int]:
             opt_value = self._get_option("hp.timeout", None)
             return int(opt_value) if opt_value is not None else None
 
@@ -1034,8 +1034,26 @@ class RepairModel():
                 model, X, y, scoring=scorer, cv=cv, fit_params=fit_params, n_jobs=-1)
             return -scores.mean()
 
+        def _early_stop_fn() -> Any:
+            # SparkTrials does not support early stopping func
+            if _parallel():
+                return None
+
+            no_progress_loss_fn = no_progress_loss(_no_progress_loss())
+            if _timeout() is None:
+                return no_progress_loss_fn
+
+            # Set base time for budget mechanism
+            start_time = time.time()
+
+            def timeout_fn(trials, best_loss=None, iteration_no_progress=0):  # type: ignore
+                no_progress_loss, meta = no_progress_loss_fn(trials, best_loss, iteration_no_progress)
+                timeout = time.time() - start_time > _timeout()
+                return no_progress_loss or timeout, meta
+
+            return timeout_fn
+
         trials = Trials()
-        early_stop_fn = no_progress_loss(_no_progress_loss())
 
         # If `hp.parallel=1`, scaling out hyperopt with Spark
         if _parallel():
@@ -1044,16 +1062,13 @@ class RepairModel():
                 timeout=_timeout(),
                 spark_session=self._spark.newSession())
 
-            # SparkTrials does not support early stopping func
-            early_stop_fn = None
-
         best_params = fmin(
             fn=_objective,
             space=param_space,
             algo=tpe.suggest,
             trials=trials,
             max_evals=_max_eval(),
-            early_stop_fn=early_stop_fn,
+            early_stop_fn=_early_stop_fn(),
             rstate=np.random.RandomState(42),
             show_progressbar=False,
             verbose=False)
