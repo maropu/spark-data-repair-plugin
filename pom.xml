@@ -27,7 +27,7 @@
 
   <groupId>io.github.maropu</groupId>
   <artifactId>spark-data-repair-plugin_2.12</artifactId>
-  <version>0.1.0-spark3.1-EXPERIMENTAL</version>
+  <version>0.1.0-spark3.0-EXPERIMENTAL</version>
   <packaging>jar</packaging>
   <name>A toolkit to provide data repair functinalities in Spark</name>
 
@@ -42,12 +42,13 @@
     <maven.version>3.6.3</maven.version>
     <scala.version>2.12.10</scala.version>
     <scala.binary.version>2.12</scala.binary.version>
-    <spark.version>3.1.1</spark.version>
-    <spark.binary.version>3.1</spark.binary.version>
+    <spark.version>3.0.2</spark.version>
+    <spark.binary.version>3.0</spark.binary.version>
     <sqlite-jdbc.version>3.28.0</sqlite-jdbc.version>
     <postgresql-jdbc.version>42.2.8</postgresql-jdbc.version>
     <schemaspy.version>6.1.0</schemaspy.version>
-    <scalatest.version>3.2.3</scalatest.version>
+    <scalatest.version>3.0.8</scalatest.version>
+    <!-- <scalatest.version>3.2.3</scalatest.version> -->
 
     <test.java.home>${java.home}</test.java.home>
     <test.exclude.tags></test.exclude.tags>

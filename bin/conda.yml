@@ -5,8 +5,11 @@ channels:
   - defaults
 dependencies:
   - python=3.6.8
-  - pyspark=3.1.1
-  - pyarrow=1.0.0
+  - pyspark=3.0.2
+  - pyarrow=0.17.1
+# TODO: hyperopt v0.2.5 does not support v3.1.X
+# - pyspark=3.1.1
+# - pyarrow=1.0.0
   - pandas=0.25.3
   - lightgbm=2.3.1
   - scikit-learn=0.23.2

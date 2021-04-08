@@ -554,7 +554,7 @@ class RepairModel():
                              "`attribute` in columns")
         return self._create_temp_view(df, "error_cells")
 
-    def _get_option(self, key: str, default_value: str) -> str:
+    def _get_option(self, key: str, default_value: Optional[str]) -> str:
         return self.opts[str(key)] if str(key) in self.opts else default_value
 
     def _clear_job_group(self) -> None:
@@ -938,6 +938,18 @@ class RepairModel():
         def _n_splits() -> int:
             return int(self._get_option("cv.n_splits", "3"))
 
+        def _parallel() -> bool:
+            opt_value = self._get_option("hp.parallel", None)
+            return True if opt_value is not None else False
+
+        def _parallelism() -> int:
+            opt_value = self._get_option("hp.parallelism", None)
+            return int(opt_value) if opt_value is not None else None
+
+        def _timeout() -> int:
+            opt_value = self._get_option("hp.timeout", None)
+            return int(opt_value) if opt_value is not None else None
+
         def _max_eval() -> int:
             return int(self._get_option("hp.max_evals", "100000000"))
 
@@ -982,7 +994,7 @@ class RepairModel():
             p.update(params)
             return model_class(**p)
 
-        from hyperopt import hp, tpe, Trials  # type: ignore[import]
+        from hyperopt import hp, tpe, SparkTrials, Trials  # type: ignore[import]
         from hyperopt.early_stop import no_progress_loss  # type: ignore[import]
         from hyperopt.fmin import fmin  # type: ignore[import]
         from sklearn.model_selection import (  # type: ignore[import]
@@ -1023,6 +1035,17 @@ class RepairModel():
             return -scores.mean()
 
         trials = Trials()
+        early_stop_fn = no_progress_loss(_no_progress_loss())
+
+        # If `hp.parallel=1`, scaling out hyperopt with Spark
+        if _parallel():
+            trials = SparkTrials(
+                parallelism=_parallelism(),
+                timeout=_timeout(),
+                spark_session=self._spark.newSession())
+
+            # SparkTrials does not support early stopping func
+            early_stop_fn = None
 
         best_params = fmin(
             fn=_objective,
@@ -1030,7 +1053,7 @@ class RepairModel():
             algo=tpe.suggest,
             trials=trials,
             max_evals=_max_eval(),
-            early_stop_fn=no_progress_loss(_no_progress_loss()),
+            early_stop_fn=early_stop_fn,
             rstate=np.random.RandomState(42),
             show_progressbar=False,
             verbose=False)
