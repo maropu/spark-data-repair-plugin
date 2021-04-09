@@ -17,6 +17,7 @@ jobs:
         java: [1.8]
         python: [3.6, 3.7, 3.8]
     env:
+      SPARK_LOCAL_IP: localhost
       CONDA_DISABLED: 1
     steps:
       - name: Checkout Scavenger repository
