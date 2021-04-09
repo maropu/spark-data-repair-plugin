@@ -303,10 +303,10 @@ class RepairModelTests(ReusedSQLTestCase):
 
             files = glob.glob(f"{checkpoint_path}/*")
             expected_files = [
-                "0_classifier_Income.json",
-                "0_classifier_Income.pkl",
-                "1_classifier_Sex.json",
-                "1_classifier_Sex.pkl",
+                "0_classifier_Sex.json",
+                "0_classifier_Sex.pkl",
+                "1_classifier_Income.json",
+                "1_classifier_Income.pkl",
                 "2_classifier_Age.json",
                 "2_classifier_Age.pkl",
                 "metadata.json"
