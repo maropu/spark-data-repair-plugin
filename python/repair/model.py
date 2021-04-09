@@ -993,6 +993,7 @@ class RepairModel():
 
         return model, params, -min_loss
 
+    # TODO: Distribute a task to build stat models in Spark
     def _build_stat_model(self, env: Dict[str, str], index: int, metadata: Dict[str, Any],
                           train_df: DataFrame, target_columns: List[str], y: str, input_columns: List[str],
                           continous_attrs: List[str], labels: List[str]) -> Any:
