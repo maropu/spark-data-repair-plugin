@@ -83,7 +83,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         return RepairModel() \
             .setInput(input) \
             .setRowId("tid") \
-            .setInferenceOrder("entropy") \
             .option("hp.no_progress_loss", "150")
 
     def _compute_rmse(self, repaired_df, expected):

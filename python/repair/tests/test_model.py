@@ -95,16 +95,6 @@ class RepairModelTests(ReusedSQLTestCase):
             .setMaximalLikelihoodRepairEnabled(True).run())
         self.assertRaisesRegexp(
             ValueError,
-            "Inference order must be `error`, `domain`, or `entropy`",
-            lambda: RepairModel().setTableName("dummyTab").setRowId("dummyId")
-            .setInferenceOrder("invalid").run())
-        self.assertRaisesRegexp(
-            ValueError,
-            "Inference order must be `error`, `domain`, or `entropy`",
-            lambda: RepairModel().setInput("dummyTab").setRowId("dummyId")
-            .setInferenceOrder("invalid").run())
-        self.assertRaisesRegexp(
-            ValueError,
             "`attrs` has at least one attribute",
             lambda: RepairModel().setTargets([]))
 

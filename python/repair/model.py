@@ -30,7 +30,7 @@ import pandas as pd  # type: ignore[import]
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from pyspark.sql import DataFrame, Row, SparkSession, functions  # type: ignore[import]
+from pyspark.sql import DataFrame, SparkSession, functions  # type: ignore[import]
 from pyspark.sql.functions import col, expr  # type: ignore[import]
 
 from repair.costs import UpdateCostFunction, NoCost
@@ -131,7 +131,6 @@ class RepairModel():
         self.max_training_column_num: Optional[int] = None
         self.small_domain_threshold: int = 12
         self.rule_based_model_enabled: bool = False
-        self.inference_order: str = "entropy"
 
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
@@ -469,20 +468,6 @@ class RepairModel():
         return self
 
     @argtype_check  # type: ignore
-    def setInferenceOrder(self, inference_order: str) -> "RepairModel":
-        """Specifies how to order target columns when building models.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        inference_order: str
-            built-in logic name (default: 'entropy').
-        """
-        self.inference_order = inference_order
-        return self
-
-    @argtype_check  # type: ignore
     def setMaximalLikelihoodRepairEnabled(self, enabled: bool) -> "RepairModel":
         """Specifies whether to enable maximal likelihood repair.
 
@@ -740,7 +725,7 @@ class RepairModel():
         return error_cells_df
 
     def _split_clean_and_dirty_rows(
-            self, env: Dict, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame, List[Row]]:
+            self, env: Dict, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame, List[str]]:
         error_rows_df = error_cells_df.selectExpr(str(self.row_id)).distinct().cache()
         fixed_df = self._spark.table(env["partial_repaired"]) \
             .join(error_rows_df, str(self.row_id), "left_anti").cache()
@@ -749,7 +734,7 @@ class RepairModel():
         error_attrs = error_cells_df.groupBy("attribute") \
             .agg(functions.count("attribute").alias("cnt")).collect()
         assert len(error_attrs) > 0
-        return fixed_df, dirty_df, error_attrs
+        return fixed_df, dirty_df, list(map(lambda x: x.attribute, error_attrs))
 
     def _convert_to_histogram(self, df: DataFrame) -> DataFrame:
         input_table = self._create_temp_view(df)
@@ -770,83 +755,6 @@ class RepairModel():
 
         fig.tight_layout()
         fig.show()
-
-    def _error_num_based_order(self, error_attrs: List[Row]) -> List[str]:
-        # Sorts target columns by the number of errors
-        error_num_map = {}
-        for row in error_attrs:
-            error_num_map[row.attribute] = row.cnt
-
-        target_columns = list(map(lambda row: row.attribute,
-                              sorted(error_attrs, key=lambda row: row.cnt, reverse=False)))
-        for y in target_columns:
-            logging.debug(f"{y}: #errors={error_num_map[y]}")
-
-        return target_columns
-
-    @_spark_job_group(name="training data stat analysis")
-    def _domain_size_based_order(self, env: Dict[str, str], train_df: DataFrame,
-                                 error_attrs: List[Row]) -> List[str]:
-        # Computes domain sizes for training data
-        logging.info("[Repair Model Training Phase] Collecting training data stats before "
-                     "building repair models...")
-        env["train"] = self._create_temp_view(train_df, "train")
-        env.update(json.loads(self._repair_api.computeDomainSizes(env["train"])))
-
-        # Sorts target columns by domain size
-        target_columns = list(map(lambda row: row.attribute,
-                              sorted(error_attrs,
-                                     key=lambda row: int(env["distinct_stats"][row.attribute]),
-                                     reverse=False)))
-        for y in target_columns:
-            logging.debug(f'{y}: |domain|={env["distinct_stats"][y]}')
-
-        return target_columns
-
-    def _entropy_based_order(self, env: Dict[str, str], train_df: DataFrame,
-                             error_attrs: List[Row]) -> List[str]:
-        # Sorts target columns by correlations
-        target_columns: List[str] = []
-        error_attr_names = list(map(lambda row: row.attribute, error_attrs))
-
-        for index in range(len(error_attr_names)):
-            features = [c for c in train_df.columns if c not in error_attr_names]
-            targets: List[Tuple[float, str]] = []
-            for c in error_attr_names:
-                total_corr = 0.0
-                for f, corr in map(lambda x: tuple(x), env["pairwise_attr_stats"][c]):
-                    if f in features:
-                        total_corr += float(corr)
-
-                heapq.heappush(targets, (-total_corr, c))
-
-            t = heapq.heappop(targets)
-            target_columns.append(t[1])
-            logging.debug("corr={}, y({})<=X({})".format(-t[0], t[1], ",".join(features)))
-            error_attr_names.remove(t[1])
-
-        return target_columns
-
-    def _compute_inference_order(self, env: Dict[str, str], train_df: DataFrame,
-                                 error_attrs: List[Row]) -> List[str]:
-        # Defines a inference order based on `train_df`.
-        #
-        # TODO: Needs to analyze more dependencies (e.g., based on graph algorithms) between
-        # target columns and the other ones for decideing a inference order.
-        # For example, the SCARE paper [2] builds a dependency graph (a variant of graphical models)
-        # to analyze the correlatioin of input data. But, the analysis is compute-intensive, so
-        # we just use a naive approache to define the order now.
-        #
-        # TODO: Implements an `auto` strategy; it computes cost values by considering the three
-        # existing strategies together and decides the inference order of attributes
-        # based on the values.
-        if self.inference_order == "domain":
-            return self._domain_size_based_order(env, train_df, error_attrs)
-        elif self.inference_order == "error":
-            return self._error_num_based_order(error_attrs)
-
-        assert self.inference_order == "entropy"
-        return self._entropy_based_order(env, train_df, error_attrs)
 
     # Selects relevant features if necessary. To reduce model training time,
     # it is important to drop non-relevant in advance.
@@ -1150,8 +1058,8 @@ class RepairModel():
 
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame,
-                             error_attrs: List[Row], continous_attrs: List[str],
-                             train_clean_cols_only: bool) -> Tuple[Dict[str, Any], List[str]]:
+                             target_columns: List[str], continous_attrs: List[str],
+                             train_clean_cols_only: bool) -> Dict[str, Any]:
         # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
         # on Apache Spark. In the paper, given a database tuple t = ce (c: correct attribute values,
         # e: error attribute values), the conditional probability of each combination of the
@@ -1180,9 +1088,6 @@ class RepairModel():
         # this rule to skip expensive training costs.
         train_df = train_df.drop(str(self.row_id)).cache()
 
-        # Computes a inference order based on dependencies between `error_attrs` and the others
-        target_columns = self._compute_inference_order(env, train_df, error_attrs)
-
         # If `self.rule_based_model_enabled` is `True`, try to analyze Functional deps on training data
         functional_deps = self._get_functional_deps(env, train_df) \
             if self.rule_based_model_enabled else None
@@ -1191,8 +1096,8 @@ class RepairModel():
 
         # Builds multiple repair models to repair error cells
         logging.info("[Repair Model Training Phase] Building {} models "
-                     "to repair the cells in {} (order={})"
-                     .format(len(target_columns), ",".join(target_columns), self.inference_order))
+                     "to repair the cells in {}"
+                     .format(len(target_columns), ",".join(target_columns)))
 
         if self.checkpoint_path is not None:
             # Keep a training table so that users can check later
@@ -1211,7 +1116,6 @@ class RepairModel():
                     "#rows": train_df.count(),
                     "max_training_row_num": self.max_training_row_num,
                     "columns": train_df.columns,
-                    "inference_order": self.inference_order,
                     "target_columns": target_columns,
                     "pairwise_stats": env["pairwise_attr_stats"],
                     "distinct_stats": env["distinct_stats"]
@@ -1271,7 +1175,7 @@ class RepairModel():
                 with open(f"{checkpoint_name}.json", mode='w') as f:
                     json.dump(metadata, f, indent=2)
 
-        return models, target_columns
+        return models
 
     @_spark_job_group(name="repairing")
     def _repair(self, env: Dict[str, str], models: Dict[str, Any], target_columns: List[str],
@@ -1456,9 +1360,8 @@ class RepairModel():
         #################################################################################
 
         # Selects rows for training, build models, and repair cells
-        fixed_df, dirty_df, error_attrs = self._split_clean_and_dirty_rows(env, error_cells_df)
+        fixed_df, dirty_df, target_columns = self._split_clean_and_dirty_rows(env, error_cells_df)
         if compute_training_target_hist:
-            target_columns = list(map(lambda row: row.attribute, error_attrs))
             df = fixed_df.selectExpr(target_columns)
             hist_df = self._convert_to_histogram(df)
             # self._show_histogram(hist_df)
@@ -1467,15 +1370,15 @@ class RepairModel():
         # Checks if we have the enough number of features for inference
         # TODO: In case of `num_features == 0`, we might be able to select the most accurate and
         # predictable column as a staring feature.
-        num_features = len(fixed_df.columns) - len(error_attrs)
+        num_features = len(fixed_df.columns) - len(target_columns)
         if train_clean_cols_only and num_features == 0:
             raise ValueError("At least one feature is needed to repair error cells, "
                              "but no features found")
 
         partial_repaired_df = self._spark.table(env["partial_repaired"])
         train_df = fixed_df if train_clean_rows_only else partial_repaired_df
-        models, target_columns = self._build_repair_models(
-            env, train_df, error_attrs, continous_attrs, train_clean_cols_only)
+        models = self._build_repair_models(
+            env, train_df, target_columns, continous_attrs, train_clean_cols_only)
 
         #################################################################################
         # 3. Repair Phase
@@ -1588,9 +1491,6 @@ class RepairModel():
         if self.maximal_likelihood_repair_enabled and self.repair_delta is None:
             raise ValueError("`setRepairDelta` should be called before "
                              "maximal likelihood repairing")
-        if self.inference_order not in ["error", "domain", "entropy"]:
-            raise ValueError(f"Inference order must be `error`, `domain`, or `entropy`, "
-                             "but `{self.inference_order}` found")
 
         exclusive_param_list = [
             ("detect_errors_only", detect_errors_only),
