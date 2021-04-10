@@ -29,7 +29,7 @@ from repair.model import FunctionalDepModel, RepairModel, PoorModel
 from repair.detectors import ConstraintErrorDetector, NullErrorDetector, RegExErrorDetector
 from repair.tests.requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
-from repair.tests.testutils import ReusedSQLTestCase, load_testdata
+from repair.tests.testutils import Eventually, ReusedSQLTestCase, load_testdata
 
 
 @unittest.skipIf(
@@ -569,6 +569,20 @@ class RepairModelTests(ReusedSQLTestCase):
         self.assertEqual(pmf[1].tolist(), [1.0])
         self.assertEqual(pmf[2].tolist(), [1.0])
         self.assertEqual(pmf[3].tolist(), [1.0])
+
+    def test_timeout(self):
+        with Eventually(180):
+            rows = RepairModel() \
+                .setTableName("adult") \
+                .setRowId("tid") \
+                .setErrorCells("adult_dirty") \
+                .option("hp.max_evals", "10000000") \
+                .option("hp.no_progress_loss", "100000") \
+                .option("hp.timeout", "3") \
+                .run() \
+                .collect()
+
+            self.assertTrue(len(rows), 7)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@
 #
 
 import os
+import signal
 import shutil
 import tempfile
 import unittest
@@ -35,6 +36,29 @@ def load_testdata(spark: SparkSession, filename, schema=None):
     return reader.format(fmt) \
         .option("header", True) \
         .load("{}/{}".format(os.getenv("REPAIR_TESTDATA"), filename))
+
+
+class TestTimeout(Exception):
+    pass
+
+
+class Eventually:
+
+    def __init__(self, seconds, error_message=None):
+        if error_message is None:
+            error_message = 'test timed out after {}s.'.format(seconds)
+        self.seconds = seconds
+        self.error_message = error_message
+
+    def handle_timeout(self, signum, frame):
+        raise TestTimeout(self.error_message)
+
+    def __enter__(self):
+        signal.signal(signal.SIGALRM, self.handle_timeout)
+        signal.alarm(self.seconds)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        signal.alarm(0)
 
 
 class ReusedPySparkTestCase(unittest.TestCase):
