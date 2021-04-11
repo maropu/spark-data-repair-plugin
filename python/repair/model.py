@@ -815,54 +815,57 @@ class RepairModel():
 
     @elapsed_time  # type: ignore
     def _build_lgb_model(self, X: pd.DataFrame, y: pd.Series, is_discrete: bool,
-                         labels: List[str]) -> Any:
+                         labels: List[str], opts: Dict[str, str]) -> Any:
         import lightgbm as lgb  # type: ignore[import]
 
         # TODO: Validate given parameter values
+        def _get_option(key: str, default_value: Optional[str]) -> Any:
+            return opts[str(key)] if str(key) in opts else default_value
+
         def _boosting_type() -> str:
-            return self._get_option("lgb.boosting_type", "gbdt")
+            return _get_option("lgb.boosting_type", "gbdt")
 
         def _class_weight() -> str:
-            return self._get_option("lgb.class_weight", "balanced")
+            return _get_option("lgb.class_weight", "balanced")
 
         def _learning_rate() -> float:
-            return float(self._get_option("lgb.learning_rate", "0.01"))
+            return float(_get_option("lgb.learning_rate", "0.01"))
 
         def _max_depth() -> int:
-            return int(self._get_option("lgb.max_depth", "7"))
+            return int(_get_option("lgb.max_depth", "7"))
 
         def _max_bin() -> int:
-            return int(self._get_option("lgb.max_bin", "255"))
+            return int(_get_option("lgb.max_bin", "255"))
 
         def _reg_alpha() -> float:
-            return float(self._get_option("lgb.reg_alpha", "0.0"))
+            return float(_get_option("lgb.reg_alpha", "0.0"))
 
         def _min_split_gain() -> float:
-            return float(self._get_option("lgb.min_split_gain", "0.0"))
+            return float(_get_option("lgb.min_split_gain", "0.0"))
 
         def _n_estimators() -> int:
-            return int(self._get_option("lgb.n_estimators", "300"))
+            return int(_get_option("lgb.n_estimators", "300"))
 
         def _n_splits() -> int:
-            return int(self._get_option("cv.n_splits", "3"))
+            return int(_get_option("cv.n_splits", "3"))
 
         def _parallel() -> bool:
-            opt_value = self._get_option("hp.parallel", None)
+            opt_value = _get_option("hp.parallel", None)
             return True if opt_value is not None else False
 
         def _parallelism() -> Optional[int]:
-            opt_value = self._get_option("hp.parallelism", None)
+            opt_value = _get_option("hp.parallelism", None)
             return int(opt_value) if opt_value is not None else None
 
         def _timeout() -> Optional[int]:
-            opt_value = self._get_option("hp.timeout", None)
+            opt_value = _get_option("hp.timeout", None)
             return int(opt_value) if opt_value is not None else None
 
         def _max_eval() -> int:
-            return int(self._get_option("hp.max_evals", "100000000"))
+            return int(_get_option("hp.max_evals", "100000000"))
 
         def _no_progress_loss() -> int:
-            return int(self._get_option("hp.no_progress_loss", "10"))
+            return int(_get_option("hp.no_progress_loss", "10"))
 
         if is_discrete:
             objective = "binary" if len(labels) <= 2 else "multiclass"
@@ -1024,7 +1027,7 @@ class RepairModel():
             metadata["model_type"], y, ",".join(features), len(train_pdf),
             f" #labels={len(labels)}" if len(labels) > 0 else ""))
         (model, params, score), elapsed_time = \
-            self._build_lgb_model(X, train_pdf[y], is_discrete, labels)
+            self._build_lgb_model(X, train_pdf[y], is_discrete, labels, self.opts)
         logging.info("[{}/{}] score={} elapsed={}s".format(
             index + 1, len(target_columns), score, elapsed_time))
 
