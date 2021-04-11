@@ -996,7 +996,6 @@ class RepairModel():
 
         return model, params, -min_loss
 
-    # TODO: Distribute a task to build stat models in Spark
     def _build_stat_model(self, env: Dict[str, str], index: int, metadata: Dict[str, Any],
                           train_df: DataFrame, target_columns: List[str], y: str, input_columns: List[str],
                           continous_attrs: List[str], labels: List[str]) -> Any:
@@ -1049,7 +1048,7 @@ class RepairModel():
         metadata.update({"func_deps": ret_as_json})
         return FunctionalDepModel(x, fd_map)
 
-    def _get_functional_deps(self, env: Dict[str, str], train_df: DataFrame) -> Optional[Dict[str, List[str]]]:
+    def _get_functional_deps(self, train_df: DataFrame) -> Optional[Dict[str, List[str]]]:
         constraint_detectors = list(filter(lambda x: isinstance(x, ConstraintErrorDetector), self.error_detectors))
         # TODO: Supports the case where `self.error_detectors` has multiple `ConstraintErrorDetector`s
         if len(constraint_detectors) == 1:
@@ -1060,40 +1059,13 @@ class RepairModel():
         else:
             return None
 
-    @_spark_job_group(name="repair model training")
-    def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame,
-                             target_columns: List[str], continous_attrs: List[str],
-                             train_clean_cols_only: bool) -> Dict[str, Any]:
-        # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
-        # on Apache Spark. In the paper, given a database tuple t = ce (c: correct attribute values,
-        # e: error attribute values), the conditional probability of each combination of the
-        # error attribute values c can be computed using the product rule:
-        #
-        #  P(e\|c)=P(e[E_{1}]\|c)\prod_{i=2}^{|e|}P(e[E_{i}]\|c, r_{1}, ..., r_{i-1})
-        #      , where r_{j} = if j = 1 then \arg\max_{e[E_{j}]} P(e[E_{j}]\|c)
-        #                      else \arg\max_{e[E_{j}]} P(e[E_{j}]\|c, r_{1}, ..., r_{j-1})
-        #
-        # {E_{1}, ..., E_{|e|}} is an order to repair error attributes and it is determined by
-        # a dependency graph of attributes. The SCARE repair model splits a database instance
-        # into two parts: a subset D_{c} \subset D of clean (or correct) tuples and
-        # D_{e} = D − D_{c} represents the remaining possibly dirty tuples.
-        # Then, it trains the repair model P(e\|c) by using D_{c} and the model is used
-        # to predict error attribute values in D_{e}.
-        #
-        # In our repair model, two minor improvements below are applied to enhance
-        # precision and training speeds:
-        #
-        # - (1) Use NULL/weak-labeled cells for repair model training
-        # - (2) Use functional dependency if possible
-        #
-        # In our model, we strongly assume error detectors can enumerate all the error cells,
-        # that is, we can assume that non-blank cells are clean. Therefore, if c[x] -> e[y] in P(e[y]\|c)
-        # and c[x] \in c (the value e[y] is determined by the value c[x]), we simply folow
-        # this rule to skip expensive training costs.
-        train_df = train_df.drop(str(self.row_id)).cache()
-
-        # If `self.rule_based_model_enabled` is `True`, try to analyze Functional deps on training data
-        functional_deps = self._get_functional_deps(env, train_df) \
+    def _build_repair_models_in_series(
+            self, env: Dict[str, str], train_df: DataFrame,
+            target_columns: List[str], continous_attrs: List[str],
+            train_clean_cols_only: bool) -> Dict[str, Any]:
+        # If `self.rule_based_model_enabled` is `True`, try to analyze
+        # functional deps on training data.
+        functional_deps = self._get_functional_deps(train_df) \
             if self.rule_based_model_enabled else None
         if functional_deps is not None:
             logging.debug(f"Functional deps found: {functional_deps}")
@@ -1180,6 +1152,43 @@ class RepairModel():
                     json.dump(metadata, f, indent=2)
 
         return models
+
+    @_spark_job_group(name="repair model training")
+    def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame,
+                             target_columns: List[str], continous_attrs: List[str],
+                             train_clean_cols_only: bool) -> Dict[str, Any]:
+        # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
+        # on Apache Spark. In the paper, given a database tuple t = ce (c: correct attribute values,
+        # e: error attribute values), the conditional probability of each combination of the
+        # error attribute values c can be computed using the product rule:
+        #
+        #  P(e\|c)=P(e[E_{1}]\|c)\prod_{i=2}^{|e|}P(e[E_{i}]\|c, r_{1}, ..., r_{i-1})
+        #      , where r_{j} = if j = 1 then \arg\max_{e[E_{j}]} P(e[E_{j}]\|c)
+        #                      else \arg\max_{e[E_{j}]} P(e[E_{j}]\|c, r_{1}, ..., r_{j-1})
+        #
+        # {E_{1}, ..., E_{|e|}} is an order to repair error attributes and it is determined by
+        # a dependency graph of attributes. The SCARE repair model splits a database instance
+        # into two parts: a subset D_{c} \subset D of clean (or correct) tuples and
+        # D_{e} = D − D_{c} represents the remaining possibly dirty tuples.
+        # Then, it trains the repair model P(e\|c) by using D_{c} and the model is used
+        # to predict error attribute values in D_{e}.
+        #
+        # In our repair model, two minor improvements below are applied to enhance
+        # precision and training speeds:
+        #
+        # - (1) Use NULL/weak-labeled cells for repair model training
+        # - (2) Use functional dependency if possible
+        #
+        # In our model, we strongly assume error detectors can enumerate all the error cells,
+        # that is, we can assume that non-blank cells are clean. Therefore, if c[x] -> e[y] in P(e[y]\|c)
+        # and c[x] \in c (the value e[y] is determined by the value c[x]), we simply folow
+        # this rule to skip expensive training costs.
+        train_df = train_df.drop(str(self.row_id)).cache()
+
+        # TODO: Distribute a task to build stat models in Spark
+        return self._build_repair_models_in_series(
+            env, train_df, target_columns, continous_attrs,
+            train_clean_cols_only)
 
     @_spark_job_group(name="repairing")
     def _repair(self, env: Dict[str, str], models: Dict[str, Any], target_columns: List[str],
