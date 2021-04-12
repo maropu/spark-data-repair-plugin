@@ -758,11 +758,11 @@ class RepairModel():
 
     # Selects relevant features if necessary. To reduce model training time,
     # it is important to drop non-relevant in advance.
-    def _select_features(self, env: Dict[str, str], y: str, features: List[str]) -> List[str]:
+    def _select_features(self, pairwise_stats: Dict[str, str], y: str, features: List[str]) -> List[str]:
         if self.max_training_column_num is not None and \
                 int(self.max_training_column_num) < len(features):
             heap: List[Tuple[float, str]] = []
-            for f, corr in map(lambda x: tuple(x), float(env["pairwise_attr_stats"][y])):  # type: ignore
+            for f, corr in map(lambda x: tuple(x), float(pairwise_stats[y])):  # type: ignore
                 if f in features:
                     # Converts to a negative value for extracting higher values
                     heapq.heappush(heap, (-corr, f))
@@ -781,7 +781,7 @@ class RepairModel():
 
         return features
 
-    def _transform_features(self, env: Dict[str, str], X: pd.DataFrame, features: List[str],
+    def _transform_features(self, distinct_stats: Dict[str, str], X: pd.DataFrame, features: List[str],
                             continous_attrs: List[str]) -> Tuple[pd.DataFrame, Any]:
         # Transforms discrete attributes with some categorical encoders if necessary
         import category_encoders as ce  # type: ignore[import]
@@ -793,7 +793,7 @@ class RepairModel():
             # encoders, see https://github.com/scikit-learn-contrib/category_encoders
             small_domain_columns = [
                 c for c in discrete_columns
-                if int(env["distinct_stats"][c]) < self.small_domain_threshold]  # type: ignore
+                if int(distinct_stats[c]) < self.small_domain_threshold]  # type: ignore
             discrete_columns = [
                 c for c in discrete_columns if c not in small_domain_columns]
             if len(small_domain_columns) > 0:
@@ -997,7 +997,7 @@ class RepairModel():
         return model, params, -min_loss
 
     def _build_stat_model(self, env: Dict[str, str], index: int, metadata: Dict[str, Any],
-                          train_df: DataFrame, target_columns: List[str], y: str, input_columns: List[str],
+                          train_df: DataFrame, target_columns: List[str], y: str, features: List[str],
                           continous_attrs: List[str], labels: List[str]) -> Any:
         is_discrete = y not in continous_attrs
 
@@ -1016,10 +1016,8 @@ class RepairModel():
         # TODO: Needs more smart sampling, e.g., stratified sampling
         train_pdf = train_df.sample(sampling_ratio).toPandas()
 
-        # Selects features among input columns if necessary
-        features = self._select_features(env, y, input_columns)
         X, transformers = self._transform_features(
-            env, train_pdf[features], features, continous_attrs)
+            env["distinct_stats"], train_pdf[features], features, continous_attrs)  # type: ignore
 
         logging.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
             index + 1, len(target_columns),
@@ -1061,7 +1059,7 @@ class RepairModel():
 
     def _build_repair_models_in_series(
             self, env: Dict[str, str], train_df: DataFrame,
-            target_columns: List[str], continous_attrs: List[str],
+            target_columns: List[str], continous_attrs: List[str], feature_map: Dict[str, List[str]],
             train_clean_cols_only: bool) -> Dict[str, Any]:
         # If `self.rule_based_model_enabled` is `True`, try to analyze
         # functional deps on training data.
@@ -1103,10 +1101,10 @@ class RepairModel():
         for index, y in enumerate(target_columns):
             if train_clean_cols_only:
                 # Filters out excluded columns first
-                input_columns = [c for c in train_df.columns if c not in excluded_columns]  # type: ignore
+                features = [c for c in train_df.columns if c not in excluded_columns]  # type: ignore
                 excluded_columns.remove(y)
             else:
-                input_columns = [c for c in train_df.columns if c != y]  # type: ignore
+                features = feature_map[y]
 
             is_discrete = y not in continous_attrs
             model_type = "classifier" if is_discrete else "regressor"
@@ -1120,21 +1118,21 @@ class RepairModel():
                 logging.info("Skipping {}/{} model because the number of labels is {}".format(
                     index + 1, len(target_columns), len(labels)))
                 v = labels[0] if len(labels) == 1 else None
-                models[y] = (PoorModel(v), input_columns, None)
+                models[y] = (PoorModel(v), features, None)
 
-            # If `y` is functionally-dependent on an attribute of `input_columns`,
+            # If `y` is functionally-dependent on an attribute of `features`,
             # builds a model based on the rule.
             if y not in models and functional_deps is not None and y in functional_deps:
-                fx = list(filter(lambda x: x in input_columns, functional_deps[y]))
+                fx = list(filter(lambda x: x in features, functional_deps[y]))
                 if len(fx) > 0:
                     model = self._build_rule_model(
                         index, metadata, train_df, target_columns, fx[0], y)
                     models[y] = (model, [fx[0]], None)
 
-            # Otherwise, builds a statistical model by `input_columns`
+            # Otherwise, builds a statistical model by `features`
             if y not in models:
                 models[y] = self._build_stat_model(
-                    env, index, metadata, train_df, target_columns, y, input_columns,
+                    env, index, metadata, train_df, target_columns, y, features,
                     continous_attrs, labels)
 
             if self.checkpoint_path is not None:
@@ -1185,9 +1183,16 @@ class RepairModel():
         # this rule to skip expensive training costs.
         train_df = train_df.drop(str(self.row_id)).cache()
 
+        # Selects features among input columns if necessary
+        feature_map: Dict[str, List[str]] = {}
+        for y in target_columns:
+            input_columns = [c for c in train_df.columns if c != y]  # type: ignore
+            features = self._select_features(env["pairwise_attr_stats"], y, input_columns)  # type: ignore
+            feature_map[y] = features
+
         # TODO: Distribute a task to build stat models in Spark
         return self._build_repair_models_in_series(
-            env, train_df, target_columns, continous_attrs,
+            env, train_df, target_columns, continous_attrs, feature_map,
             train_clean_cols_only)
 
     @_spark_job_group(name="repairing")
