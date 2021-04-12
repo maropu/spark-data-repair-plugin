@@ -781,8 +781,8 @@ class RepairModel():
 
         return features
 
-    def _transform_features(self, distinct_stats: Dict[str, str], X: pd.DataFrame, features: List[str],
-                            continous_attrs: List[str]) -> Tuple[pd.DataFrame, Any]:
+    def _create_transformers(self, distinct_stats: Dict[str, str], features: List[str],
+                             continous_attrs: List[str]) -> List[Any]:
         # Transforms discrete attributes with some categorical encoders if necessary
         import category_encoders as ce  # type: ignore[import]
         discrete_columns = [c for c in features if c not in continous_attrs]
@@ -802,16 +802,11 @@ class RepairModel():
             if len(discrete_columns) > 0:
                 transformers.append(ce.OrdinalEncoder(
                     cols=discrete_columns, handle_unknown='impute'))
-            # TODO: Needs to include `dirty_df` in this transformation
-            for transformer in transformers:
-                X = transformer.fit_transform(X)
-            logging.debug("{} encoders transform ({})=>({})".format(
-                len(transformers), ",".join(features), ",".join(X.columns)))
 
         # TODO: Even when using a GDBT, it might be better to standardize
         # continous values.
 
-        return X, transformers
+        return transformers
 
     @elapsed_time  # type: ignore
     def _build_lgb_model(self, X: pd.DataFrame, y: pd.Series, is_discrete: bool,
@@ -998,7 +993,7 @@ class RepairModel():
 
     def _build_stat_model(self, env: Dict[str, str], index: int, metadata: Dict[str, Any],
                           train_df: DataFrame, target_columns: List[str], y: str, features: List[str],
-                          continous_attrs: List[str], labels: List[str]) -> Any:
+                          transformers: List[Any], continous_attrs: List[str], labels: List[str]) -> Any:
         is_discrete = y not in continous_attrs
 
         assert not(is_discrete and len(labels) <= 1)
@@ -1016,8 +1011,11 @@ class RepairModel():
         # TODO: Needs more smart sampling, e.g., stratified sampling
         train_pdf = train_df.sample(sampling_ratio).toPandas()
 
-        X, transformers = self._transform_features(
-            env["distinct_stats"], train_pdf[features], features, continous_attrs)  # type: ignore
+        X = train_pdf[train_pdf.columns[train_pdf.columns != y]]
+        for transformer in transformers:
+            X = transformer.fit_transform(X)
+        logging.debug("{} encoders transform ({})=>({})".format(
+            len(transformers), ",".join(features), ",".join(X.columns)))
 
         logging.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
             index + 1, len(target_columns),
@@ -1059,7 +1057,8 @@ class RepairModel():
 
     def _build_repair_models_in_series(
             self, env: Dict[str, str], train_df: DataFrame,
-            target_columns: List[str], continous_attrs: List[str], feature_map: Dict[str, List[str]],
+            target_columns: List[str], continous_attrs: List[str],
+            feature_map: Dict[str, List[str]], transformer_map: Dict[str, List[Any]],
             train_clean_cols_only: bool) -> Dict[str, Any]:
         # If `self.rule_based_model_enabled` is `True`, try to analyze
         # functional deps on training data.
@@ -1133,7 +1132,7 @@ class RepairModel():
             if y not in models:
                 models[y] = self._build_stat_model(
                     env, index, metadata, train_df, target_columns, y, features,
-                    continous_attrs, labels)
+                    transformer_map[y], continous_attrs, labels)
 
             if self.checkpoint_path is not None:
                 checkpoint_name = f"{self.checkpoint_path}/{index}_{model_type}_{y}"
@@ -1185,15 +1184,18 @@ class RepairModel():
 
         # Selects features among input columns if necessary
         feature_map: Dict[str, List[str]] = {}
+        transformer_map: Dict[str, List[Any]] = {}
         for y in target_columns:
             input_columns = [c for c in train_df.columns if c != y]  # type: ignore
             features = self._select_features(env["pairwise_attr_stats"], y, input_columns)  # type: ignore
             feature_map[y] = features
+            transformer_map[y] = self._create_transformers(
+                env["distinct_stats"], features, continous_attrs)  # type: ignore
 
         # TODO: Distribute a task to build stat models in Spark
         return self._build_repair_models_in_series(
             env, train_df, target_columns, continous_attrs, feature_map,
-            train_clean_cols_only)
+            transformer_map, train_clean_cols_only)
 
     @_spark_job_group(name="repairing")
     def _repair(self, env: Dict[str, str], models: Dict[str, Any], target_columns: List[str],
