@@ -27,7 +27,7 @@
 
   <groupId>io.github.maropu</groupId>
   <artifactId>spark-data-repair-plugin_2.12</artifactId>
-  <version>0.1.0-spark3.0-EXPERIMENTAL</version>
+  <version>0.1.0-EXPERIMENTAL</version>
   <packaging>jar</packaging>
   <name>A toolkit to provide data repair functinalities in Spark</name>
 
@@ -130,7 +130,7 @@
   <build>
     <directory>target</directory>
     <outputDirectory>target/scala-${scala.binary.version}/classes</outputDirectory>
-    <finalName>${project.artifactId}_${spark.binary.version}_${project.version}</finalName>
+    <finalName>${project.artifactId}_spark${spark.binary.version}_${project.version}</finalName>
     <testOutputDirectory>target/scala-${scala.binary.version}/test-classes</testOutputDirectory>
 
     <plugins>
@@ -416,7 +416,7 @@
           </execution>
         </executions>
         <configuration>
-          <finalName>${project.artifactId}_${spark.binary.version}_${project.version}</finalName>
+          <finalName>${project.artifactId}_spark${spark.binary.version}_${project.version}</finalName>
           <outputDirectory>${project.parent.build.directory}</outputDirectory>
         </configuration>
       </plugin>
@@ -432,7 +432,7 @@
               <goal>shade</goal>
             </goals>
             <configuration>
-              <finalName>${project.artifactId}_${spark.binary.version}_${project.version}-with-dependencies</finalName>
+              <finalName>${project.artifactId}_spark${spark.binary.version}_${project.version}-with-dependencies</finalName>
               <outputDirectory>${project.parent.build.directory}</outputDirectory>
               <minimizeJar>false</minimizeJar>
               <createDependencyReducedPom>false</createDependencyReducedPom>

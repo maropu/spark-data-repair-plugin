@@ -24,9 +24,6 @@ get_package_variables_from_pom() {
   SCALA_BINARY_VERSION=`grep "<scala.binary.version>" "${_ROOTT_DIR}/pom.xml" | head -n1 | awk -F '[<>]' '{print $3}'`
   SPARK_VERSION=`grep "<spark.version>" "${_ROOTT_DIR}/pom.xml" | head -n1 | awk -F '[<>]' '{print $3}'`
   SPARK_BINARY_VERSION=`grep "<spark.binary.version>" "${_ROOTT_DIR}/pom.xml" | head -n1 | awk -F '[<>]' '{print $3}'`
-  SCHEMASPY_VERSION=`grep "<schemaspy.version>" "${_ROOTT_DIR}/pom.xml" | head -n1 | awk -F '[<>]' '{print $3}'`
-  SQLITE_JDBC_VERSION=`grep "<sqlite-jdbc.version>" "${_ROOTT_DIR}/pom.xml" | head -n1 | awk -F '[<>]' '{print $3}'`
-  POSTGRESQL_JDBC_VERSION=`grep "<postgresql-jdbc.version>" "${_ROOTT_DIR}/pom.xml" | head -n1 | awk -F '[<>]' '{print $3}'`
-  PACKAGE_JAR_NAME="${PACKAGE_NAME}_${SCALA_BINARY_VERSION}_${SPARK_BINARY_VERSION}_${PACKAGE_VERSION}-with-dependencies.jar"
+  PACKAGE_JAR_NAME="${PACKAGE_NAME}_${SCALA_BINARY_VERSION}_spark${SPARK_BINARY_VERSION}_${PACKAGE_VERSION}-with-dependencies.jar"
 }
 
