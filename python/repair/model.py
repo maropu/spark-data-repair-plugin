@@ -1167,9 +1167,17 @@ class RepairModel():
                 for transformer in transformers:
                     X = transformer.fit_transform(X)
 
-                df = train_df.where(f"{y} IS NOT NULL") \
-                    .withColumn(target_column, functions.lit(y))
-                train_dfs_per_target.append(df)
+                df = train_df.where(f"{y} IS NOT NULL")
+
+                # The value of `max_training_row_num` highly depends on
+                # the performance of pandas and LightGBM.
+                training_data_num = df.count()
+                sampling_ratio = float(self.max_training_row_num) / training_data_num \
+                    if training_data_num > self.max_training_row_num else 1.0
+
+                # TODO: Needs more smart sampling, e.g., stratified sampling
+                sampling_train_df = df.sample(sampling_ratio).withColumn(target_column, functions.lit(y))
+                train_dfs_per_target.append(sampling_train_df)
 
         if len(train_dfs_per_target) == 0:
             return models
