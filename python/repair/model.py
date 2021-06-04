@@ -94,8 +94,8 @@ class PoorModel():
 
 
 @elapsed_time  # type: ignore
-def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool,
-                     labels: List[str], opts: Dict[str, str]) -> Any:
+def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class: List[str],
+                     opts: Dict[str, str]) -> Any:
     import lightgbm as lgb  # type: ignore[import]
 
     # TODO: Validate given parameter values
@@ -144,7 +144,7 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool,
         return int(_get_option("hp.no_progress_loss", "10"))
 
     if is_discrete:
-        objective = "binary" if len(labels) <= 2 else "multiclass"
+        objective = "binary" if num_class <= 2 else "multiclass"
     else:
         objective = "regression"
 
@@ -164,7 +164,7 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool,
 
     # Set `num_class` only in the `multiclass` mode
     if objective == "multiclass":
-        fixed_params["num_class"] = len(labels)
+        fixed_params["num_class"] = num_class
 
     model_class = lgb.LGBMClassifier if is_discrete \
         else lgb.LGBMRegressor
@@ -303,7 +303,7 @@ class RepairModel():
         self.max_training_column_num: Optional[int] = None
         self.small_domain_threshold: int = 12
         self.rule_based_model_enabled: bool = False
-        self.parallel_training_enabled: bool = False
+        self.parallel_training_enabled: bool = True
 
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
@@ -983,10 +983,10 @@ class RepairModel():
 
     def _build_stat_model(self, env: Dict[str, str], index: int, metadata: Dict[str, Any],
                           train_df: DataFrame, target_columns: List[str], y: str, features: List[str],
-                          transformers: List[Any], continous_attrs: List[str], labels: List[str]) -> Any:
+                          transformers: List[Any], continous_attrs: List[str], num_class: int) -> Any:
         is_discrete = y not in continous_attrs
 
-        assert not(is_discrete and len(labels) <= 1)
+        assert not(is_discrete and num_class <= 1)
 
         train_df = train_df.where(f"{y} IS NOT NULL")
         training_data_num = train_df.count()
@@ -1010,9 +1010,9 @@ class RepairModel():
         logging.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
             index + 1, len(target_columns),
             metadata["model_type"], y, ",".join(features), len(train_pdf),
-            f" #labels={len(labels)}" if len(labels) > 0 else ""))
+            f" #class={num_class}" if num_class > 0 else ""))
         ((model, params, score), elapsed_time) = \
-            _build_lgb_model(X, train_pdf[y], is_discrete, labels, self.opts)
+            _build_lgb_model(X, train_pdf[y], is_discrete, num_class, self.opts)
         logging.info("[{}/{}] score={} elapsed={}s".format(
             index + 1, len(target_columns), score, elapsed_time))
 
@@ -1092,15 +1092,16 @@ class RepairModel():
 
             is_discrete = y not in continous_attrs
             model_type = "classifier" if is_discrete else "regressor"
-            labels = train_df.selectExpr(f"collect_set(`{y}`) labels").collect()[0].labels \
-                if is_discrete else []
+            num_class = train_df.selectExpr(f"count(distinct `{y}`) cnt").collect()[0].cnt \
+                if is_discrete else 0
 
-            metadata = {"model_type": model_type, "y": y, "labels": labels}
+            metadata = {"model_type": model_type, "y": y, "num_class": num_class }
 
-            # Skips building a model if #labels <= 1
-            if is_discrete and len(labels) <= 1:
-                logging.info("Skips bulding {} repair model because #labels is {}".format(y, len(labels)))
-                v = labels[0] if len(labels) == 1 else None
+            # Skips building a model if num_class <= 1
+            if is_discrete and num_class <= 1:
+                logging.info("Skips bulding {} repair model because #class is {}".format(y, num_class))
+                v = train_df.selectExpr(f"head(`{y}`) value").collect()[0].value \
+                    if num_class == 1 else None
                 models[y] = (PoorModel(v), features, None)
 
             # If `y` is functionally-dependent on an attribute of `features`,
@@ -1116,7 +1117,7 @@ class RepairModel():
             if y not in models:
                 models[y] = self._build_stat_model(
                     env, index, metadata, train_df, target_columns, y, features,
-                    transformer_map[y], continous_attrs, labels)
+                    transformer_map[y], continous_attrs, num_class)
 
             if self.checkpoint_path is not None:
                 checkpoint_name = f"{self.checkpoint_path}/{index}_{model_type}_{y}"
@@ -1141,18 +1142,19 @@ class RepairModel():
         # To build repair models in parallel, it assigns each model training into a single task
         models: Dict[str, Any] = {}
         train_dfs_per_target: List[DataFrame] = []
-        label_map: Dict[str, List[Any]] = {}
+        num_class_map: Dict[str, List[Any]] = {}
         target_column = self._create_temp_name("target_column")
         train_pdf = train_df.toPandas()
         for y in target_columns:
             is_discrete = y not in continous_attrs
-            label_map[y] = train_df.selectExpr(f"collect_set(`{y}`) labels").collect()[0].labels \
-                if is_discrete else []
+            num_class_map[y] = train_df.selectExpr(f"count(distinct `{y}`) value").collect()[0].value \
+                if is_discrete else 0
 
-            # Skips building a model if #labels <= 1
-            if is_discrete and len(label_map[y]) <= 1:
-                logging.info("Skips bulding {} repair model because #labels is {}".format(y, len(label_map[y])))
-                v = label_map[y][0] if len(label_map[y]) == 1 else None
+            # Skips building a model if #class <= 1
+            if is_discrete and num_class_map[y] <= 1:
+                logging.info("Skips bulding {} repair model because #class is {}".format(y, num_class_map[y]))
+                v = train_df.selectExpr(f"head(`{y}`)").collect()[0].value \
+                    if num_class_map[y] == 1 else None
                 models[y] = (PoorModel(v), feature_map[y], None)
             else:
                 logging.info("Starts building repair model... type={} y={} features={}".format(
@@ -1175,7 +1177,7 @@ class RepairModel():
         broadcasted_target_column = self._spark.sparkContext.broadcast(target_column)
         broadcasted_continous_attrs = self._spark.sparkContext.broadcast(continous_attrs)
         broadcasted_transformer_map = self._spark.sparkContext.broadcast(transformer_map)
-        broadcasted_label_map = self._spark.sparkContext.broadcast(label_map)
+        broadcasted_num_class_map = self._spark.sparkContext.broadcast(num_class_map)
         broadcasted_opts = self._spark.sparkContext.broadcast(self.opts)
 
         @functions.pandas_udf("target: STRING, model: BINARY, score: DOUBLE, rows: INT, elapsed: DOUBLE",
@@ -1186,15 +1188,14 @@ class RepairModel():
             continous_attrs = broadcasted_continous_attrs.value
             transformers = broadcasted_transformer_map.value[y]
             is_discrete = y not in continous_attrs
-            labels = broadcasted_label_map.value[y]
+            num_class = broadcasted_num_class_map.value[y]
             opts = broadcasted_opts.value
 
             X = pdf.drop([y, target_column], axis=1)
             for transformer in transformers:
                 X = transformer.transform(X)
 
-            ((model, params, score), elapsed_time) = \
-                _build_lgb_model(X, pdf[y], is_discrete, labels, opts)
+            ((model, params, score), elapsed_time) = _build_lgb_model(X, pdf[y], is_discrete, num_class, opts)
             row = [y, pickle.dumps(model), score, len(pdf), elapsed_time]
             return pd.DataFrame([row])
 
