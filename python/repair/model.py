@@ -215,7 +215,7 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
     def _objective(params: Dict[str, Any]) -> float:
         model = _create_model(params)
         fit_params = {
-            # TODO: Raises an error if a single regregressor is used
+            # TODO: Raises an error if a single regressor is used
             # "categorical_feature": categorical_feature,
             "verbose": 0
         }
@@ -282,10 +282,6 @@ class RepairModel():
         self.row_id: Optional[str] = None
         self.targets: List[str] = []
 
-        # For storing built models and their params into a persistent storage
-        # to analyze the training process.
-        self.checkpoint_path: Optional[str] = None
-
         # Parameters for error detection
         self.error_cells: Optional[Union[str, DataFrame]] = None
         # To find error cells, the NULL detector is used by default
@@ -303,7 +299,7 @@ class RepairModel():
         self.max_training_column_num: Optional[int] = None
         self.small_domain_threshold: int = 12
         self.rule_based_model_enabled: bool = False
-        self.parallel_training_enabled: bool = False
+        self.parallel_training_enabled: bool = True
 
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
@@ -407,24 +403,6 @@ class RepairModel():
         if len(attrs) == 0:
             raise ValueError("`attrs` has at least one attribute")
         self.targets = attrs
-        return self
-
-    @argtype_check  # type: ignore
-    def setCheckpointPath(self, path: str) -> "RepairModel":
-        """
-        Specifies a directory path to store built models and their params into a persistent
-        storage to analyze the training process.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        path: str
-            directory path for checkpointing (default: ``None``).
-        """
-        if os.path.exists(path):
-            raise ValueError(f"Path '{path}' already exists")
-        self.checkpoint_path = path
         return self
 
     @argtype_check  # type: ignore
@@ -981,7 +959,7 @@ class RepairModel():
 
         return transformers
 
-    def _build_stat_model(self, env: Dict[str, str], index: int, metadata: Dict[str, Any],
+    def _build_stat_model(self, env: Dict[str, str], index: int,
                           train_df: DataFrame, target_columns: List[str], y: str, features: List[str],
                           transformers: List[Any], continous_attrs: List[str], num_class: int) -> Any:
         is_discrete = y not in continous_attrs
@@ -1009,18 +987,12 @@ class RepairModel():
 
         logging.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
             index + 1, len(target_columns),
-            metadata["model_type"], y, ",".join(features), len(train_pdf),
+            "classfier" if y not in continous_attrs else "regressor", y, ",".join(features), len(train_pdf),
             f" #class={num_class}" if num_class > 0 else ""))
         ((model, params, score), elapsed_time) = \
             _build_lgb_model(X, train_pdf[y], is_discrete, num_class, self.opts)
         logging.info("[{}/{}] score={} elapsed={}s".format(
             index + 1, len(target_columns), score, elapsed_time))
-
-        metadata.update({
-            "score": score,
-            "params": params,
-            "features": features
-        })
 
         return model, features, transformers
 
@@ -1050,29 +1022,6 @@ class RepairModel():
             functional_deps: Optional[Dict[str, List[str]]],
             train_clean_cols_only: bool) -> Dict[str, Any]:
 
-        if self.checkpoint_path is not None:
-            # Keep a training table so that users can check later
-            train_temp_view = self._create_temp_name("train")
-            train_df.createOrReplaceTempView(train_temp_view)
-
-            # Path to store models that will be built by the training process
-            os.mkdir(self.checkpoint_path)
-
-            logging.info(f"Model data checkpoint enabled for {train_temp_view}, "
-                         f"the output path is '{self.checkpoint_path}'")
-
-            with open(f"{self.checkpoint_path}/metadata.json", mode='w') as f:
-                metadata = {
-                    "train_table": train_temp_view,
-                    "#rows": train_df.count(),
-                    "max_training_row_num": self.max_training_row_num,
-                    "columns": train_df.columns,
-                    "target_columns": target_columns,
-                    "pairwise_stats": env["pairwise_attr_stats"],
-                    "distinct_stats": env["distinct_stats"]
-                }
-                json.dump(metadata, f, indent=2)
-
         models = {}
         excluded_columns = copy.deepcopy(target_columns)
         for index, y in enumerate(target_columns):
@@ -1084,11 +1033,8 @@ class RepairModel():
                 features = feature_map[y]
 
             is_discrete = y not in continous_attrs
-            model_type = "classifier" if is_discrete else "regressor"
             num_class = train_df.selectExpr(f"count(distinct `{y}`) cnt").collect()[0].cnt \
                 if is_discrete else 0
-
-            metadata = {"model_type": model_type, "y": y, "num_class": num_class }
 
             # Skips building a model if num_class <= 1
             if is_discrete and num_class <= 1:
@@ -1108,22 +1054,8 @@ class RepairModel():
             # Otherwise, builds a statistical model by `features`
             if y not in models:
                 models[y] = self._build_stat_model(
-                    env, index, metadata, train_df, target_columns, y, features,
-                    transformer_map[y], continous_attrs, num_class)
-
-            if self.checkpoint_path is not None:
-                checkpoint_name = f"{self.checkpoint_path}/{index}_{model_type}_{y}"
-                # TODO: An error below happens when using `open` and `pickle` together:
-                #   Argument 2 to "dump" has incompatible type "TextIO"; expected "IO[bytes]"
-                # with open(f"{checkpoint_name}.pkl", mode='wb') as f:
-                #     pickle.dump(model, f)
-                try:
-                    fd = open(f"{checkpoint_name}.pkl", mode='wb')
-                    pickle.dump(models[y], fd)
-                finally:
-                    fd.close()
-                with open(f"{checkpoint_name}.json", mode='w') as f:
-                    json.dump(metadata, f, indent=2)
+                    env, index, train_df, target_columns, y, features, transformer_map[y],
+                    continous_attrs, num_class)
 
         return models
 

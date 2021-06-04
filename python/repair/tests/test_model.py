@@ -292,34 +292,6 @@ class RepairModelTests(ReusedSQLTestCase):
                 Row(tid="16", attribute="Income", current_value=None, repaired="MoreThan50K"),
                 Row(tid="5", attribute="Income", current_value=None, repaired="MoreThan50K")])
 
-    def test_setCheckpointPath(self):
-        with tempfile.TemporaryDirectory() as path:
-            checkpoint_path = f"{path}/chkpnt"
-            self._build_model() \
-                .setTableName("adult") \
-                .setRowId("tid") \
-                .setCheckpointPath(checkpoint_path) \
-                .run()
-
-            files = glob.glob(f"{checkpoint_path}/*")
-            expected_files = [
-                "0_classifier_Sex.json",
-                "0_classifier_Sex.pkl",
-                "1_classifier_Income.json",
-                "1_classifier_Income.pkl",
-                "2_classifier_Age.json",
-                "2_classifier_Age.pkl",
-                "metadata.json"
-            ]
-            for file in files:
-                fn = os.path.basename(file)
-                self.assertTrue(fn in expected_files)
-
-            self.assertRaisesRegexp(
-                ValueError,
-                f"Path '{checkpoint_path}' already exists",
-                lambda: RepairModel().setCheckpointPath(checkpoint_path))
-
     def test_detect_errors_only(self):
         # Tests for `NullErrorDetector`
         null_errors = self._build_model() \
