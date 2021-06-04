@@ -23,7 +23,11 @@ import warnings
 from pyspark.sql import SparkSession
 
 # Initializes a Spark session
-spark = SparkSession.builder.getOrCreate()
+# NOTE: Since learning tasks run longer, we set a large value (6h)
+# to the network timeout value.
+spark = SparkSession.builder \
+    .config("spark.network.timeout", "21600s") \
+    .getOrCreate()
 
 # Suppress warinig messages in PySpark
 warnings.simplefilter('ignore')
