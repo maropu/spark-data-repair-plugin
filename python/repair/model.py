@@ -1001,7 +1001,7 @@ class RepairModel():
         # TODO: Needs more smart sampling, e.g., stratified sampling
         train_pdf = train_df.sample(sampling_ratio).toPandas()
 
-        X = train_pdf[train_pdf.columns[train_pdf.columns != y]]
+        X = train_pdf[train_pdf.columns[train_pdf.columns != y]]  # type: ignore
         for transformer in transformers:
             X = transformer.fit_transform(X)
         logging.debug("{} encoders transform ({})=>({})".format(
@@ -1160,7 +1160,7 @@ class RepairModel():
                     ",".join(feature_map[y])))
 
                 # TODO: Removes duplicate feature transformations
-                X = train_pdf[train_pdf.columns[train_pdf.columns != y]]
+                X = train_pdf[train_pdf.columns[train_pdf.columns != y]]  # type: ignore
                 transformers = transformer_map[y]
                 for transformer in transformers:
                     X = transformer.fit_transform(X)
