@@ -299,7 +299,7 @@ class RepairModel():
         self.max_training_column_num: Optional[int] = None
         self.small_domain_threshold: int = 12
         self.rule_based_model_enabled: bool = False
-        self.parallel_training_enabled: bool = True
+        self.parallel_training_enabled: bool = False
 
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
@@ -1019,19 +1019,12 @@ class RepairModel():
             self, env: Dict[str, str], train_df: DataFrame,
             target_columns: List[str], continous_attrs: List[str],
             feature_map: Dict[str, List[str]], transformer_map: Dict[str, List[Any]],
-            functional_deps: Optional[Dict[str, List[str]]],
-            train_clean_cols_only: bool) -> Dict[str, Any]:
+            functional_deps: Optional[Dict[str, List[str]]]) -> Dict[str, Any]:
 
         models = {}
-        excluded_columns = copy.deepcopy(target_columns)
-        for index, y in enumerate(target_columns):
-            if train_clean_cols_only:
-                # Filters out excluded columns first
-                features = [c for c in train_df.columns if c not in excluded_columns]  # type: ignore
-                excluded_columns.remove(y)
-            else:
-                features = feature_map[y]
 
+        for index, y in enumerate(target_columns):
+            features = feature_map[y]
             is_discrete = y not in continous_attrs
             num_class = train_df.selectExpr(f"count(distinct `{y}`) cnt").collect()[0].cnt \
                 if is_discrete else 0
@@ -1159,8 +1152,7 @@ class RepairModel():
 
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame,
-                             target_columns: List[str], continous_attrs: List[str],
-                             train_clean_cols_only: bool) -> Dict[str, Any]:
+                             target_columns: List[str], continous_attrs: List[str]) -> Dict[str, Any]:
         # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
         # on Apache Spark. In the paper, given a database tuple t = ce (c: correct attribute values,
         # e: error attribute values), the conditional probability of each combination of the
@@ -1218,7 +1210,7 @@ class RepairModel():
         else:
             return self._build_repair_models_in_series(
                 env, train_df, target_columns, continous_attrs, feature_map,
-                transformer_map, functional_deps, train_clean_cols_only)
+                transformer_map, functional_deps)
 
     @_spark_job_group(name="repairing")
     def _repair(self, env: Dict[str, str], models: Dict[str, Any], target_columns: List[str],
@@ -1370,8 +1362,7 @@ class RepairModel():
     def _run(self, env: Dict[str, str], input_df: DataFrame, continous_attrs: List[str],
              detect_errors_only: bool, compute_training_target_hist: bool,
              compute_repair_candidate_prob: bool, compute_repair_prob: bool,
-             compute_repair_score: bool, repair_data: bool,
-             train_clean_rows_only: bool = False, train_clean_cols_only: bool = False) -> DataFrame:
+             compute_repair_score: bool, repair_data: bool) -> DataFrame:
         #################################################################################
         # 1. Error Detection Phase
         #################################################################################
@@ -1414,14 +1405,12 @@ class RepairModel():
         # TODO: In case of `num_features == 0`, we might be able to select the most accurate and
         # predictable column as a staring feature.
         num_features = len(fixed_df.columns) - len(target_columns)
-        if train_clean_cols_only and num_features == 0:
+        if num_features == 0:
             raise ValueError("At least one feature is needed to repair error cells, "
                              "but no features found")
 
-        partial_repaired_df = self._spark.table(env["partial_repaired"])
-        train_df = fixed_df if train_clean_rows_only else partial_repaired_df
-        models = self._build_repair_models(
-            env, train_df, target_columns, continous_attrs, train_clean_cols_only)
+        train_df = self._spark.table(env["partial_repaired"])
+        models = self._build_repair_models(env, train_df, target_columns, continous_attrs)
 
         #################################################################################
         # 3. Repair Phase
