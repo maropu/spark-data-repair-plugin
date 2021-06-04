@@ -93,6 +93,178 @@ class PoorModel():
         return [np.array([1.0])] * len(X)
 
 
+@elapsed_time  # type: ignore
+def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool,
+                     labels: List[str], opts: Dict[str, str]) -> Any:
+    import lightgbm as lgb  # type: ignore[import]
+
+    # TODO: Validate given parameter values
+    def _get_option(key: str, default_value: Optional[str]) -> Any:
+        return opts[str(key)] if str(key) in opts else default_value
+
+    def _boosting_type() -> str:
+        return _get_option("lgb.boosting_type", "gbdt")
+
+    def _class_weight() -> str:
+        return _get_option("lgb.class_weight", "balanced")
+
+    def _learning_rate() -> float:
+        return float(_get_option("lgb.learning_rate", "0.01"))
+
+    def _max_depth() -> int:
+        return int(_get_option("lgb.max_depth", "7"))
+
+    def _max_bin() -> int:
+        return int(_get_option("lgb.max_bin", "255"))
+
+    def _reg_alpha() -> float:
+        return float(_get_option("lgb.reg_alpha", "0.0"))
+
+    def _min_split_gain() -> float:
+        return float(_get_option("lgb.min_split_gain", "0.0"))
+
+    def _n_estimators() -> int:
+        return int(_get_option("lgb.n_estimators", "300"))
+
+    def _n_splits() -> int:
+        return int(_get_option("cv.n_splits", "3"))
+
+    def _parallelism() -> Optional[int]:
+        opt_value = _get_option("hp.parallelism", None)
+        return int(opt_value) if opt_value is not None else None
+
+    def _timeout() -> Optional[int]:
+        opt_value = _get_option("hp.timeout", None)
+        return int(opt_value) if opt_value is not None else None
+
+    def _max_eval() -> int:
+        return int(_get_option("hp.max_evals", "100000000"))
+
+    def _no_progress_loss() -> int:
+        return int(_get_option("hp.no_progress_loss", "10"))
+
+    if is_discrete:
+        objective = "binary" if len(labels) <= 2 else "multiclass"
+    else:
+        objective = "regression"
+
+    fixed_params = {
+        "boosting_type": _boosting_type(),
+        "objective": objective,
+        "class_weight": _class_weight(),
+        "learning_rate": _learning_rate(),
+        "max_depth": _max_depth(),
+        "max_bin": _max_bin(),
+        "reg_alpha": _reg_alpha(),
+        "min_split_gain": _min_split_gain(),
+        "n_estimators": _n_estimators(),
+        "random_state": 42,
+        "n_jobs": -1
+    }
+
+    # Set `num_class` only in the `multiclass` mode
+    if objective == "multiclass":
+        fixed_params["num_class"] = len(labels)
+
+    model_class = lgb.LGBMClassifier if is_discrete \
+        else lgb.LGBMRegressor
+
+    params: Dict[str, Any] = {}
+    min_loss = float("nan")
+
+    def _create_model(params: Dict[str, Any]) -> Any:
+        # Some params must be int
+        for k in ["num_leaves", "subsample_freq", "min_child_samples"]:
+            if k in params:
+                params[k] = int(params[k])
+        p = copy.deepcopy(fixed_params)
+        p.update(params)
+        return model_class(**p)
+
+    from hyperopt import hp, tpe, Trials  # type: ignore[import]
+    from hyperopt.early_stop import no_progress_loss  # type: ignore[import]
+    from hyperopt.fmin import fmin  # type: ignore[import]
+    from sklearn.model_selection import (  # type: ignore[import]
+        cross_val_score, KFold, StratifiedKFold
+    )
+
+    # TODO: Temporality supress `sklearn.model_selection` user's warning
+    import warnings
+    warnings.simplefilter("ignore", UserWarning)
+
+    # Forcibly disable INFO-level logging in the `hyperopt` module
+    logging.getLogger("hyperopt").setLevel(logging.WARN)
+
+    param_space = {
+        "num_leaves": hp.quniform("num_leaves", 2, 100, 1),
+        "subsample": hp.uniform("subsample", 0.5, 1.0),
+        "subsample_freq": hp.quniform("subsample_freq", 1, 20, 1),
+        "colsample_bytree": hp.uniform("colsample_bytree", 0.01, 1.0),
+        "min_child_samples": hp.quniform("min_child_samples", 1, 50, 1),
+        "min_child_weight": hp.loguniform("min_child_weight", -3, 1),
+        "reg_lambda": hp.loguniform("reg_lambda", -2, 3)
+    }
+
+    scorer = "f1_macro" if is_discrete else "neg_mean_squared_error"
+    cv = StratifiedKFold(n_splits=_n_splits(), shuffle=True) if is_discrete \
+        else KFold(n_splits=_n_splits(), shuffle=True)
+
+    # TODO: Columns where domain size is small are assumed to be categorical
+    categorical_feature = "auto"
+
+    def _objective(params: Dict[str, Any]) -> float:
+        model = _create_model(params)
+        fit_params = {
+            # TODO: Raises an error if a single regregressor is used
+            # "categorical_feature": categorical_feature,
+            "verbose": 0
+        }
+        # TODO: Replace with `lgb.cv` to remove the `sklearn` dependency
+        scores = cross_val_score(
+            model, X, y, scoring=scorer, cv=cv, fit_params=fit_params, n_jobs=-1)
+        return -scores.mean()
+
+    def _early_stop_fn() -> Any:
+        no_progress_loss_fn = no_progress_loss(_no_progress_loss())
+        if _timeout() is None:
+            return no_progress_loss_fn
+
+        # Set base time for budget mechanism
+        start_time = time.time()
+
+        def timeout_fn(trials, best_loss=None, iteration_no_progress=0):  # type: ignore
+            no_progress_loss, meta = no_progress_loss_fn(trials, best_loss, iteration_no_progress)
+            timeout = time.time() - start_time > _timeout()
+            return no_progress_loss or timeout, meta
+
+        return timeout_fn
+
+    trials = Trials()
+
+    best_params = fmin(
+        fn=_objective,
+        space=param_space,
+        algo=tpe.suggest,
+        trials=trials,
+        max_evals=_max_eval(),
+        early_stop_fn=_early_stop_fn(),
+        rstate=np.random.RandomState(42),
+        show_progressbar=False,
+        verbose=False)
+
+    logging.info("hyperopt: #eval={}/{}".format(len(trials.trials), _max_eval()))
+
+    sorted_lst = sorted(trials.trials, key=lambda x: x['result']['loss'])
+    min_loss = sorted_lst[0]['result']['loss']
+    params = best_params
+
+    # Builds a model with `best_params`
+    model = _create_model(params)
+    model.fit(X, y)
+
+    return model, params, -min_loss
+
+
 class RepairModel():
     """
     Interface to detect error cells in given input data and build a statistical
@@ -131,6 +303,7 @@ class RepairModel():
         self.max_training_column_num: Optional[int] = None
         self.small_domain_threshold: int = 12
         self.rule_based_model_enabled: bool = False
+        self.parallel_training_enabled: bool = False
 
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
@@ -808,189 +981,6 @@ class RepairModel():
 
         return transformers
 
-    @elapsed_time  # type: ignore
-    def _build_lgb_model(self, X: pd.DataFrame, y: pd.Series, is_discrete: bool,
-                         labels: List[str], opts: Dict[str, str]) -> Any:
-        import lightgbm as lgb  # type: ignore[import]
-
-        # TODO: Validate given parameter values
-        def _get_option(key: str, default_value: Optional[str]) -> Any:
-            return opts[str(key)] if str(key) in opts else default_value
-
-        def _boosting_type() -> str:
-            return _get_option("lgb.boosting_type", "gbdt")
-
-        def _class_weight() -> str:
-            return _get_option("lgb.class_weight", "balanced")
-
-        def _learning_rate() -> float:
-            return float(_get_option("lgb.learning_rate", "0.01"))
-
-        def _max_depth() -> int:
-            return int(_get_option("lgb.max_depth", "7"))
-
-        def _max_bin() -> int:
-            return int(_get_option("lgb.max_bin", "255"))
-
-        def _reg_alpha() -> float:
-            return float(_get_option("lgb.reg_alpha", "0.0"))
-
-        def _min_split_gain() -> float:
-            return float(_get_option("lgb.min_split_gain", "0.0"))
-
-        def _n_estimators() -> int:
-            return int(_get_option("lgb.n_estimators", "300"))
-
-        def _n_splits() -> int:
-            return int(_get_option("cv.n_splits", "3"))
-
-        def _parallel() -> bool:
-            opt_value = _get_option("hp.parallel", None)
-            return True if opt_value is not None else False
-
-        def _parallelism() -> Optional[int]:
-            opt_value = _get_option("hp.parallelism", None)
-            return int(opt_value) if opt_value is not None else None
-
-        def _timeout() -> Optional[int]:
-            opt_value = _get_option("hp.timeout", None)
-            return int(opt_value) if opt_value is not None else None
-
-        def _max_eval() -> int:
-            return int(_get_option("hp.max_evals", "100000000"))
-
-        def _no_progress_loss() -> int:
-            return int(_get_option("hp.no_progress_loss", "10"))
-
-        if is_discrete:
-            objective = "binary" if len(labels) <= 2 else "multiclass"
-        else:
-            objective = "regression"
-
-        fixed_params = {
-            "boosting_type": _boosting_type(),
-            "objective": objective,
-            "class_weight": _class_weight(),
-            "learning_rate": _learning_rate(),
-            "max_depth": _max_depth(),
-            "max_bin": _max_bin(),
-            "reg_alpha": _reg_alpha(),
-            "min_split_gain": _min_split_gain(),
-            "n_estimators": _n_estimators(),
-            "random_state": 42,
-            "n_jobs": -1
-        }
-
-        # Set `num_class` only in the `multiclass` mode
-        if objective == "multiclass":
-            fixed_params["num_class"] = len(labels)
-
-        model_class = lgb.LGBMClassifier if is_discrete \
-            else lgb.LGBMRegressor
-
-        params: Dict[str, Any] = {}
-        min_loss = float("nan")
-
-        def _create_model(params: Dict[str, Any]) -> Any:
-            # Some params must be int
-            for k in ["num_leaves", "subsample_freq", "min_child_samples"]:
-                if k in params:
-                    params[k] = int(params[k])
-            p = copy.deepcopy(fixed_params)
-            p.update(params)
-            return model_class(**p)
-
-        from hyperopt import hp, tpe, SparkTrials, Trials  # type: ignore[import]
-        from hyperopt.early_stop import no_progress_loss  # type: ignore[import]
-        from hyperopt.fmin import fmin  # type: ignore[import]
-        from sklearn.model_selection import (  # type: ignore[import]
-            cross_val_score, KFold, StratifiedKFold
-        )
-
-        # Forcibly disable INFO-level logging in the `hyperopt` module
-        logger = logging.getLogger("hyperopt")
-        logger.setLevel(logging.WARN)
-
-        param_space = {
-            "num_leaves": hp.quniform("num_leaves", 2, 100, 1),
-            "subsample": hp.uniform("subsample", 0.5, 1.0),
-            "subsample_freq": hp.quniform("subsample_freq", 1, 20, 1),
-            "colsample_bytree": hp.uniform("colsample_bytree", 0.01, 1.0),
-            "min_child_samples": hp.quniform("min_child_samples", 1, 50, 1),
-            "min_child_weight": hp.loguniform("min_child_weight", -3, 1),
-            "reg_lambda": hp.loguniform("reg_lambda", -2, 3)
-        }
-
-        scorer = "f1_macro" if is_discrete else "neg_mean_squared_error"
-        cv = StratifiedKFold(n_splits=_n_splits(), shuffle=True) if is_discrete \
-            else KFold(n_splits=_n_splits(), shuffle=True)
-
-        # TODO: Columns where domain size is small are assumed to be categorical
-        categorical_feature = "auto"
-
-        def _objective(params: Dict[str, Any]) -> float:
-            model = _create_model(params)
-            fit_params = {
-                # TODO: Raises an error if a single regregressor is used
-                # "categorical_feature": categorical_feature,
-                "verbose": 0
-            }
-            # TODO: Replace with `lgb.cv` to remove the `sklearn` dependency
-            scores = cross_val_score(
-                model, X, y, scoring=scorer, cv=cv, fit_params=fit_params, n_jobs=-1)
-            return -scores.mean()
-
-        def _early_stop_fn() -> Any:
-            # SparkTrials does not support early stopping func
-            if _parallel():
-                return None
-
-            no_progress_loss_fn = no_progress_loss(_no_progress_loss())
-            if _timeout() is None:
-                return no_progress_loss_fn
-
-            # Set base time for budget mechanism
-            start_time = time.time()
-
-            def timeout_fn(trials, best_loss=None, iteration_no_progress=0):  # type: ignore
-                no_progress_loss, meta = no_progress_loss_fn(trials, best_loss, iteration_no_progress)
-                timeout = time.time() - start_time > _timeout()
-                return no_progress_loss or timeout, meta
-
-            return timeout_fn
-
-        trials = Trials()
-
-        # If `hp.parallel=1`, scaling out hyperopt with Spark
-        if _parallel():
-            trials = SparkTrials(
-                parallelism=_parallelism(),
-                timeout=_timeout(),
-                spark_session=self._spark.newSession())
-
-        best_params = fmin(
-            fn=_objective,
-            space=param_space,
-            algo=tpe.suggest,
-            trials=trials,
-            max_evals=_max_eval(),
-            early_stop_fn=_early_stop_fn(),
-            rstate=np.random.RandomState(42),
-            show_progressbar=False,
-            verbose=False)
-
-        logging.info("hyperopt: #eval={}/{}".format(len(trials.trials), _max_eval()))
-
-        sorted_lst = sorted(trials.trials, key=lambda x: x['result']['loss'])
-        min_loss = sorted_lst[0]['result']['loss']
-        params = best_params
-
-        # Builds a model with `best_params`
-        model = _create_model(params)
-        model.fit(X, y)
-
-        return model, params, -min_loss
-
     def _build_stat_model(self, env: Dict[str, str], index: int, metadata: Dict[str, Any],
                           train_df: DataFrame, target_columns: List[str], y: str, features: List[str],
                           transformers: List[Any], continous_attrs: List[str], labels: List[str]) -> Any:
@@ -1021,8 +1011,8 @@ class RepairModel():
             index + 1, len(target_columns),
             metadata["model_type"], y, ",".join(features), len(train_pdf),
             f" #labels={len(labels)}" if len(labels) > 0 else ""))
-        (model, params, score), elapsed_time = \
-            self._build_lgb_model(X, train_pdf[y], is_discrete, labels, self.opts)
+        ((model, params, score), elapsed_time) = \
+            _build_lgb_model(X, train_pdf[y], is_discrete, labels, self.opts)
         logging.info("[{}/{}] score={} elapsed={}s".format(
             index + 1, len(target_columns), score, elapsed_time))
 
@@ -1067,11 +1057,6 @@ class RepairModel():
         if functional_deps is not None:
             logging.debug(f"Functional deps found: {functional_deps}")
 
-        # Builds multiple repair models to repair error cells
-        logging.info("[Repair Model Training Phase] Building {} models "
-                     "to repair the cells in {}"
-                     .format(len(target_columns), ",".join(target_columns)))
-
         if self.checkpoint_path is not None:
             # Keep a training table so that users can check later
             train_temp_view = self._create_temp_name("train")
@@ -1114,8 +1099,7 @@ class RepairModel():
 
             # Skips building a model if #labels <= 1
             if is_discrete and len(labels) <= 1:
-                logging.info("Skipping {}/{} model because the number of labels is {}".format(
-                    index + 1, len(target_columns), len(labels)))
+                logging.info("Skips bulding {} repair model because #labels is {}".format(y, len(labels)))
                 v = labels[0] if len(labels) == 1 else None
                 models[y] = (PoorModel(v), features, None)
 
@@ -1147,6 +1131,84 @@ class RepairModel():
                     fd.close()
                 with open(f"{checkpoint_name}.json", mode='w') as f:
                     json.dump(metadata, f, indent=2)
+
+        return models
+
+    def _build_repair_models_in_parallel(
+            self, env: Dict[str, str], train_df: DataFrame,
+            target_columns: List[str], continous_attrs: List[str],
+            feature_map: Dict[str, List[str]], transformer_map: Dict[str, List[Any]]) -> Dict[str, Any]:
+        # To build repair models in parallel, it assigns each model training into a single task
+        models: Dict[str, Any] = {}
+        train_dfs_per_target: List[DataFrame] = []
+        label_map: Dict[str, List[Any]] = {}
+        target_column = self._create_temp_name("target_column")
+        train_pdf = train_df.toPandas()
+        for y in target_columns:
+            is_discrete = y not in continous_attrs
+            label_map[y] = train_df.selectExpr(f"collect_set(`{y}`) labels").collect()[0].labels \
+                if is_discrete else []
+
+            # Skips building a model if #labels <= 1
+            if is_discrete and len(label_map[y]) <= 1:
+                logging.info("Skips bulding {} repair model because #labels is {}".format(y, len(label_map[y])))
+                v = label_map[y][0] if len(label_map[y]) == 1 else None
+                models[y] = (PoorModel(v), feature_map[y], None)
+            else:
+                logging.info("Starts building repair model... type={} y={} features={}".format(
+                    "classifier" if is_discrete else "regressor", y,
+                    ",".join(feature_map[y])))
+
+                # TODO: Removes duplicate feature transformations
+                X = train_pdf[train_pdf.columns[train_pdf.columns != y]]
+                transformers = transformer_map[y]
+                for transformer in transformers:
+                    X = transformer.fit_transform(X)
+
+                df = train_df.where(f"{y} IS NOT NULL") \
+                    .withColumn(target_column, functions.lit(y))
+                train_dfs_per_target.append(df)
+
+        if len(train_dfs_per_target) == 0:
+            return models
+
+        broadcasted_target_column = self._spark.sparkContext.broadcast(target_column)
+        broadcasted_continous_attrs = self._spark.sparkContext.broadcast(continous_attrs)
+        broadcasted_transformer_map = self._spark.sparkContext.broadcast(transformer_map)
+        broadcasted_label_map = self._spark.sparkContext.broadcast(label_map)
+        broadcasted_opts = self._spark.sparkContext.broadcast(self.opts)
+
+        @functions.pandas_udf("target: STRING, model: BINARY, score: DOUBLE, rows: INT, elapsed: DOUBLE",
+                              functions.PandasUDFType.GROUPED_MAP)
+        def train(pdf: pd.DataFrame) -> pd.DataFrame:
+            target_column = broadcasted_target_column.value
+            y = pdf.at[0, target_column]
+            continous_attrs = broadcasted_continous_attrs.value
+            transformers = broadcasted_transformer_map.value[y]
+            is_discrete = y not in continous_attrs
+            labels = broadcasted_label_map.value[y]
+            opts = broadcasted_opts.value
+
+            X = pdf.drop([y, target_column], axis=1)
+            for transformer in transformers:
+                X = transformer.transform(X)
+
+            ((model, params, score), elapsed_time) = \
+                _build_lgb_model(X, pdf[y], is_discrete, labels, opts)
+            row = [y, pickle.dumps(model), score, len(pdf), elapsed_time]
+            return pd.DataFrame([row])
+
+        # TODO: Any smart way to distribute tasks in different physical machines?
+        built_models = functools.reduce(lambda x, y: x.union(y), train_dfs_per_target) \
+            .groupBy(target_column).apply(train).collect()
+        for index, row in enumerate(built_models):
+            logging.info("Finishes building '{}' repair model... #rows={} score={} elapsed={}s".format(
+                row.target, row.rows, row.score, row.elapsed))
+
+            model = pickle.loads(row.model)
+            features = feature_map[row.target]
+            transformers = transformer_map[row.target]
+            models[row.target] = (model, features, transformers)
 
         return models
 
@@ -1192,10 +1254,19 @@ class RepairModel():
             transformer_map[y] = self._create_transformers(
                 env["distinct_stats"], features, continous_attrs)  # type: ignore
 
-        # TODO: Distribute a task to build stat models in Spark
-        return self._build_repair_models_in_series(
-            env, train_df, target_columns, continous_attrs, feature_map,
-            transformer_map, train_clean_cols_only)
+        # Builds multiple repair models to repair error cells
+        logging.info("[Repair Model Training Phase] Building {} models "
+                     "to repair the cells in {}"
+                     .format(len(target_columns), ",".join(target_columns)))
+
+        if self.parallel_training_enabled:
+            return self._build_repair_models_in_parallel(
+                env, train_df, target_columns, continous_attrs, feature_map,
+                transformer_map)
+        else:
+            return self._build_repair_models_in_series(
+                env, train_df, target_columns, continous_attrs, feature_map,
+                transformer_map, train_clean_cols_only)
 
     @_spark_job_group(name="repairing")
     def _repair(self, env: Dict[str, str], models: Dict[str, Any], target_columns: List[str],
@@ -1217,7 +1288,7 @@ class RepairModel():
         dirty_df = dirty_df.withColumn(
             grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
 
-        # TODO: Run the `repair` UDF based on checkpoint files
+        # TODO: Runs the `repair` UDF based on checkpoint files
         @functions.pandas_udf(dirty_df.schema, functions.PandasUDFType.GROUPED_MAP)
         def repair(pdf: pd.DataFrame) -> pd.DataFrame:
             target_columns = broadcasted_target_columns.value
