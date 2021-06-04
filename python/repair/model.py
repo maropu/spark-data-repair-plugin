@@ -303,7 +303,7 @@ class RepairModel():
         self.max_training_column_num: Optional[int] = None
         self.small_domain_threshold: int = 12
         self.rule_based_model_enabled: bool = False
-        self.parallel_training_enabled: bool = True
+        self.parallel_training_enabled: bool = False
 
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
@@ -1024,14 +1024,12 @@ class RepairModel():
 
         return model, features, transformers
 
-    def _build_rule_model(self, index: int, metadata: Dict[str, Any], train_df: DataFrame,
-                          target_columns: List[str], x: str, y: str) -> Any:
+    def _build_rule_model(self, index: int, train_df: DataFrame, target_columns: List[str], x: str, y: str) -> Any:
         logging.info("Building {}/{} model... type=classifier(rule-based) y={} feature={}".format(
             index + 1, len(target_columns), y, x))
         input_view = self._create_temp_view(train_df)
         ret_as_json = self._repair_api.computeFunctionDepMap(input_view, x, y)
         fd_map = json.loads(ret_as_json)
-        metadata.update({"func_deps": ret_as_json})
         return FunctionalDepModel(x, fd_map)
 
     def _get_functional_deps(self, train_df: DataFrame) -> Optional[Dict[str, List[str]]]:
@@ -1049,13 +1047,8 @@ class RepairModel():
             self, env: Dict[str, str], train_df: DataFrame,
             target_columns: List[str], continous_attrs: List[str],
             feature_map: Dict[str, List[str]], transformer_map: Dict[str, List[Any]],
+            functional_deps: Optional[Dict[str, List[str]]],
             train_clean_cols_only: bool) -> Dict[str, Any]:
-        # If `self.rule_based_model_enabled` is `True`, try to analyze
-        # functional deps on training data.
-        functional_deps = self._get_functional_deps(train_df) \
-            if self.rule_based_model_enabled else None
-        if functional_deps is not None:
-            logging.debug(f"Functional deps found: {functional_deps}")
 
         if self.checkpoint_path is not None:
             # Keep a training table so that users can check later
@@ -1109,8 +1102,7 @@ class RepairModel():
             if y not in models and functional_deps is not None and y in functional_deps:
                 fx = list(filter(lambda x: x in features, functional_deps[y]))
                 if len(fx) > 0:
-                    model = self._build_rule_model(
-                        index, metadata, train_df, target_columns, fx[0], y)
+                    model = self._build_rule_model(index, train_df, target_columns, fx[0], y)
                     models[y] = (model, [fx[0]], None)
 
             # Otherwise, builds a statistical model by `features`
@@ -1138,7 +1130,9 @@ class RepairModel():
     def _build_repair_models_in_parallel(
             self, env: Dict[str, str], train_df: DataFrame,
             target_columns: List[str], continous_attrs: List[str],
-            feature_map: Dict[str, List[str]], transformer_map: Dict[str, List[Any]]) -> Dict[str, Any]:
+            feature_map: Dict[str, List[str]], transformer_map: Dict[str, List[Any]],
+            functional_deps: Optional[Dict[str, List[str]]]) -> Dict[str, Any]:
+
         # To build repair models in parallel, it assigns each model training into a single task
         models: Dict[str, Any] = {}
         train_dfs_per_target: List[DataFrame] = []
@@ -1156,7 +1150,17 @@ class RepairModel():
                 v = train_df.selectExpr(f"head(`{y}`)").collect()[0].value \
                     if num_class_map[y] == 1 else None
                 models[y] = (PoorModel(v), feature_map[y], None)
-            else:
+
+            # If `y` is functionally-dependent on an attribute of `features`,
+            # builds a model based on the rule.
+            if y not in models and functional_deps is not None and y in functional_deps:
+                fx = list(filter(lambda x: x in feature_map[y], functional_deps[y]))
+                if len(fx) > 0:
+                    model = self._build_rule_model(0, train_df, target_columns, fx[0], y)
+                    models[y] = (model, [fx[0]], None)
+
+            # Otherwise, builds a statistical model by `features`
+            if y not in models:
                 logging.info("Starts building repair model... type={} y={} features={}".format(
                     "classifier" if is_discrete else "regressor", y,
                     ",".join(feature_map[y])))
@@ -1263,6 +1267,13 @@ class RepairModel():
             transformer_map[y] = self._create_transformers(
                 env["distinct_stats"], features, continous_attrs)  # type: ignore
 
+        # If `self.rule_based_model_enabled` is `True`, try to analyze
+        # functional deps on training data.
+        functional_deps = self._get_functional_deps(train_df) \
+            if self.rule_based_model_enabled else None
+        if functional_deps is not None:
+            logging.debug(f"Functional deps found: {functional_deps}")
+
         # Builds multiple repair models to repair error cells
         logging.info("[Repair Model Training Phase] Building {} models "
                      "to repair the cells in {}"
@@ -1271,11 +1282,11 @@ class RepairModel():
         if self.parallel_training_enabled:
             return self._build_repair_models_in_parallel(
                 env, train_df, target_columns, continous_attrs, feature_map,
-                transformer_map)
+                transformer_map, functional_deps)
         else:
             return self._build_repair_models_in_series(
                 env, train_df, target_columns, continous_attrs, feature_map,
-                transformer_map, train_clean_cols_only)
+                transformer_map, functional_deps, train_clean_cols_only)
 
     @_spark_job_group(name="repairing")
     def _repair(self, env: Dict[str, str], models: Dict[str, Any], target_columns: List[str],
