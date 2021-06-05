@@ -961,14 +961,12 @@ class RepairModel():
     def _build_stat_model(self, env: Dict[str, str], index: int,
                           train_df: DataFrame, target_columns: List[str], y: str, features: List[str],
                           transformers: List[Any], continous_attrs: List[str], num_class: int) -> Any:
-        is_discrete = y not in continous_attrs
-
-        assert not(is_discrete and num_class <= 1)
 
         train_df = train_df.where(f"{y} IS NOT NULL")
         training_data_num = train_df.count()
-        if not training_data_num > 0:
-            raise ValueError("Number of training data must be positive")
+        if training_data_num == 0:
+            # Number of training data must be positive
+            return PoorModel(None), features, None
 
         # The value of `max_training_row_num` highly depends on
         # the performance of pandas and LightGBM.
@@ -977,6 +975,7 @@ class RepairModel():
 
         # TODO: Needs more smart sampling, e.g., stratified sampling
         train_pdf = train_df.sample(sampling_ratio).toPandas()
+        is_discrete = y not in continous_attrs
 
         X = train_pdf[train_pdf.columns[train_pdf.columns != y]]  # type: ignore
         for transformer in transformers:
