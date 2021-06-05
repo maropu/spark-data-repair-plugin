@@ -298,7 +298,7 @@ class RepairModel():
         self.max_training_column_num: Optional[int] = None
         self.small_domain_threshold: int = 12
         self.rule_based_model_enabled: bool = False
-        self.parallel_training_enabled: bool = False
+        self.parallel_training_enabled: bool = True
 
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
@@ -985,13 +985,12 @@ class RepairModel():
             len(transformers), ",".join(features), ",".join(X.columns)))
 
         logging.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
-            index + 1, len(target_columns),
-            "classfier" if y not in continous_attrs else "regressor", y, ",".join(features), len(train_pdf),
-            f" #class={num_class}" if num_class > 0 else ""))
+            index + 1, len(target_columns), "classfier" if y not in continous_attrs else "regressor",
+            y, ",".join(features), len(train_pdf), f" #class={num_class}" if num_class > 0 else ""))
         ((model, params, score), elapsed_time) = \
             _build_lgb_model(X, train_pdf[y], is_discrete, num_class, self.opts)
-        logging.info("[{}/{}] score={} elapsed={}s".format(
-            index + 1, len(target_columns), score, elapsed_time))
+        logging.info("Finishes building '{}' model...  score={} elapsed={}s".format(
+            y, score, elapsed_time))
 
         return model, features, transformers
 
@@ -1020,10 +1019,11 @@ class RepairModel():
             feature_map: Dict[str, List[str]], transformer_map: Dict[str, List[Any]],
             functional_deps: Optional[Dict[str, List[str]]]) -> Dict[str, Any]:
 
-        models = {}
+        models: Dict[str, Any] = {}
 
         for index, y in enumerate(target_columns):
             features = feature_map[y]
+
             is_discrete = y not in continous_attrs
             num_class = train_df.selectExpr(f"count(distinct `{y}`) cnt").collect()[0].cnt \
                 if is_discrete else 0
@@ -1059,35 +1059,39 @@ class RepairModel():
 
         # To build repair models in parallel, it assigns each model training into a single task
         models: Dict[str, Any] = {}
+
         train_dfs_per_target: List[DataFrame] = []
         num_class_map: Dict[str, int] = {}
         target_column = self._create_temp_name("target_column")
         train_pdf = train_df.toPandas()
-        for y in target_columns:
+
+        for index, y in enumerate(target_columns):
+            features = feature_map[y]
+
             is_discrete = y not in continous_attrs
-            num_class_map[y] = train_df.selectExpr(f"count(distinct `{y}`) value").collect()[0].value \
+            num_class_map[y] = train_df.selectExpr(f"count(distinct `{y}`) cnt").collect()[0].cnt \
                 if is_discrete else 0
 
-            # Skips building a model if #class <= 1
+            # Skips building a model if num_class <= 1
             if is_discrete and num_class_map[y] <= 1:
                 logging.info("Skips bulding {} repair model because #class is {}".format(y, num_class_map[y]))
-                v = train_df.selectExpr(f"head(`{y}`)").collect()[0].value \
+                v = train_df.selectExpr(f"head(`{y}`) value").collect()[0].value \
                     if num_class_map[y] == 1 else None
-                models[y] = (PoorModel(v), feature_map[y], None)
+                models[y] = (PoorModel(v), features, None)
 
             # If `y` is functionally-dependent on an attribute of `features`,
             # builds a model based on the rule.
             if y not in models and functional_deps is not None and y in functional_deps:
-                fx = list(filter(lambda x: x in feature_map[y], functional_deps[y]))
+                fx = list(filter(lambda x: x in features, functional_deps[y]))
                 if len(fx) > 0:
-                    model = self._build_rule_model(0, train_df, target_columns, fx[0], y)
+                    model = self._build_rule_model(index, train_df, target_columns, fx[0], y)
                     models[y] = (model, [fx[0]], None)
 
             # Otherwise, builds a statistical model by `features`
             if y not in models:
-                logging.info("Starts building repair model... type={} y={} features={}".format(
-                    "classifier" if is_discrete else "regressor", y,
-                    ",".join(feature_map[y])))
+                logging.info("Start building {}/{} model in parallel... type={} y={} features={}{}".format(
+                    index + 1, len(target_columns), "classfier" if y not in continous_attrs else "regressor",
+                    y, ",".join(features), f" #class={num_class_map[y]}" if num_class_map[y] > 0 else ""))
 
                 # TODO: Removes duplicate feature transformations
                 X = train_pdf[train_pdf.columns[train_pdf.columns != y]]  # type: ignore
@@ -1139,7 +1143,7 @@ class RepairModel():
         built_models = functools.reduce(lambda x, y: x.union(y), train_dfs_per_target) \
             .groupBy(target_column).apply(train).collect()
         for index, row in enumerate(built_models):
-            logging.info("Finishes building '{}' repair model... #rows={} score={} elapsed={}s".format(
+            logging.info("Finishes building '{}' model... #rows={} score={} elapsed={}s".format(
                 row.target, row.rows, row.score, row.elapsed))
 
             model = pickle.loads(row.model)
