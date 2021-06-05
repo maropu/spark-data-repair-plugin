@@ -140,7 +140,7 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
         return int(_get_option("hp.max_evals", "100000000"))
 
     def _no_progress_loss() -> int:
-        return int(_get_option("hp.no_progress_loss", "10"))
+        return int(_get_option("hp.no_progress_loss", "50"))
 
     if is_discrete:
         objective = "binary" if num_class <= 2 else "multiclass"
@@ -218,10 +218,17 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
             # "categorical_feature": categorical_feature,
             "verbose": 0
         }
-        # TODO: Replace with `lgb.cv` to remove the `sklearn` dependency
-        scores = cross_val_score(
-            model, X, y, scoring=scorer, cv=cv, fit_params=fit_params, n_jobs=-1)
-        return -scores.mean()
+        try:
+            # TODO: Replace with `lgb.cv` to remove the `sklearn` dependency
+            scores = cross_val_score(
+                model, X, y, scoring=scorer, cv=cv, fit_params=fit_params, n_jobs=-1)
+            return -scores.mean()
+
+        # it might throw an exception because `y` contains
+        # previously unseen labels.
+        except Exception as e:
+            logging.warn(f"{e.__class__}: {e}")
+            return 0.0
 
     def _early_stop_fn() -> Any:
         no_progress_loss_fn = no_progress_loss(_no_progress_loss())
@@ -1030,7 +1037,7 @@ class RepairModel():
             # Skips building a model if num_class <= 1
             if is_discrete and num_class <= 1:
                 logging.info("Skips bulding {} repair model because #class is {}".format(y, num_class))
-                v = train_df.selectExpr(f"head(`{y}`) value").collect()[0].value \
+                v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
                     if num_class == 1 else None
                 models[y] = (PoorModel(v), features, None)
 
@@ -1074,7 +1081,7 @@ class RepairModel():
             # Skips building a model if num_class <= 1
             if is_discrete and num_class_map[y] <= 1:
                 logging.info("Skips bulding {} repair model because #class is {}".format(y, num_class_map[y]))
-                v = train_df.selectExpr(f"head(`{y}`) value").collect()[0].value \
+                v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
                     if num_class_map[y] == 1 else None
                 models[y] = (PoorModel(v), features, None)
 
