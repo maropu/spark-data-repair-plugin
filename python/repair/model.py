@@ -17,7 +17,6 @@
 # limitations under the License.
 #
 
-import os
 import copy
 import datetime
 import functools
@@ -94,7 +93,7 @@ class PoorModel():
 
 
 @elapsed_time  # type: ignore
-def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class: List[str],
+def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class: int,
                      opts: Dict[str, str]) -> Any:
     import lightgbm as lgb  # type: ignore[import]
 
@@ -1061,7 +1060,7 @@ class RepairModel():
         # To build repair models in parallel, it assigns each model training into a single task
         models: Dict[str, Any] = {}
         train_dfs_per_target: List[DataFrame] = []
-        num_class_map: Dict[str, List[Any]] = {}
+        num_class_map: Dict[str, int] = {}
         target_column = self._create_temp_name("target_column")
         train_pdf = train_df.toPandas()
         for y in target_columns:

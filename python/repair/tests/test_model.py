@@ -16,7 +16,6 @@
 #
 
 import os
-import glob
 import tempfile
 import unittest
 import pandas as pd  # type: ignore[import]
