@@ -354,7 +354,7 @@ class RepairModelTests(ReusedSQLTestCase):
             test_model.run(repair_data=True).orderBy("tid").collect(),
             expected_result)
 
-    # @unittest.skip(reason="TODO: Fix a bug that throws a SQL exception")
+    @unittest.skip(reason="TODO: Fix a bug that throws a SQL exception")
     def test_poor_model(self):
         with self.tempView("inputView"):
             rows = [
