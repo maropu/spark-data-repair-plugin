@@ -158,7 +158,7 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
         "min_split_gain": _min_split_gain(),
         "n_estimators": _n_estimators(),
         "random_state": 42,
-        "n_jobs": -1
+        "n_jobs": n_jobs
     }
 
     # Set `num_class` only in the `multiclass` mode
@@ -221,7 +221,7 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
         try:
             # TODO: Replace with `lgb.cv` to remove the `sklearn` dependency
             scores = cross_val_score(
-                model, X, y, scoring=scorer, cv=cv, fit_params=fit_params, n_jobs=-1)
+                model, X, y, scoring=scorer, cv=cv, fit_params=fit_params, n_jobs=n_jobs)
             return -scores.mean()
 
         # it might throw an exception because `y` contains
@@ -702,7 +702,7 @@ class RepairModel():
     def _num_cores_per_executor(self) -> int:
         try:
             num_parallelism = self._spark.sparkContext.defaultParallelism
-            num_executors = self._spark._jsc.sc().getExecutorMemoryStatus().size()
+            num_executors = self._spark._jsc.sc().getExecutorMemoryStatus().size()  # type: ignore
             return max(1, num_parallelism / num_executors)
         except:
             return 1
