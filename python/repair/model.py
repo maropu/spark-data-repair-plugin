@@ -305,7 +305,7 @@ class RepairModel():
         self.max_training_column_num: Optional[int] = None
         self.small_domain_threshold: int = 12
         self.rule_based_model_enabled: bool = False
-        self.parallel_training_enabled: bool = True
+        self.parallel_training_enabled: bool = False
 
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
