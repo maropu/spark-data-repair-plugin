@@ -93,7 +93,7 @@ class PoorModel():
 
 
 @elapsed_time  # type: ignore
-def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class: int,
+def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class: int, n_jobs: int,
                      opts: Dict[str, str]) -> Any:
     import lightgbm as lgb  # type: ignore[import]
 
@@ -699,6 +699,14 @@ class RepairModel():
     def _get_option(self, key: str, default_value: Optional[str]) -> Any:
         return self.opts[str(key)] if str(key) in self.opts else default_value
 
+    def _num_cores_per_executor(self) -> int:
+        try:
+            num_parallelism = self._spark.sparkContext.defaultParallelism
+            num_executors = self._spark._jsc.sc().getExecutorMemoryStatus().size()
+            return max(1, num_parallelism / num_executors)
+        except:
+            return 1
+
     def _clear_job_group(self) -> None:
         # TODO: Uses `SparkContext.clearJobGroup()` instead
         self._spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)  # type: ignore
@@ -994,7 +1002,7 @@ class RepairModel():
             index + 1, len(target_columns), "classfier" if y not in continous_attrs else "regressor",
             y, ",".join(features), len(train_pdf), f" #class={num_class}" if num_class > 0 else ""))
         ((model, params, score), elapsed_time) = \
-            _build_lgb_model(X, train_pdf[y], is_discrete, num_class, self.opts)
+            _build_lgb_model(X, train_pdf[y], is_discrete, num_class, n_jobs=-1, opts=self.opts)
         logging.info("Finishes building '{}' model...  score={} elapsed={}s".format(
             y, score, elapsed_time))
 
@@ -1117,13 +1125,15 @@ class RepairModel():
                 sampling_train_df = df.sample(sampling_ratio).withColumn(target_column, functions.lit(y))
                 train_dfs_per_target.append(sampling_train_df)
 
-        if len(train_dfs_per_target) == 0:
+        num_tasks = len(train_dfs_per_target)
+        if num_tasks == 0:
             return models
 
         broadcasted_target_column = self._spark.sparkContext.broadcast(target_column)
         broadcasted_continous_attrs = self._spark.sparkContext.broadcast(continous_attrs)
         broadcasted_transformer_map = self._spark.sparkContext.broadcast(transformer_map)
         broadcasted_num_class_map = self._spark.sparkContext.broadcast(num_class_map)
+        broadcasted_n_jobs = self._spark.sparkContext.broadcast(max(1, int(self._num_cores_per_executor() / num_tasks)))
         broadcasted_opts = self._spark.sparkContext.broadcast(self.opts)
 
         @functions.pandas_udf("target: STRING, model: BINARY, score: DOUBLE, rows: INT, elapsed: DOUBLE",
@@ -1135,13 +1145,15 @@ class RepairModel():
             transformers = broadcasted_transformer_map.value[y]
             is_discrete = y not in continous_attrs
             num_class = broadcasted_num_class_map.value[y]
+            n_jobs = broadcasted_n_jobs.value
             opts = broadcasted_opts.value
 
             X = pdf.drop([y, target_column], axis=1)
             for transformer in transformers:
                 X = transformer.transform(X)
 
-            ((model, params, score), elapsed_time) = _build_lgb_model(X, pdf[y], is_discrete, num_class, opts)
+            ((model, params, score), elapsed_time) = \
+                _build_lgb_model(X, pdf[y], is_discrete, num_class, n_jobs, opts)
             row = [y, pickle.dumps(model), score, len(pdf), elapsed_time]
             return pd.DataFrame([row])
 
