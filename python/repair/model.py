@@ -1009,6 +1009,7 @@ class RepairModel():
         return model, features, transformers
 
     def _build_rule_model(self, index: int, train_df: DataFrame, target_columns: List[str], x: str, y: str) -> Any:
+        # TODO: For attributes having large domain size, we need to rewrite it as a join query to repair data
         logging.info("Building {}/{} model... type=classifier(rule-based) y={} feature={}".format(
             index + 1, len(target_columns), y, x))
         input_view = self._create_temp_view(train_df)
