@@ -625,6 +625,20 @@ class RepairModel():
         return self
 
     @argtype_check  # type: ignore
+    def setParallelStatTrainingEnabled(self, enabled: bool) -> "RepairModel":
+        """Specifies whether to enable parallel training for stats repair models.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        enabled: bool
+            If set to ``True``, runs multiples tasks to build stat repair models (default: ``False``).
+        """
+        self.parallel_stat_training_enabled = enabled
+        return self
+
+    @argtype_check  # type: ignore
     def setMaximalLikelihoodRepairEnabled(self, enabled: bool) -> "RepairModel":
         """Specifies whether to enable maximal likelihood repair.
 

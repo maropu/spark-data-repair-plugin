@@ -201,7 +201,7 @@ If you want to select some of repaired updates based on theier probabilities, yo
 <output with the four cells repaired>
 ```
 
-## Configurations
+## Major Configurations
 
 ```
 scavenger.repair
@@ -226,17 +226,19 @@ scavenger.repair
   .setMaxTrainingRowNum(int)                   // max number of training rows to build statistical models (default: 10000)
   .setMaxTrainingColumnNum(int)                // max number of training columns to build statistical models (default: None)
   .setSmallDomainThreshold(int)                // max domain size for low-cardinality catogory encoding (default: 12)
+  .setRuleBasedModelEnabled(bool)              // whether to use rule-based models (e.g., FD) if possible (default: False)
+  .setParallelStatTrainingEnabled(bool)        // whether to run multiples tasks to build stat repair models (default: False).
 
   // Parameters for Repairing
-  .setMaximalLikelihoodRepairEnabled(boolean)  // whether to enable maximal likelihood repair (default: False)
+  .setMaximalLikelihoodRepairEnabled(bool)     // whether to enable maximal likelihood repair (default: False)
   .setRepairDelta(int)                         // max number of applied repairs
 
   // Running Mode Parameters
   .run(
-    detect_errors_only=boolean,                // whether to return detected error cells (default: False)
-    compute_repair_candidate_prob=boolean,     // whether to return probabiity mass function of candidate repairs (default: False)
-    compute_repair_prob=boolean,               // whether to return probabiity of predicted repairs
-    repair_data=boolean                        // whether to return repaired data
+    detect_errors_only=bool,                   // whether to return detected error cells (default: False)
+    compute_repair_candidate_prob=bool,        // whether to return probabiity mass function of candidate repairs (default: False)
+    compute_repair_prob=bool,                  // whether to return probabiity of predicted repairs
+    repair_data=bool                           // whether to return repaired data
   )
 ```
 

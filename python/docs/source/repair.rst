@@ -49,6 +49,7 @@ model to repair them.
     RepairModel.setRepairDelta
     RepairModel.setRowId
     RepairModel.setRuleBasedModelEnabled
+    RepairModel.setParallelStatTrainingEnabled
     RepairModel.setSmallDomainThreshold
     RepairModel.setTableName
     RepairModel.setTargets
