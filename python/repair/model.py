@@ -304,8 +304,8 @@ class RepairModel():
         self.max_training_row_num: int = 10000
         self.max_training_column_num: Optional[int] = None
         self.small_domain_threshold: int = 12
-        self.rule_based_model_enabled: bool = False
-        self.parallel_training_enabled: bool = False
+        self.rule_based_model_enabled: bool = True
+        self.parallel_stat_training_enabled: bool = False
 
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
@@ -973,45 +973,8 @@ class RepairModel():
 
         return transformers
 
-    def _build_stat_model(self, env: Dict[str, str], index: int,
-                          train_df: DataFrame, target_columns: List[str], y: str, features: List[str],
-                          transformers: List[Any], continous_attrs: List[str], num_class: int) -> Any:
-
-        train_df = train_df.where(f"{y} IS NOT NULL")
-        training_data_num = train_df.count()
-        if training_data_num == 0:
-            # Number of training data must be positive
-            return PoorModel(None), features, None
-
-        # The value of `max_training_row_num` highly depends on
-        # the performance of pandas and LightGBM.
-        sampling_ratio = float(self.max_training_row_num) / training_data_num \
-            if training_data_num > self.max_training_row_num else 1.0
-
-        # TODO: Needs more smart sampling, e.g., stratified sampling
-        train_pdf = train_df.sample(sampling_ratio).toPandas()
-        is_discrete = y not in continous_attrs
-
-        X = train_pdf[train_pdf.columns[train_pdf.columns != y]]  # type: ignore
-        for transformer in transformers:
-            X = transformer.fit_transform(X)
-        logging.debug("{} encoders transform ({})=>({})".format(
-            len(transformers), ",".join(features), ",".join(X.columns)))
-
-        logging.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
-            index + 1, len(target_columns), "classfier" if y not in continous_attrs else "regressor",
-            y, ",".join(features), len(train_pdf), f" #class={num_class}" if num_class > 0 else ""))
-        ((model, params, score), elapsed_time) = \
-            _build_lgb_model(X, train_pdf[y], is_discrete, num_class, n_jobs=-1, opts=self.opts)
-        logging.info("Finishes building '{}' model...  score={} elapsed={}s".format(
-            y, score, elapsed_time))
-
-        return model, features, transformers
-
-    def _build_rule_model(self, index: int, train_df: DataFrame, target_columns: List[str], x: str, y: str) -> Any:
+    def _build_rule_model(self, train_df: DataFrame, target_columns: List[str], x: str, y: str) -> Any:
         # TODO: For attributes having large domain size, we need to rewrite it as a join query to repair data
-        logging.info("Building {}/{} model... type=classifier(rule-based) y={} feature={}".format(
-            index + 1, len(target_columns), y, x))
         input_view = self._create_temp_view(train_df)
         ret_as_json = self._repair_api.computeFunctionDepMap(input_view, x, y)
         fd_map = json.loads(ret_as_json)
@@ -1028,103 +991,112 @@ class RepairModel():
         else:
             return None
 
-    def _build_repair_models_in_series(
-            self, env: Dict[str, str], train_df: DataFrame,
+    def _build_repair_stat_models_in_series(
+            self, models: Dict[str, Any], train_df: DataFrame,
             target_columns: List[str], continous_attrs: List[str],
-            feature_map: Dict[str, List[str]], transformer_map: Dict[str, List[Any]],
-            functional_deps: Optional[Dict[str, List[str]]]) -> Dict[str, Any]:
+            num_class_map: Dict[str, int],
+            feature_map: Dict[str, List[str]],
+            transformer_map: Dict[str, List[Any]]) -> Dict[str, Any]:
 
-        models: Dict[str, Any] = {}
+        if len(models) == len(target_columns):
+            return models
 
-        for index, y in enumerate(target_columns):
-            features = feature_map[y]
+        for y in target_columns:
+            if y in models:
+                continue
 
+            index = len(models) + 1
+            df = train_df.where(f"{y} IS NOT NULL")
+            training_data_num = df.count()
+            # Number of training data must be positive
+            if training_data_num == 0:
+                logging.info("Skipping {}/{} model... type=classfier y={} num_class={}".format(
+                    index, len(target_columns), y, num_class_map[y]))
+                models[y] = (PoorModel(None), feature_map[y], None)
+                continue
+
+            # The value of `max_training_row_num` highly depends on
+            # the performance of pandas and LightGBM.
+            sampling_ratio = float(self.max_training_row_num) / training_data_num \
+                if training_data_num > self.max_training_row_num else 1.0
+
+            # TODO: Needs more smart sampling, e.g., stratified sampling
+            train_pdf = df.sample(sampling_ratio).toPandas()
             is_discrete = y not in continous_attrs
-            num_class = train_df.selectExpr(f"count(distinct `{y}`) cnt").collect()[0].cnt \
-                if is_discrete else 0
 
-            # Skips building a model if num_class <= 1
-            if is_discrete and num_class <= 1:
-                logging.info("Skips bulding {} repair model because #class is {}".format(y, num_class))
-                v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
-                    if num_class == 1 else None
-                models[y] = (PoorModel(v), features, None)
+            X = train_pdf[train_pdf.columns[train_pdf.columns != y]]  # type: ignore
+            for transformer in transformer_map[y]:
+                X = transformer.fit_transform(X)
+            logging.debug("{} encoders transform ({})=>({})".format(
+                len(transformer_map[y]), ",".join(feature_map[y]), ",".join(X.columns)))
 
-            # If `y` is functionally-dependent on an attribute of `features`,
-            # builds a model based on the rule.
-            if y not in models and functional_deps is not None and y in functional_deps:
-                fx = list(filter(lambda x: x in features, functional_deps[y]))
-                if len(fx) > 0:
-                    model = self._build_rule_model(index, train_df, target_columns, fx[0], y)
-                    models[y] = (model, [fx[0]], None)
+            logging.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
+                index, len(target_columns),
+                "classfier" if y not in continous_attrs else "regressor",
+                y, ",".join(feature_map[y]),
+                len(train_pdf),
+                f" #class={num_class_map[y]}" if num_class_map[y] > 0 else ""))
+            ((model, params, score), elapsed_time) = \
+                _build_lgb_model(X, train_pdf[y], is_discrete, num_class_map[y], n_jobs=-1, opts=self.opts)
+            logging.info("Finishes building '{}' model...  score={} elapsed={}s".format(
+                y, score, elapsed_time))
 
-            # Otherwise, builds a statistical model by `features`
-            if y not in models:
-                models[y] = self._build_stat_model(
-                    env, index, train_df, target_columns, y, features, transformer_map[y],
-                    continous_attrs, num_class)
+            models[y] = (model, feature_map[y], transformer_map[y])
 
         return models
 
-    def _build_repair_models_in_parallel(
-            self, env: Dict[str, str], train_df: DataFrame,
+    def _build_repair_stat_models_in_parallel(
+            self, models: Dict[str, Any], train_df: DataFrame,
             target_columns: List[str], continous_attrs: List[str],
-            feature_map: Dict[str, List[str]], transformer_map: Dict[str, List[Any]],
-            functional_deps: Optional[Dict[str, List[str]]]) -> Dict[str, Any]:
+            num_class_map: Dict[str, int],
+            feature_map: Dict[str, List[str]],
+            transformer_map: Dict[str, List[Any]]) -> Dict[str, Any]:
+
+        if len(models) == len(target_columns):
+            return models
 
         # To build repair models in parallel, it assigns each model training into a single task
-        models: Dict[str, Any] = {}
-
         train_dfs_per_target: List[DataFrame] = []
-        num_class_map: Dict[str, int] = {}
         target_column = self._create_temp_name("target_column")
-        train_pdf = train_df.toPandas()
 
-        for index, y in enumerate(target_columns):
-            features = feature_map[y]
+        for y in target_columns:
+            if y in models:
+                continue
 
-            is_discrete = y not in continous_attrs
-            num_class_map[y] = train_df.selectExpr(f"count(distinct `{y}`) cnt").collect()[0].cnt \
-                if is_discrete else 0
+            index = len(models) + len(train_dfs_per_target) + 1
+            df = train_df.where(f"{y} IS NOT NULL")
+            training_data_num = df.count()
+            # Number of training data must be positive
+            if training_data_num == 0:
+                logging.info("Skipping {}/{} model... type=classfier y={} num_class={}".format(
+                    index, len(target_columns), y, num_class_map[y]))
+                models[y] = (PoorModel(None), features, None)
+                continue
 
-            # Skips building a model if num_class <= 1
-            if is_discrete and num_class_map[y] <= 1:
-                logging.info("Skips bulding {} repair model because #class is {}".format(y, num_class_map[y]))
-                v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
-                    if num_class_map[y] == 1 else None
-                models[y] = (PoorModel(v), features, None)
+            # The value of `max_training_row_num` highly depends on
+            # the performance of pandas and LightGBM.
+            sampling_ratio = float(self.max_training_row_num) / training_data_num \
+                if training_data_num > self.max_training_row_num else 1.0
 
-            # If `y` is functionally-dependent on an attribute of `features`,
-            # builds a model based on the rule.
-            if y not in models and functional_deps is not None and y in functional_deps:
-                fx = list(filter(lambda x: x in features, functional_deps[y]))
-                if len(fx) > 0:
-                    model = self._build_rule_model(index, train_df, target_columns, fx[0], y)
-                    models[y] = (model, [fx[0]], None)
+            # TODO: Needs more smart sampling, e.g., stratified sampling
+            df = df.sample(sampling_ratio)
+            train_dfs_per_target.append(df.withColumn(target_column, functions.lit(y)))
 
-            # Otherwise, builds a statistical model by `features`
-            if y not in models:
-                logging.info("Start building {}/{} model in parallel... type={} y={} features={}{}".format(
-                    index + 1, len(target_columns), "classfier" if y not in continous_attrs else "regressor",
-                    y, ",".join(features), f" #class={num_class_map[y]}" if num_class_map[y] > 0 else ""))
+            # TODO: Removes duplicate feature transformations
+            train_pdf = df.toPandas()
+            X = train_pdf[train_pdf.columns[train_pdf.columns != y]]  # type: ignore
+            transformers = transformer_map[y]
+            for transformer in transformers:
+                X = transformer.fit_transform(X)
+            logging.debug("{} encoders transform ({})=>({})".format(
+                len(transformers), ",".join(feature_map[y]), ",".join(X.columns)))
 
-                # TODO: Removes duplicate feature transformations
-                X = train_pdf[train_pdf.columns[train_pdf.columns != y]]  # type: ignore
-                transformers = transformer_map[y]
-                for transformer in transformers:
-                    X = transformer.fit_transform(X)
-
-                df = train_df.where(f"{y} IS NOT NULL")
-
-                # The value of `max_training_row_num` highly depends on
-                # the performance of pandas and LightGBM.
-                training_data_num = df.count()
-                sampling_ratio = float(self.max_training_row_num) / training_data_num \
-                    if training_data_num > self.max_training_row_num else 1.0
-
-                # TODO: Needs more smart sampling, e.g., stratified sampling
-                sampling_train_df = df.sample(sampling_ratio).withColumn(target_column, functions.lit(y))
-                train_dfs_per_target.append(sampling_train_df)
+            logging.info("Start building {}/{} model in parallel... type={} y={} features={} #rows={}{}".format(
+                index, len(target_columns),
+                "classfier" if y not in continous_attrs else "regressor",
+                y, ",".join(feature_map[y]),
+                len(train_pdf),
+                f" #class={num_class_map[y]}" if num_class_map[y] > 0 else ""))
 
         num_tasks = len(train_dfs_per_target)
         if num_tasks == 0:
@@ -1137,7 +1109,7 @@ class RepairModel():
         broadcasted_n_jobs = self._spark.sparkContext.broadcast(max(1, int(self._num_cores_per_executor() / num_tasks)))
         broadcasted_opts = self._spark.sparkContext.broadcast(self.opts)
 
-        @functions.pandas_udf("target: STRING, model: BINARY, score: DOUBLE, rows: INT, elapsed: DOUBLE",
+        @functions.pandas_udf("target: STRING, model: BINARY, score: DOUBLE, elapsed: DOUBLE",
                               functions.PandasUDFType.GROUPED_MAP)
         def train(pdf: pd.DataFrame) -> pd.DataFrame:
             target_column = broadcasted_target_column.value
@@ -1155,15 +1127,15 @@ class RepairModel():
 
             ((model, params, score), elapsed_time) = \
                 _build_lgb_model(X, pdf[y], is_discrete, num_class, n_jobs, opts)
-            row = [y, pickle.dumps(model), score, len(pdf), elapsed_time]
+            row = [y, pickle.dumps(model), score, elapsed_time]
             return pd.DataFrame([row])
 
         # TODO: Any smart way to distribute tasks in different physical machines?
         built_models = functools.reduce(lambda x, y: x.union(y), train_dfs_per_target) \
             .groupBy(target_column).apply(train).collect()
-        for index, row in enumerate(built_models):
-            logging.info("Finishes building '{}' model... #rows={} score={} elapsed={}s".format(
-                row.target, row.rows, row.score, row.elapsed))
+        for row in built_models:
+            logging.info("Finishes building '{}' model... score={} elapsed={}s".format(
+                row.target, row.score, row.elapsed))
 
             model = pickle.loads(row.model)
             features = feature_map[row.target]
@@ -1225,14 +1197,48 @@ class RepairModel():
                      "to repair the cells in {}"
                      .format(len(target_columns), ",".join(target_columns)))
 
-        if self.parallel_training_enabled:
-            return self._build_repair_models_in_parallel(
-                env, train_df, target_columns, continous_attrs, feature_map,
-                transformer_map, functional_deps)
-        else:
-            return self._build_repair_models_in_series(
-                env, train_df, target_columns, continous_attrs, feature_map,
-                transformer_map, functional_deps)
+        models: Dict[str, Any] = {}
+        num_class_map: Dict[str, int] = {}
+
+        for y in target_columns:
+            index = len(models) + 1
+            is_discrete = y not in continous_attrs
+            num_class_map[y] = train_df.selectExpr(f"count(distinct `{y}`) cnt").collect()[0].cnt \
+                if is_discrete else 0
+
+            # Skips building a model if num_class <= 1
+            if is_discrete and num_class_map[y] <= 1:
+                logging.info("Skipping {}/{} model... type=classfier y={} num_class={}".format(
+                    index, len(target_columns), y, num_class_map[y]))
+                v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
+                    if num_class_map[y] == 1 else None
+                models[y] = (PoorModel(v), feature_map[y], None)
+
+            # If `y` is functionally-dependent on one of clean attributes,
+            # builds a model based on the rule.
+            if y not in models and functional_deps is not None and y in functional_deps:
+                def qualified(x: str) -> bool:
+                    # TODO: Checks if the domain size of `x` is small enough
+                    return x in feature_map[y]
+
+                fx = list(filter(lambda x: qualified(x), functional_deps[y]))
+                if len(fx) > 0:
+                    logging.info("Building {}/{} model... type=classifier(rule-based) y={} fx={} num_class={}".format(
+                        index, len(target_columns), y, fx[0], num_class_map[y]))
+                    model = self._build_rule_model(train_df, target_columns, fx[0], y)
+                    models[y] = (model, [fx[0]], None)
+
+        build_stat_models = self._build_repair_stat_models_in_parallel \
+            if self.parallel_stat_training_enabled else self._build_repair_stat_models_in_series
+        build_stat_models(
+            models, train_df, target_columns, continous_attrs,
+            num_class_map, feature_map, transformer_map)
+
+        assert len(models) == len(target_columns)
+
+        # TODO: Resolve the conflict dependencies of the predictions
+
+        return models
 
     @_spark_job_group(name="repairing")
     def _repair(self, env: Dict[str, str], models: Dict[str, Any], target_columns: List[str],

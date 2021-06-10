@@ -141,6 +141,7 @@ object RepairApi extends RepairBase {
         val ref1 = p1.references.head
         val ref2 = p2.references.head
         (domainSizes.get(ref1), domainSizes.get(ref2)) match {
+          // This comparison prevents functional deps from being cyclic
           case (Some(ds1), Some(ds2)) if ds1 < ds2 => Seq(ref1 -> ref2)
           case (Some(_), Some(_)) => Seq(ref2 -> ref1)
           case _ => Nil
