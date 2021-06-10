@@ -1070,7 +1070,7 @@ class RepairModel():
             if training_data_num == 0:
                 logging.info("Skipping {}/{} model... type=classfier y={} num_class={}".format(
                     index, len(target_columns), y, num_class_map[y]))
-                models[y] = (PoorModel(None), features, None)
+                models[y] = (PoorModel(None), feature_map[y], None)
                 continue
 
             # The value of `max_training_row_num` highly depends on
@@ -1146,7 +1146,7 @@ class RepairModel():
 
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame,
-                             target_columns: List[str], continous_attrs: List[str]) -> Dict[str, Any]:
+                             target_columns: List[str], continous_attrs: List[str]) -> List[Any]:
         # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
         # on Apache Spark. In the paper, given a database tuple t = ce (c: correct attribute values,
         # e: error attribute values), the conditional probability of each combination of the
@@ -1238,14 +1238,13 @@ class RepairModel():
 
         # TODO: Resolve the conflict dependencies of the predictions
 
-        return models
+        return list(models.items())
 
     @_spark_job_group(name="repairing")
-    def _repair(self, env: Dict[str, str], models: Dict[str, Any], target_columns: List[str],
-                continous_attrs: List[str], dirty_df: DataFrame, error_cells_df: DataFrame,
+    def _repair(self, env: Dict[str, str], models: List[Any], continous_attrs: List[str],
+                dirty_df: DataFrame, error_cells_df: DataFrame,
                 compute_repair_candidate_prob: bool) -> pd.DataFrame:
         # Shares all the variables for the learnt models in a Spark cluster
-        broadcasted_target_columns = self._spark.sparkContext.broadcast(target_columns)
         broadcasted_continous_attrs = self._spark.sparkContext.broadcast(continous_attrs)
         broadcasted_models = self._spark.sparkContext.broadcast(models)
         broadcasted_compute_repair_candidate_prob = \
@@ -1263,15 +1262,14 @@ class RepairModel():
         # TODO: Runs the `repair` UDF based on checkpoint files
         @functions.pandas_udf(dirty_df.schema, functions.PandasUDFType.GROUPED_MAP)
         def repair(pdf: pd.DataFrame) -> pd.DataFrame:
-            target_columns = broadcasted_target_columns.value
             continous_attrs = broadcasted_continous_attrs.value
             models = broadcasted_models.value
             compute_repair_candidate_prob = broadcasted_compute_repair_candidate_prob.value
             maximal_likelihood_repair_enabled = \
                 broadcasted_maximal_likelihood_repair_enabled.value
 
-            for y in target_columns:
-                (model, features, transformers) = models[y]
+            for m in models:
+                (y, (model, features, transformers)) = m
 
                 # Preprocesses the input row for prediction
                 X = pdf[features]
@@ -1444,8 +1442,9 @@ class RepairModel():
         # 3. Repair Phase
         #################################################################################
 
-        repaired_df = self._repair(env, models, target_columns, continous_attrs,
-                                   dirty_df, error_cells_df, compute_repair_candidate_prob)
+        repaired_df = self._repair(
+            env, models, continous_attrs, dirty_df, error_cells_df,
+            compute_repair_candidate_prob)
 
         # If `compute_repair_candidate_prob` is True, returns probability mass function
         # of repair candidates.
