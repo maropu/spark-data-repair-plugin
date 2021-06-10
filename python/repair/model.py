@@ -1208,7 +1208,7 @@ class RepairModel():
 
             # Skips building a model if num_class <= 1
             if is_discrete and num_class_map[y] <= 1:
-                logging.info("Skipping {}/{} model... type=classfier y={} num_class={}".format(
+                logging.info("Skipping {}/{} model... type=rule y={} num_class={}".format(
                     index, len(target_columns), y, num_class_map[y]))
                 v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
                     if num_class_map[y] == 1 else None
@@ -1223,8 +1223,9 @@ class RepairModel():
 
                 fx = list(filter(lambda x: qualified(x), functional_deps[y]))
                 if len(fx) > 0:
-                    logging.info("Building {}/{} model... type=classifier(rule-based) y={} fx={} num_class={}".format(
-                        index, len(target_columns), y, fx[0], num_class_map[y]))
+                    logging.info("Building {}/{} model... type=rule(FD: X->y)  y={}(|y|={}) X={}(|X|={})".format(
+                        index, len(target_columns), y, num_class_map[y], fx[0],
+                        env["distinct_stats"][fx[0]]))  # type: ignore
                     model = self._build_rule_model(train_df, target_columns, fx[0], y)
                     models[y] = (model, [fx[0]], None)
 
