@@ -1231,11 +1231,15 @@ class RepairModel():
             # If `y` is functionally-dependent on one of clean attributes,
             # builds a model based on the rule.
             if y not in models and functional_deps is not None and y in functional_deps:
-                def qualified(x: str) -> bool:
-                    # TODO: Checks if the domain size of `x` is small enough
-                    return x in feature_map[y]
+                def _max_domain_size() -> int:
+                    return int(self._get_option("rule.max_domain_size", "1000"))
 
-                fx = list(filter(lambda x: qualified(x), functional_deps[y]))
+                def _qualified(x: str) -> bool:
+                    # Checks if the domain size of `x` is small enough
+                    return x in feature_map[y] and \
+                        int(env["distinct_stats"][x]) < _max_domain_size()  # type: ignore
+
+                fx = list(filter(lambda x: _qualified(x), functional_deps[y]))
                 if len(fx) > 0:
                     logging.info("Building {}/{} model... type=rule(FD: X->y)  y={}(|y|={}) X={}(|X|={})".format(
                         index, len(target_columns), y, num_class_map[y], fx[0],
