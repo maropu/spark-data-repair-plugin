@@ -1236,7 +1236,34 @@ class RepairModel():
 
         assert len(models) == len(target_columns)
 
-        # TODO: Resolve the conflict dependencies of the predictions
+        # Resolve the conflict dependencies of the predictions
+        if self.rule_based_model_enabled:
+            import copy
+            pred_ordered_models = []
+            error_columns = copy.deepcopy(target_columns)
+
+            # Appends no order-dependent models first
+            for y in target_columns:
+                (model, x, transformers) = models[y]
+                if not isinstance(model, FunctionalDepModel):
+                    pred_ordered_models.append((y, models[y]))
+                    error_columns.remove(y)
+
+            # Resolves an order for predictions
+            while len(error_columns) > 0:
+                columns = copy.deepcopy(error_columns)
+                for y in columns:
+                    (model, x, transformers) = models[y]
+                    if x[0] not in error_columns:
+                        pred_ordered_models.append((y, models[y]))
+                        error_columns.remove(y)
+
+                assert len(error_columns) < len(columns)
+
+            logging.info("Resolved prediction order dependencies: {}".format(
+                ",".join(map(lambda x: x[0], pred_ordered_models))))
+            assert len(pred_ordered_models) == len(target_columns)
+            return pred_ordered_models
 
         return list(models.items())
 

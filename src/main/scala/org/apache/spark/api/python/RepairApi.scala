@@ -19,6 +19,7 @@ package org.apache.spark.api.python
 
 import java.net.URI
 
+import scala.collection.mutable
 import scala.io.Source
 
 import org.apache.spark.SparkException
@@ -132,26 +133,35 @@ object RepairApi extends RepairBase {
         .filter(kv => supported.contains(kv._1))
     }
 
-    val fds = constraints.predicates.filter { preds =>
+    val fdMap = mutable.Map[String, mutable.Set[String]]()
+
+    def hasNoCyclic(ref1: String, ref2: String): Boolean = {
+      !fdMap.get(ref1).exists(_.contains(ref2)) && !fdMap.get(ref2).exists(_.contains(ref1))
+    }
+
+    constraints.predicates.filter { preds =>
       // Filters predicate candidates that might mean functional deps
       preds.length == 2 && preds.flatMap(_.references).distinct.length == 2
-    }.flatMap {
+    }.foreach {
       case Seq(p1, p2) if Set(p1.sign, p2.sign) == Set("EQ", "IQ") &&
           p1.references.length == 1 && p2.references.length == 1 =>
         val ref1 = p1.references.head
         val ref2 = p2.references.head
         (domainSizes.get(ref1), domainSizes.get(ref2)) match {
-          // This comparison prevents functional deps from being cyclic
-          case (Some(ds1), Some(ds2)) if ds1 < ds2 => Seq(ref1 -> ref2)
-          case (Some(_), Some(_)) => Seq(ref2 -> ref1)
-          case _ => Nil
+          case (Some(ds1), Some(ds2)) if ds1 < ds2 =>
+            fdMap.getOrElseUpdate(ref1, mutable.Set[String]()) += ref2
+          case (Some(ds1), Some(ds2)) if ds1 > ds2 =>
+            fdMap.getOrElseUpdate(ref2, mutable.Set[String]()) += ref1
+          case (Some(_), Some(_)) if hasNoCyclic(ref1, ref2) =>
+            fdMap(ref1) = mutable.Set(ref2)
+          case _ =>
         }
-      case _ => Nil
+      case _ =>
     }
 
     // TODO: We need a smarter way to convert Scala data to a json string
-    fds.groupBy(_._1).map { case (k, v) =>
-      s""""$k": [${v.map(_._2).distinct.map { v => s""""$v"""" }.mkString(",")}]"""
+    fdMap.map { case (k, values) =>
+      s""""$k": [${values.toSeq.sorted.map { v => s""""$v"""" }.mkString(",")}]"""
     }.mkString("{", ",", "}")
   }
 

@@ -138,7 +138,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         "HospitalOwner" -> Seq("HospitalName"),
         "Condition" -> Seq("MeasureCode"),
         "CountyName" -> Seq("City"),
-        "HospitalName" -> Seq("PhoneNumber", "ProviderNumber", "Address1", "City"),
+        "HospitalName" -> Seq("Address1", "City", "PhoneNumber", "ProviderNumber"),
         "EmergencyService" -> Seq("ZipCode"),
         "ZipCode" -> Seq("HospitalName"),
         "MeasureCode" -> Seq("MeasureName", "Stateavg")))
