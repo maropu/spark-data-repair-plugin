@@ -770,13 +770,13 @@ class RepairModel():
             logging.debug(f"Dropping an auto-generated view: {v}")
             self._spark.sql(f"DROP VIEW IF EXISTS {v}")
 
-    def _check_input_table(self, env: Dict[str, str]) -> Tuple[DataFrame, List[str]]:
+    def _check_input_table(self) -> Tuple[DataFrame, List[str], Dict[str, Any]]:
         ret_as_json = self._repair_api.checkInputTable(
             self.db_name, self._input_table, str(self.row_id))
-        env.update(json.loads(ret_as_json))
-        continous_attrs = env["continous_attrs"].split(",")
-        return self._spark.table(env["input_table"]), \
-            continous_attrs if continous_attrs != [""] else []
+        metadata = json.loads(ret_as_json)
+        continous_attrs = metadata["continous_attrs"].split(",")
+        return self._spark.table(metadata["input_table"]), \
+            continous_attrs if continous_attrs != [""] else [], metadata
 
     def _detect_error_cells(self, input_table: str) -> str:
         # Initializes the given error detectors with the input params
@@ -790,7 +790,7 @@ class RepairModel():
         return err_cells
 
     @_spark_job_group(name="error detection")
-    def _detect_errors(self, env: Dict[str, str]) -> DataFrame:
+    def _detect_errors(self, input_table: str, num_attrs: int, num_input_rows: int) -> str:
         # If `self.error_cells` provided, just uses it
         if self.error_cells is not None:
             # TODO: Even in this case, we need to use a NULL detector because
@@ -803,23 +803,21 @@ class RepairModel():
             self.domain_threshold_beta = 1.0
         else:
             # Applys error detectors to get noisy cells
-            noisy_cells_view = self._detect_error_cells(env["input_table"])
+            noisy_cells_view = self._detect_error_cells(input_table)
             logging.info(f'[Error Detection Phase] Detecting errors '
-                         f'in a table `{env["input_table"]}` '
-                         f'({env["num_attrs"]} cols x {env["num_input_rows"]} rows)...')
+                         f'in a table `{input_table}` '
+                         f'({num_attrs} cols x {num_input_rows} rows)...')
 
         # Filters target attributes if `self.targets` defined
         if len(self.targets) > 0:
             in_list = ",".join(map(lambda x: f"'{x}'", self.targets))
             df = self._spark.sql("SELECT * FROM {} WHERE attribute IN ({})".format(
                 noisy_cells_view, in_list))
-            env["noisy_cells"] = self._create_temp_view(df, "noisy_cells")
+            return self._create_temp_view(df, "noisy_cells")
         else:
-            env["noisy_cells"] = noisy_cells_view
+            return noisy_cells_view
 
-        return self._spark.table(env["noisy_cells"])
-
-    def _prepare_repair_base(self, env: Dict[str, str], noisy_cells_df: DataFrame) -> DataFrame:
+    def _prepare_repair_base(self, env: Dict[str, Any], noisy_cells_df: DataFrame) -> DataFrame:
         # Sets NULL at the detected noisy cells
         logging.debug("{}/{} noisy cells found, then converts them into NULL cells...".format(
             noisy_cells_df.count(), int(env["num_input_rows"]) * int(env["num_attrs"])))
@@ -829,7 +827,7 @@ class RepairModel():
 
         return self._register_and_get_df(env["repair_base"])
 
-    def _preprocess(self, env: Dict[str, str], continous_attrs: List[str]) -> DataFrame:
+    def _preprocess(self, env: Dict[str, Any], continous_attrs: List[str]) -> DataFrame:
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
         env.update(json.loads(self._repair_api.convertToDiscreteFeatures(
@@ -858,7 +856,7 @@ class RepairModel():
         return ret["attr_stats"]
 
     @_spark_job_group(name="cell domain analysis")
-    def _analyze_error_cell_domain(self, env: Dict[str, str], noisy_cells_df: DataFrame,
+    def _analyze_error_cell_domain(self, env: Dict[str, Any], noisy_cells_df: DataFrame,
                                    continous_attrs: List[str]) -> DataFrame:
         # Checks if attributes are discrete or not, and discretizes continous ones
         discrete_ft_df = self._preprocess(env, continous_attrs)
@@ -883,7 +881,7 @@ class RepairModel():
 
         return self._register_and_get_df(env["cell_domain"])
 
-    def _extract_error_cells(self, env: Dict[str, str], cell_domain_df: DataFrame,
+    def _extract_error_cells(self, env: Dict[str, Any], cell_domain_df: DataFrame,
                              repair_base_df: DataFrame) -> DataFrame:
         # Fixes cells if an inferred value is the same with an initial one
         fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) value"
@@ -908,12 +906,12 @@ class RepairModel():
     def _split_clean_and_dirty_rows(
             self, partial_repaired_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame, List[str]]:
         error_rows_df = error_cells_df.selectExpr(str(self.row_id)).distinct().cache()
-        fixed_df = partial_repaired_df.join(error_rows_df, str(self.row_id), "left_anti").cache()
-        dirty_df = partial_repaired_df.join(error_rows_df, str(self.row_id), "left_semi").cache()
+        fixed_rows_df = partial_repaired_df.join(error_rows_df, str(self.row_id), "left_anti").cache()
+        dirty_rows_df = partial_repaired_df.join(error_rows_df, str(self.row_id), "left_semi").cache()
         error_attrs = error_cells_df.groupBy("attribute") \
             .agg(functions.count("attribute").alias("cnt")).collect()
         assert len(error_attrs) > 0
-        return fixed_df, dirty_df, list(map(lambda x: x.attribute, error_attrs))
+        return fixed_rows_df, dirty_rows_df, list(map(lambda x: x.attribute, error_attrs))
 
     def _convert_to_histogram(self, df: DataFrame) -> DataFrame:
         input_table = self._create_temp_view(df)
@@ -1285,8 +1283,8 @@ class RepairModel():
         return list(models.items())
 
     @_spark_job_group(name="repairing")
-    def _repair(self, env: Dict[str, str], models: List[Any], continous_attrs: List[str],
-                dirty_df: DataFrame, error_cells_df: DataFrame,
+    def _repair(self, models: List[Any], continous_attrs: List[str],
+                dirty_rows_df: DataFrame, error_cells_df: DataFrame,
                 compute_repair_candidate_prob: bool) -> pd.DataFrame:
         # Shares all the variables for the learnt models in a Spark cluster
         broadcasted_continous_attrs = self._spark.sparkContext.broadcast(continous_attrs)
@@ -1299,12 +1297,11 @@ class RepairModel():
         # Sets a grouping key for inference
         num_parallelism = self._spark.sparkContext.defaultParallelism
         grouping_key = self._create_temp_name("grouping_key")
-        env["dirty"] = self._create_temp_view(dirty_df, "dirty")
-        dirty_df = dirty_df.withColumn(
+        dirty_rows_df = dirty_rows_df.withColumn(
             grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
 
         # TODO: Runs the `repair` UDF based on checkpoint files
-        @functions.pandas_udf(dirty_df.schema, functions.PandasUDFType.GROUPED_MAP)
+        @functions.pandas_udf(dirty_rows_df.schema, functions.PandasUDFType.GROUPED_MAP)
         def repair(pdf: pd.DataFrame) -> pd.DataFrame:
             continous_attrs = broadcasted_continous_attrs.value
             models = broadcasted_models.value
@@ -1341,8 +1338,8 @@ class RepairModel():
         # TODO: Might need to compare repair costs (cost of an update, c) to
         # the likelihood benefits of the updates (likelihood benefit of an update, l).
         logging.info(f"[Repairing Phase] Computing {error_cells_df.count()} repair updates in "
-                     f"{dirty_df.count()} rows...")
-        repaired_df = dirty_df.groupBy(grouping_key).apply(repair).drop(grouping_key).cache()
+                     f"{dirty_rows_df.count()} rows...")
+        repaired_df = dirty_rows_df.groupBy(grouping_key).apply(repair).drop(grouping_key).cache()
         repaired_df.write.format("noop").mode("overwrite").save()
         return repaired_df
 
@@ -1405,8 +1402,7 @@ class RepairModel():
 
         return score_df
 
-    def _maximal_likelihood_repair(self, env: Dict[str, str], repaired_df: DataFrame,
-                                   error_cells_df: DataFrame) -> DataFrame:
+    def _maximal_likelihood_repair(self, repaired_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
         # A “Maximal Likelihood Repair” problem defined in the SCARE [2] paper is as follows;
         # Given a scalar \delta and a database D = D_{e} \cup D_{c}, the problem is to
         # find another database instance D' = D'_{e} \cup D_{c} such that L(D'_{e} \| D_{c})
@@ -1429,7 +1425,7 @@ class RepairModel():
         return top_delta_repairs_df
 
     @elapsed_time  # type: ignore
-    def _run(self, env: Dict[str, str], input_df: DataFrame, continous_attrs: List[str],
+    def _run(self, env: Dict[str, Any], input_df: DataFrame, continous_attrs: List[str],
              detect_errors_only: bool, compute_training_target_hist: bool,
              compute_repair_candidate_prob: bool, compute_repair_prob: bool,
              compute_repair_score: bool, repair_data: bool) -> DataFrame:
@@ -1438,7 +1434,8 @@ class RepairModel():
         #################################################################################
 
         # If no error found, we don't need to do nothing
-        noisy_cells_df = self._detect_errors(env)
+        env["noisy_cells"] = self._detect_errors(env["input_table"], env["num_attrs"], env["num_input_rows"])
+        noisy_cells_df = self._spark.table(env["noisy_cells"])
         if noisy_cells_df.count() == 0:  # type: ignore
             logging.info("Any error cells not found, so the input data is already clean")
             return noisy_cells_df if not repair_data else input_df
@@ -1464,10 +1461,10 @@ class RepairModel():
         #################################################################################
 
         # Selects rows for training, build models, and repair cells
-        fixed_df, dirty_df, target_columns = self._split_clean_and_dirty_rows(
+        fixed_rows_df, dirty_rows_df, target_columns = self._split_clean_and_dirty_rows(
             self._spark.table(env["partial_repaired"]), error_cells_df)
         if compute_training_target_hist:
-            df = fixed_df.selectExpr(target_columns)
+            df = fixed_rows_df.selectExpr(target_columns)
             hist_df = self._convert_to_histogram(df)
             # self._show_histogram(hist_df)
             return hist_df
@@ -1475,7 +1472,7 @@ class RepairModel():
         # Checks if we have the enough number of features for inference
         # TODO: In case of `num_features == 0`, we might be able to select the most accurate and
         # predictable column as a staring feature.
-        num_features = len(fixed_df.columns) - len(target_columns)
+        num_features = len(fixed_rows_df.columns) - len(target_columns)
         if num_features == 0:
             raise ValueError("At least one feature is needed to repair error cells, "
                              "but no features found")
@@ -1488,7 +1485,7 @@ class RepairModel():
         #################################################################################
 
         repaired_df = self._repair(
-            env, models, continous_attrs, dirty_df, error_cells_df,
+            env, models, continous_attrs, dirty_rows_df, error_cells_df,
             compute_repair_candidate_prob)
 
         # If `compute_repair_candidate_prob` is True, returns probability mass function
@@ -1513,14 +1510,14 @@ class RepairModel():
         # computes scores to decide which cells should be repaired to follow the
         # “Maximal Likelihood Repair” problem.
         if self.maximal_likelihood_repair_enabled:
-            top_delta_repairs_df = self._maximal_likelihood_repair(env, repaired_df, error_cells_df)
+            top_delta_repairs_df = self._maximal_likelihood_repair(repaired_df, error_cells_df)
             if not repair_data:
                 return top_delta_repairs_df
 
-            # If `repair_data` is True, applys the selected repair updates into `dirty`
-            env["top_delta_repairs"] = self._create_temp_view(
-                top_delta_repairs_df, "top_delta_repairs")
-            repaired_df = self._repair_attrs(env["top_delta_repairs"], env["dirty"])
+            # If `repair_data` is True, applys the selected repair updates into `dirty_rows`
+            top_delta_repairs = self._create_temp_view(top_delta_repairs_df, "top_delta_repairs")
+            dirty_rows = self._create_temp_view(dirty_rows_df, "dirty_rows")
+            repaired_df = self._repair_attrs(top_delta_repairs, dirty_rows)
 
         # If `repair_data` is False, returns repair candidates whoes
         # value is the same with `current_value`.
@@ -1531,7 +1528,7 @@ class RepairModel():
                 .where("repaired IS NULL OR not(current_value <=> repaired)")
             return repair_candidates_df
         else:
-            clean_df = fixed_df.union(repaired_df)
+            clean_df = fixed_rows_df.union(repaired_df)
             assert clean_df.count() == input_df.count()
             return clean_df
 
@@ -1615,11 +1612,12 @@ class RepairModel():
             compute_repair_candidate_prob = True
 
         # A holder to keep runtime variables
-        env: Dict[str, str] = {}
+        env: Dict[str, Any] = {}
 
         try:
             # Validates input data
-            input_df, continous_attrs = self._check_input_table(env)
+            input_df, continous_attrs, metadata = self._check_input_table()
+            env.update(metadata)
 
             if compute_repair_candidate_prob and len(continous_attrs) != 0:
                 raise ValueError("Cannot compute probability mass function of repairs "
