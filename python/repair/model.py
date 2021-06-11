@@ -847,9 +847,11 @@ class RepairModel():
 
         return discrete_ft_df
 
-    def _compute_attr_stats(self, env: Dict[str, str]) -> str:
+    def _compute_attr_stats(self, discrete_features: str, noisy_cells: str) -> str:
         ret = json.loads(self._repair_api.computeAttrStats(
-            env["discrete_features"], env["noisy_cells"], str(self.row_id),
+            discrete_features,
+            noisy_cells,
+            str(self.row_id),
             self.attr_stat_sample_ratio,
             self.attr_stat_threshold))
         self._intermediate_views_on_runtime.append(ret["attr_stats"])
@@ -868,7 +870,7 @@ class RepairModel():
                           self.attr_stat_sample_ratio,
                           self.attr_stat_threshold))
 
-        attr_stats = self._compute_attr_stats(env)
+        attr_stats = self._compute_attr_stats(env["discrete_features"], env["noisy_cells"])
 
         logging.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
         env.update(json.loads(self._repair_api.computeDomainInErrorCells(
@@ -904,12 +906,10 @@ class RepairModel():
         return error_cells_df
 
     def _split_clean_and_dirty_rows(
-            self, env: Dict, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame, List[str]]:
+            self, partial_repaired_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame, List[str]]:
         error_rows_df = error_cells_df.selectExpr(str(self.row_id)).distinct().cache()
-        fixed_df = self._spark.table(env["partial_repaired"]) \
-            .join(error_rows_df, str(self.row_id), "left_anti").cache()
-        dirty_df = self._spark.table(env["partial_repaired"]) \
-            .join(error_rows_df, str(self.row_id), "left_semi").cache()
+        fixed_df = partial_repaired_df.join(error_rows_df, str(self.row_id), "left_anti").cache()
+        dirty_df = partial_repaired_df.join(error_rows_df, str(self.row_id), "left_semi").cache()
         error_attrs = error_cells_df.groupBy("attribute") \
             .agg(functions.count("attribute").alias("cnt")).collect()
         assert len(error_attrs) > 0
@@ -1159,8 +1159,9 @@ class RepairModel():
         return models
 
     @_spark_job_group(name="repair model training")
-    def _build_repair_models(self, env: Dict[str, str], train_df: DataFrame,
-                             target_columns: List[str], continous_attrs: List[str]) -> List[Any]:
+    def _build_repair_models(self, train_df: DataFrame, target_columns: List[str], continous_attrs: List[str],
+                             distinct_stats: Dict[str, str],
+                             pairwise_attr_stats: Dict[str, str]) -> List[Any]:
         # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
         # on Apache Spark. In the paper, given a database tuple t = ce (c: correct attribute values,
         # e: error attribute values), the conditional probability of each combination of the
@@ -1194,10 +1195,9 @@ class RepairModel():
         transformer_map: Dict[str, List[Any]] = {}
         for y in target_columns:
             input_columns = [c for c in train_df.columns if c != y]  # type: ignore
-            features = self._select_features(env["pairwise_attr_stats"], y, input_columns)  # type: ignore
+            features = self._select_features(pairwise_attr_stats, y, input_columns)  # type: ignore
             feature_map[y] = features
-            transformer_map[y] = self._create_transformers(
-                env["distinct_stats"], features, continous_attrs)  # type: ignore
+            transformer_map[y] = self._create_transformers(distinct_stats, features, continous_attrs)
 
         # If `self.rule_based_model_enabled` is `True`, try to analyze
         # functional deps on training data.
@@ -1236,14 +1236,12 @@ class RepairModel():
 
                 def _qualified(x: str) -> bool:
                     # Checks if the domain size of `x` is small enough
-                    return x in feature_map[y] and \
-                        int(env["distinct_stats"][x]) < _max_domain_size()  # type: ignore
+                    return x in feature_map[y] and int(distinct_stats[x]) < _max_domain_size()
 
                 fx = list(filter(lambda x: _qualified(x), functional_deps[y]))
                 if len(fx) > 0:
                     logging.info("Building {}/{} model... type=rule(FD: X->y)  y={}(|y|={}) X={}(|X|={})".format(
-                        index, len(target_columns), y, num_class_map[y], fx[0],
-                        env["distinct_stats"][fx[0]]))  # type: ignore
+                        index, len(target_columns), y, num_class_map[y], fx[0], distinct_stats[fx[0]]))
                     model = self._build_rule_model(train_df, target_columns, fx[0], y)
                     models[y] = (model, [fx[0]], None)
 
@@ -1466,7 +1464,8 @@ class RepairModel():
         #################################################################################
 
         # Selects rows for training, build models, and repair cells
-        fixed_df, dirty_df, target_columns = self._split_clean_and_dirty_rows(env, error_cells_df)
+        fixed_df, dirty_df, target_columns = self._split_clean_and_dirty_rows(
+            self._spark.table(env["partial_repaired"]), error_cells_df)
         if compute_training_target_hist:
             df = fixed_df.selectExpr(target_columns)
             hist_df = self._convert_to_histogram(df)
