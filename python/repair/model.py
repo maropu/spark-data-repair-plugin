@@ -823,23 +823,23 @@ class RepairModel():
 
         return self._register_and_get_df(env["repair_base"])
 
-    def _preprocess(self, env: Dict[str, Any], continous_attrs: List[str]) -> DataFrame:
+    def _preprocess(self, input_table: str, continous_attrs: List[str]) -> Tuple[str, str]:
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
-        env.update(json.loads(self._repair_api.convertToDiscreteFeatures(
-            env["input_table"], str(self.row_id), self.discrete_thres)))
+        ret_as_json = json.loads(self._repair_api.convertToDiscreteFeatures(
+            input_table, str(self.row_id), self.discrete_thres))
 
-        discrete_ft_df = self._register_and_get_df(env["discrete_features"])
+        df = self._register_and_get_df(ret_as_json["discrete_features"])
         logging.debug("Valid {} attributes ({}) found in the {} input attributes ({}) and "
                       "{} continous attributes ({}) included in them".format(
-                          len(discrete_ft_df.columns),
-                          ",".join(discrete_ft_df.columns),
-                          len(self._spark.table(env["input_table"]).columns),
-                          ",".join(self._spark.table(env["input_table"]).columns),
+                          len(df.columns),
+                          ",".join(df.columns),
+                          len(self._spark.table(input_table).columns),
+                          ",".join(self._spark.table(input_table).columns),
                           len(continous_attrs),
                           ",".join(continous_attrs)))
 
-        return discrete_ft_df
+        return ret_as_json["discrete_features"], ret_as_json["distinct_stats"]
 
     def _compute_attr_stats(self, discrete_features: str, noisy_cells: str) -> str:
         ret = json.loads(self._repair_api.computeAttrStats(
@@ -852,9 +852,12 @@ class RepairModel():
         return ret["attr_stats"]
 
     @_spark_job_group(name="cell domain analysis")
-    def _analyze_error_cell_domain(self, env: Dict[str, Any], continous_attrs: List[str]) -> DataFrame:
+    def _analyze_error_cell_domain(
+            self, input_table: str, noisy_cells: str,
+            continous_attrs: List[str]) -> Tuple[str, str, str]:
+
         # Checks if attributes are discrete or not, and discretizes continous ones
-        discrete_ft_df = self._preprocess(env, continous_attrs)
+        discrete_features, distinct_stats = self._preprocess(input_table, continous_attrs)
 
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
@@ -863,18 +866,20 @@ class RepairModel():
                           self.attr_stat_sample_ratio,
                           self.attr_stat_threshold))
 
-        attr_stats = self._compute_attr_stats(env["discrete_features"], env["noisy_cells"])
+        attr_stats = self._compute_attr_stats(discrete_features, noisy_cells)
 
         logging.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
-        env.update(json.loads(self._repair_api.computeDomainInErrorCells(
-            env["discrete_features"], attr_stats, env["noisy_cells"], str(self.row_id),
-            env["continous_attrs"],
+        ret_as_json = json.loads(self._repair_api.computeDomainInErrorCells(
+            discrete_features, attr_stats, noisy_cells, str(self.row_id),
+            ",".join(continous_attrs),
             self.max_attrs_to_compute_domains,
             self.min_corr_thres,
             self.domain_threshold_alpha,
-            self.domain_threshold_beta)))
+            self.domain_threshold_beta))
 
-        return self._register_and_get_df(env["cell_domain"])
+        self._register_and_get_df(ret_as_json["cell_domain"])
+
+        return ret_as_json["cell_domain"], distinct_stats, ret_as_json["pairwise_attr_stats"]
 
     def _extract_error_cells(self, env: Dict[str, Any], cell_domain_df: DataFrame,
                              repair_base_df: DataFrame) -> DataFrame:
@@ -1154,7 +1159,7 @@ class RepairModel():
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, train_df: DataFrame, target_columns: List[str], continous_attrs: List[str],
                              distinct_stats: Dict[str, str],
-                             pairwise_attr_stats: Dict[str, str]) -> List[Any]:
+                             pairwise_stats: Dict[str, str]) -> List[Any]:
         # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
         # on Apache Spark. In the paper, given a database tuple t = ce (c: correct attribute values,
         # e: error attribute values), the conditional probability of each combination of the
@@ -1188,7 +1193,7 @@ class RepairModel():
         transformer_map: Dict[str, List[Any]] = {}
         for y in target_columns:
             input_columns = [c for c in train_df.columns if c != y]  # type: ignore
-            features = self._select_features(pairwise_attr_stats, y, input_columns)  # type: ignore
+            features = self._select_features(pairwise_stats, y, input_columns)  # type: ignore
             feature_map[y] = features
             transformer_map[y] = self._create_transformers(distinct_stats, features, continous_attrs)
 
@@ -1429,7 +1434,8 @@ class RepairModel():
         #################################################################################
 
         # If no error found, we don't need to do nothing
-        noisy_cells_df = self._detect_errors(env["input_table"], env["num_attrs"], env["num_input_rows"])
+        noisy_cells_df = self._detect_errors(
+            env["input_table"], env["num_attrs"], env["num_input_rows"])
         # TODO: Remove this
         env["noisy_cells"] = self._create_temp_view(noisy_cells_df, "noisy_cells")
         if noisy_cells_df.count() == 0:  # type: ignore
@@ -1440,9 +1446,11 @@ class RepairModel():
         repair_base_df = self._prepare_repair_base(env, noisy_cells_df)
 
         # Selects error cells based on the result of domain analysis
-        cell_domain_df = self._analyze_error_cell_domain(env, continous_attrs)
+        cell_domain, distinct_stats, pairwise_stats = self._analyze_error_cell_domain(
+            env["input_table"], env["noisy_cells"], continous_attrs)
 
         # If `detect_errors_only` is True, returns found error cells
+        cell_domain_df = self._spark.table(cell_domain)
         error_cells_df = self._extract_error_cells(env, cell_domain_df, repair_base_df)
         if detect_errors_only:
             return error_cells_df
@@ -1475,7 +1483,7 @@ class RepairModel():
 
         train_df = self._spark.table(env["partial_repaired"])
         models = self._build_repair_models(
-            train_df, target_columns, continous_attrs, env["distinct_stats"], env["pairwise_attr_stats"])
+            train_df, target_columns, continous_attrs, distinct_stats, pairwise_stats)
 
         #################################################################################
         # 3. Repair Phase
