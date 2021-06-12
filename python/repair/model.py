@@ -327,7 +327,7 @@ class RepairModel():
         # Temporary views to keep intermediate results; these views are automatically
         # created when repairing data, and then dropped finally.
         #
-        # TODO: Move this variable into a runtime `env`
+        # TODO: Move this variable into a runtime env
         self._intermediate_views_on_runtime: List[str] = []
 
         # JVM interfaces for Data Repair APIs
@@ -741,6 +741,10 @@ class RepairModel():
             return wrapper
         return decorator
 
+    def _register_table(self, view_name: str) -> str:
+        self._intermediate_views_on_runtime.append(view_name)
+        return view_name
+
     def _register_and_get_df(self, view_name: str) -> DataFrame:
         self._intermediate_views_on_runtime.append(view_name)
         return self._spark.table(view_name)
@@ -825,8 +829,7 @@ class RepairModel():
         ret_as_json = json.loads(self._repair_api.convertErrorCellsToNull(
             input_table, noisy_cells, str(self.row_id)))
 
-        self._register_and_get_df(ret_as_json["repair_base"])
-        return ret_as_json["repair_base"]
+        return self._register_table(ret_as_json["repair_base"])
 
     def _preprocess(self, input_table: str, continous_attrs: List[str]) -> Tuple[str, str]:
         # Filters out attributes having large domains and makes continous values
@@ -886,27 +889,26 @@ class RepairModel():
 
         return ret_as_json["cell_domain"], distinct_stats, ret_as_json["pairwise_attr_stats"]
 
-    def _extract_error_cells(self, env: Dict[str, Any], cell_domain_df: DataFrame,
-                             repair_base: str, num_input_rows: int, num_attrs: int) -> DataFrame:
+    def _extract_error_cells(self, cell_domain: str, repair_base: str,
+                             num_input_rows: int, num_attrs: int) -> Tuple[DataFrame, str, str]:
         # Fixes cells if an inferred value is the same with an initial one
         fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) value"
-        weak_df = cell_domain_df.selectExpr(
+        weak_df = self._spark.table(cell_domain).selectExpr(
             str(self.row_id), "attribute", "current_value", fix_cells_expr).cache()
         error_cells_df = weak_df.where("value IS NULL").drop("value").cache()
         weak_df = weak_df.where("value IS NOT NULL") \
             .selectExpr(str(self.row_id), "attribute", "value repaired")
-        env["weak"] = self._create_temp_view(weak_df.cache(), "weak")
-        env["partial_repaired"] = self._create_temp_view(
-            self._repair_attrs(env["weak"], repair_base),
-            "partial_repaired")
+        weak = self._create_temp_view(weak_df.cache(), "weak")
+        partial_repaired = self._create_temp_view(
+            self._repair_attrs(weak, repair_base), "partial_repaired")
 
         logging.info('[Error Detection Phase] {} noisy cells fixed and '
                      '{} error cells ({}%) remaining...'.format(
-                         self._spark.table(env["weak"]).count(),
+                         self._spark.table(weak).count(),
                          error_cells_df.count(),
                          error_cells_df.count() * 100.0 / (num_attrs * num_input_rows)))
 
-        return error_cells_df
+        return error_cells_df, weak, partial_repaired
 
     def _split_clean_and_dirty_rows(
             self, partial_repaired_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame, List[str]]:
@@ -1436,9 +1438,6 @@ class RepairModel():
              compute_repair_prob: bool, compute_repair_score: bool,
              repair_data: bool) -> DataFrame:
 
-        # A holder to keep runtime variables
-        env: Dict[str, Any] = {}
-
         #################################################################################
         # 1. Error Detection Phase
         #################################################################################
@@ -1460,9 +1459,8 @@ class RepairModel():
             input_table, noisy_cells, continous_attrs)
 
         # If `detect_errors_only` is True, returns found error cells
-        cell_domain_df = self._spark.table(cell_domain)
-        error_cells_df = self._extract_error_cells(
-            env, cell_domain_df, repair_base, num_input_rows, num_attrs)
+        error_cells_df, weak, partial_repaired = self._extract_error_cells(
+            cell_domain, repair_base, num_input_rows, num_attrs)
         if detect_errors_only:
             return error_cells_df
 
@@ -1477,7 +1475,7 @@ class RepairModel():
 
         # Selects rows for training, build models, and repair cells
         fixed_rows_df, dirty_rows_df, target_columns = self._split_clean_and_dirty_rows(
-            self._spark.table(env["partial_repaired"]), error_cells_df)
+            self._spark.table(partial_repaired), error_cells_df)
         if compute_training_target_hist:
             df = fixed_rows_df.selectExpr(target_columns)
             hist_df = self._convert_to_histogram(df)
@@ -1492,7 +1490,7 @@ class RepairModel():
             raise ValueError("At least one feature is needed to repair error cells, "
                              "but no features found")
 
-        train_df = self._spark.table(env["partial_repaired"])
+        train_df = self._spark.table(partial_repaired)
         models = self._build_repair_models(
             train_df, target_columns, continous_attrs, distinct_stats, pairwise_stats)
 
