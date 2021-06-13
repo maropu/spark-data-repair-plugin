@@ -792,7 +792,6 @@ class RepairModel():
             d.setUp(str(self.row_id), input_table)  # type: ignore
 
         error_cells_dfs = [d.detect() for d in self.error_detectors]
-
         err_cells_df = functools.reduce(lambda x, y: x.union(y), error_cells_dfs)
         return err_cells_df.distinct().cache()
 
@@ -850,14 +849,14 @@ class RepairModel():
         return ret_as_json["discrete_features"], ret_as_json["distinct_stats"]
 
     def _compute_attr_stats(self, discrete_features: str, noisy_cells: str) -> str:
-        ret = json.loads(self._repair_api.computeAttrStats(
+        ret_as_json = json.loads(self._repair_api.computeAttrStats(
             discrete_features,
             noisy_cells,
             str(self.row_id),
             self.attr_stat_sample_ratio,
             self.attr_stat_threshold))
-        self._intermediate_views_on_runtime.append(ret["attr_stats"])
-        return ret["attr_stats"]
+        self._intermediate_views_on_runtime.append(ret_as_json["attr_stats"])
+        return ret_as_json["attr_stats"]
 
     @_spark_job_group(name="cell domain analysis")
     def _analyze_error_cell_domain(
@@ -922,8 +921,8 @@ class RepairModel():
 
     def _convert_to_histogram(self, df: DataFrame) -> DataFrame:
         input_table = self._create_temp_view(df)
-        ret_as_json = self._repair_api.convertToHistogram(input_table, self.discrete_thres)
-        return self._spark.table(json.loads(ret_as_json)["histogram"])
+        ret_as_json = json.loads(self._repair_api.convertToHistogram(input_table, self.discrete_thres))
+        return self._spark.table(ret_as_json["histogram"])
 
     def _show_histogram(self, df: DataFrame) -> None:
         import matplotlib.pyplot as plt  # type: ignore[import]
@@ -995,9 +994,8 @@ class RepairModel():
     def _build_rule_model(self, train_df: DataFrame, target_columns: List[str], x: str, y: str) -> Any:
         # TODO: For attributes having large domain size, we need to rewrite it as a join query to repair data
         input_view = self._create_temp_view(train_df)
-        ret_as_json = self._repair_api.computeFunctionDepMap(input_view, x, y)
-        fd_map = json.loads(ret_as_json)
-        return FunctionalDepModel(x, fd_map)
+        func_deps = json.loads(self._repair_api.computeFunctionDepMap(input_view, x, y))
+        return FunctionalDepModel(x, func_deps)
 
     def _get_functional_deps(self, train_df: DataFrame) -> Optional[Dict[str, List[str]]]:
         constraint_detectors = list(filter(lambda x: isinstance(x, ConstraintErrorDetector), self.error_detectors))
@@ -1005,8 +1003,8 @@ class RepairModel():
         if len(constraint_detectors) == 1:
             input_view = self._create_temp_view(train_df)
             constraint_path = constraint_detectors[0].constraint_path  # type: ignore
-            ret_as_json = self._repair_api.computeFunctionalDeps(input_view, constraint_path)
-            return json.loads(ret_as_json)
+            func_deps = json.loads(self._repair_api.computeFunctionalDeps(input_view, constraint_path))
+            return func_deps
         else:
             return None
 
@@ -1445,12 +1443,12 @@ class RepairModel():
         # If no error found, we don't need to do nothing
         input_df = self._spark.table(input_table)
         noisy_cells_df = self._detect_errors(input_table, num_attrs, num_input_rows)
-        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells")
         if noisy_cells_df.count() == 0:  # type: ignore
-            logging.info("Any error cells not found, so the input data is already clean")
+            logging.info("Any error cell not found, so the input data is already clean")
             return noisy_cells_df if not repair_data else input_df
 
         # Sets NULL to noisy cells
+        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells")
         repair_base = self._prepare_repair_base(
             input_table, noisy_cells, num_input_rows, num_attrs)
 
