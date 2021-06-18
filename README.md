@@ -261,5 +261,5 @@ scavenger.repair
 ## Bug reports
 
 If you hit some bugs and requests, please leave some comments on [Issues](https://github.com/maropu/spark-data-repair-plugin/issues)
-or Twitter([@maropu](http://twitter.com/#!/maropu)).
+or Twitter ([@maropu](http://twitter.com/#!/maropu)).
 
