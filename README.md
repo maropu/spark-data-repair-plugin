@@ -178,6 +178,7 @@ for getting them in pre-processing as follows;
 
 If you want to select some of repaired updates based on theier probabilities, you can set `True` to
 `compute_repair_prob` for getting the probabilities from built statistical models.
+
 ```
 # To get predicted probabilities, computes repair updates with `compute_repair_prob`=`True`
 >>> repair_updates_df = scavenger.repair.setInput("adult").setRowId("tid").run(compute_repair_prob=True)
@@ -199,6 +200,33 @@ If you want to select some of repaired updates based on theier probabilities, yo
 >>> clean_df = scavenger.misc.options({"repair_updates": "predicted", "table_name": "adult", "row_id": "tid"}).repair()
 >>> clean_df.show()
 <output with the four cells repaired>
+```
+
+## Run a Repair Job via spark-submit
+
+You can run a repair job on your Spark cluster as followsing:
+
+```
+$ echo $SPARK_HOME
+/tmp/spark-3.1.2-bin-hadoop3.2
+
+$ ./bin/spark-submit ./python/main.py --input adult --output repaired --row-id tid
+Predicted repair values are saved as 'repaired'
+
+$ $SPARK_HOME/bin/spark-shell
+
+scala> spark.table("repaired").show()
++---+---------+-------------+-----------+
+|tid|attribute|current_value|   repaired|
++---+---------+-------------+-----------+
+|  7|      Sex|         null|     Female|
+| 12|      Age|         null|      18-21|
+| 12|      Sex|         null|     Female|
+|  3|      Sex|         null|     Female|
+|  5|      Age|         null|      18-21|
+|  5|   Income|         null|MoreThan50K|
+| 16|   Income|         null|MoreThan50K|
++---+---------+-------------+-----------+
 ```
 
 ## Major Configurations
