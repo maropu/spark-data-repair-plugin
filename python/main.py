@@ -81,4 +81,3 @@ if __name__ == "__main__":
 
     print(f"Predicted repair values are saved as '{args.output}'")
     spark.stop()
-
