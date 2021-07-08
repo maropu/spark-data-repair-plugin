@@ -225,9 +225,10 @@ scavenger.repair
   // Parameters for Repair Model Training
   .setMaxTrainingRowNum(int)                   // max number of training rows to build statistical models (default: 10000)
   .setMaxTrainingColumnNum(int)                // max number of training columns to build statistical models (default: None)
+  .setTrainingDataRebalancingEnabled(bool)     // whether to rebalance class labels in training data (default: False)
   .setSmallDomainThreshold(int)                // max domain size for low-cardinality catogory encoding (default: 12)
   .setRuleBasedModelEnabled(bool)              // whether to use rule-based models (e.g., FD) if possible (default: False)
-  .setParallelStatTrainingEnabled(bool)        // whether to run multiples tasks to build stat repair models (default: False).
+  .setParallelStatTrainingEnabled(bool)        // whether to run multiples tasks to build stat repair models (default: False)
 
   // Parameters for Repairing
   .setMaximalLikelihoodRepairEnabled(bool)     // whether to enable maximal likelihood repair (default: False)

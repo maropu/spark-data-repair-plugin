@@ -45,6 +45,7 @@ model to repair them.
     RepairModel.setMaximalLikelihoodRepairEnabled
     RepairModel.setMaxTrainingColumnNum
     RepairModel.setMaxTrainingRowNum
+    RepairModel.setTrainingDataRebalancingEnabled
     RepairModel.setMinCorrThreshold
     RepairModel.setRepairDelta
     RepairModel.setRowId

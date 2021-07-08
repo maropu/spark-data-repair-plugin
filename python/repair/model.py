@@ -271,6 +271,27 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
     return model, params, -min_loss
 
 
+def _rebalance_training_data(X: pd.DataFrame, y: pd.Series) -> Tuple[pd.DataFrame, pd.Series]:
+    # TODO: Any more smart way to handle NaN cells
+    from collections import Counter
+    hist = dict(Counter(y).items())  # type: ignore
+    median = int(np.median([count for key, count in hist.items()]))
+    ros_targets = dict(map(lambda x: (x[0], median), filter(lambda x: x[1] < median, hist.items())))
+    if len(ros_targets) > 0:
+        from imblearn.over_sampling import RandomOverSampler
+        sampler = RandomOverSampler(random_state=42, sampling_strategy=ros_targets)
+        X, y = sampler.fit_resample(X, y)
+
+    rus_targets = dict(map(lambda x: (x, median), [k for k in hist.keys() if k not in ros_targets]))
+    if len(rus_targets) > 0:
+        from imblearn.under_sampling import RandomUnderSampler
+        sampler = RandomUnderSampler(random_state=42, sampling_strategy=rus_targets)
+        X, y = sampler.fit_resample(X, y)
+
+    logging.debug("class hist: {} => {}".format(hist.items(), Counter(y).items()))
+    return X, y
+
+
 class RepairModel():
     """
     Interface to detect error cells in given input data and build a statistical
@@ -303,8 +324,9 @@ class RepairModel():
         # Parameters for repair model training
         self.max_training_row_num: int = 10000
         self.max_training_column_num: Optional[int] = None
+        self.training_data_rebalancing_enabled: bool = False
         self.small_domain_threshold: int = 12
-        self.rule_based_model_enabled: bool = True
+        self.rule_based_model_enabled: bool = False
         self.parallel_stat_training_enabled: bool = False
 
         # Parameters for repairing
@@ -594,6 +616,20 @@ class RepairModel():
             the max number of columns (default: None).
         """
         self.max_training_column_num = n
+        return self
+
+    @argtype_check  # type: ignore
+    def setTrainingDataRebalancingEnabled(self, enabled: bool) -> "RepairModel":
+        """Specifies whether to enable class rebalancing in training data.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        enabled: bool
+            If set to ``True``, rebalance class labels in training data (default: ``False``).
+        """
+        self.training_data_rebalancing_enabled = enabled
         return self
 
     @argtype_check  # type: ignore
@@ -1047,6 +1083,11 @@ class RepairModel():
             logging.debug("{} encoders transform ({})=>({})".format(
                 len(transformer_map[y]), ",".join(feature_map[y]), ",".join(X.columns)))
 
+            # Re-balance target classes in training data
+            X, _y = _rebalance_training_data(X, train_pdf[y]) \
+                if is_discrete and self.training_data_rebalancing_enabled \
+                else (X, train_pdf[y])
+
             logging.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
                 index, len(target_columns),
                 "classfier" if y not in continous_attrs else "regressor",
@@ -1054,7 +1095,7 @@ class RepairModel():
                 len(train_pdf),
                 f" #class={num_class_map[y]}" if num_class_map[y] > 0 else ""))
             ((model, params, score), elapsed_time) = \
-                _build_lgb_model(X, train_pdf[y], is_discrete, num_class_map[y], n_jobs=-1, opts=self.opts)
+                _build_lgb_model(X, _y, is_discrete, num_class_map[y], n_jobs=-1, opts=self.opts)
             logging.info("Finishes building '{}' model...  score={} elapsed={}s".format(
                 y, score, elapsed_time))
 
@@ -1123,6 +1164,8 @@ class RepairModel():
         broadcasted_continous_attrs = self._spark.sparkContext.broadcast(continous_attrs)
         broadcasted_transformer_map = self._spark.sparkContext.broadcast(transformer_map)
         broadcasted_num_class_map = self._spark.sparkContext.broadcast(num_class_map)
+        broadcasted_training_data_rebalancing_enabled = \
+            self._spark.sparkContext.broadcast(self.training_data_rebalancing_enabled)
         broadcasted_n_jobs = self._spark.sparkContext.broadcast(max(1, int(self._num_cores_per_executor() / num_tasks)))
         broadcasted_opts = self._spark.sparkContext.broadcast(self.opts)
 
@@ -1135,6 +1178,7 @@ class RepairModel():
             transformers = broadcasted_transformer_map.value[y]
             is_discrete = y not in continous_attrs
             num_class = broadcasted_num_class_map.value[y]
+            training_data_rebalancing_enabled = broadcasted_training_data_rebalancing_enabled
             n_jobs = broadcasted_n_jobs.value
             opts = broadcasted_opts.value
 
@@ -1142,8 +1186,12 @@ class RepairModel():
             for transformer in transformers:
                 X = transformer.transform(X)
 
+            # Re-balance target classes in training data
+            X, y_ = _rebalance_training_data(X, pdf[y]) if is_discrete and training_data_rebalancing_enabled \
+                else (X, pdf[y])
+
             ((model, params, score), elapsed_time) = \
-                _build_lgb_model(X, pdf[y], is_discrete, num_class, n_jobs, opts)
+                _build_lgb_model(X, y_, is_discrete, num_class, n_jobs, opts)
             row = [y, pickle.dumps(model), score, elapsed_time]
             return pd.DataFrame([row])
 
