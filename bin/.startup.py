@@ -27,6 +27,7 @@ from pyspark.sql import SparkSession
 # to the network timeout value.
 spark = SparkSession.builder \
     .config("spark.network.timeout", "21600s") \
+    .enableHiveSupport() \
     .getOrCreate()
 
 # Suppress warinig messages in PySpark
