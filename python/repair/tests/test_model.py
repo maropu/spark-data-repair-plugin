@@ -186,6 +186,17 @@ class RepairModelTests(ReusedSQLTestCase):
             self.spark.sql("SHOW VIEWS").count(),
             current_view_nums)
 
+    def test_parallel_stat_training(self):
+        expected_result = self.spark.table("adult_repair") \
+            .orderBy("tid", "attribute").collect()
+        test_model = self._build_model() \
+            .setTableName("adult") \
+            .setRowId("tid") \
+            .setParallelStatTrainingEnabled(True)
+        self.assertEqual(
+            test_model.run().orderBy("tid", "attribute").collect(),
+            expected_result)
+
     def test_table_input(self):
         expected_result = self.spark.table("adult_repair") \
             .orderBy("tid", "attribute").collect()
