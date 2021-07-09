@@ -17,11 +17,16 @@
 # limitations under the License.
 #
 
+import datetime
 import logging
 import warnings
 from argparse import ArgumentParser
 
 from pyspark.sql import SparkSession
+
+
+def _create_temp_name(prefix: str = "temp") -> str:
+    return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
 
 
 if __name__ == "__main__":
@@ -75,9 +80,16 @@ if __name__ == "__main__":
     repaired_df = scavenger.repair \
         .setTableName(args.input) \
         .setRowId(args.row_id) \
-        .run() \
-        .write \
-        .saveAsTable(args.output)
+        .run()
 
-    print(f"Predicted repair values are saved as '{args.output}'")
-    spark.stop()
+    try:
+        repaired_df.write.saveAsTable(args.output)
+    except:
+        temp_output_table_name = _create_temp_name()
+        repaired_df.write.saveAsTable(temp_output_table_name)
+        print(f"Table '{args.output}' already exists, so saved the predicted repair values " \
+              f"as '{temp_output_table_name}' instead")
+    else:
+        print(f"Predicted repair values are saved as '{args.output}'")
+    finally:
+        spark.stop()
