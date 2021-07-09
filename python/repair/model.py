@@ -321,7 +321,7 @@ def _rebalance_training_data(X: pd.DataFrame, y: pd.Series, target: str) -> Tupl
         sampler = RandomUnderSampler(random_state=42, sampling_strategy=dict(rus_targets))
         X, y = sampler.fit_resample(X, y)
 
-    logging.warning("class hist: {} => {}".format(hist.items(), Counter(y).items()))
+    logging.debug("class hist(median={}): {} => {}".format(median, hist.items(), Counter(y).items()))
     return X, y
 
 
