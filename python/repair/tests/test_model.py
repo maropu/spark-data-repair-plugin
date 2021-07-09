@@ -608,7 +608,6 @@ class RepairModelTests(ReusedSQLTestCase):
             self.assertTrue(rows[1].repaired is not None)
             self.assertTrue(rows[2].repaired is not None)
             self.assertTrue(rows[3].repaired is not None)
-            self.assertTrue(False)
 
 
 if __name__ == "__main__":

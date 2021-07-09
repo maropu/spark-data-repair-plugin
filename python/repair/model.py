@@ -1208,7 +1208,7 @@ class RepairModel():
             transformers = broadcasted_transformer_map.value[y]
             is_discrete = y not in continous_attrs
             num_class = broadcasted_num_class_map.value[y]
-            training_data_rebalancing_enabled = broadcasted_training_data_rebalancing_enabled
+            training_data_rebalancing_enabled = broadcasted_training_data_rebalancing_enabled.value
             n_jobs = broadcasted_n_jobs.value
             opts = broadcasted_opts.value
 
