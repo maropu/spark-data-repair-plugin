@@ -25,6 +25,9 @@ set -e -o pipefail
 if [ -z "${SPARK_HOME}" ]; then
   echo "env SPARK_HOME not defined" 1>&2
   exit 1
+elif ! command -v conda &> /dev/null; then
+  echo "You should install conda first" 1>&2
+  exit 1
 fi
 
 # Sets the root directory
@@ -43,13 +46,30 @@ find_package() {
   fi
 }
 
-# Do some preparations before launching pyspark
+# Do some preparations before submiting a job
 find_package
 
-# Activate a conda virtual env for required dependencies
-# TODO: Needs to put all the dependencies in `python/lib/repair.zip`
-. ${ROOT_DIR}/bin/conda.sh && activate_conda_virtual_env "${ROOT_DIR}"
+# Check if a virtual env already exists or not
+PYSPARK_CONDA_ENV="pyspark-py36-conda-env"
+if [ -z "$(conda env list | grep "$PYSPARK_CONDA_ENV ")" ]; then
+  conda env create -q -n $PYSPARK_CONDA_ENV python=3.6 --file ${ROOT_DIR}/bin/conda-reduced.yml
+fi
+
+# Activate a conda virtual env for a driver
+source activate $PYSPARK_CONDA_ENV
+
+# Package the required dependencies for executors if necessary
+PYSPARK_EXECUTOR_ENV=${ROOT_DIR}/bin/pyspark-py36-conda-env.tar.gz
+if [ ! -f "$PYSPARK_EXECUTOR_ENV" ]; then
+  conda pack -q -f -o $PYSPARK_EXECUTOR_ENV
+fi
 
 # Then, submit a job with given arguments
-${SPARK_HOME}/bin/spark-submit --jars=${PACKAGE} --py-files ${ROOT_DIR}/python/lib/repair.zip "$@"
+# PYSPARK_DRIVER_PYTHON=python
+# export PYSPARK_PYTHON=./environment/bin/python
+${SPARK_HOME}/bin/spark-submit \
+  --jars=${PACKAGE} \
+  --archives ${PYSPARK_EXECUTOR_ENV}#environment \
+  --py-files ${ROOT_DIR}/python/lib/repair.zip \
+  "$@"
 

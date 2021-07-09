@@ -18,7 +18,7 @@
 #
 
 """
-Prepares a conda virtual env for Python JIT Booster
+Prepares a conda virtual env for PySpark
 """
 
 import hashlib
@@ -31,7 +31,7 @@ from argparse import ArgumentParser
 
 # Environment variable indicating a path to a conda installation.
 # This script will default to running "conda" if unset
-PYFUNC_JIT_BOOST_CONDA_HOME = "PYFUNC_JIT_BOOST_CONDA_HOME"
+PYSPARK_CONDA_HOME = "PYSPARK_CONDA_HOME"
 
 
 class ShellCommandException(Exception):
@@ -93,11 +93,11 @@ def _get_conda_bin_executable(executable_name):
     subdirectory of a conda installation.
 
     The conda home directory (expected to contain a 'bin' subdirectory) is configurable via the
-    ``PYFUNC_JIT_BOOST_CONDA_HOME`` environment variable. If
-    ``PYFUNC_JIT_BOOST_CONDA_HOME`` is unspecified, this method simply returns the passed-in
+    ``PYSPARK_CONDA_HOME`` environment variable. If
+    ``PYSPARK_CONDA_HOME`` is unspecified, this method simply returns the passed-in
     executable name.
     """
-    conda_home = os.environ.get(PYFUNC_JIT_BOOST_CONDA_HOME)
+    conda_home = os.environ.get(PYSPARK_CONDA_HOME)
     if conda_home:
         return os.path.join(conda_home, "bin/{}".format(executable_name))
     return executable_name
