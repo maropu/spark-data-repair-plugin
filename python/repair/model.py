@@ -271,24 +271,57 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
     return model, params, -min_loss
 
 
-def _rebalance_training_data(X: pd.DataFrame, y: pd.Series) -> Tuple[pd.DataFrame, pd.Series]:
-    # TODO: Any more smart way to handle NaN cells
+def _create_temp_name(prefix: str = "temp") -> str:
+    return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
+
+
+def _rebalance_training_data(X: pd.DataFrame, y: pd.Series, target: str) -> Tuple[pd.DataFrame, pd.Series]:
+    # Uses median as the number of training rows for each class
     from collections import Counter
     hist = dict(Counter(y).items())  # type: ignore
     median = int(np.median([count for key, count in hist.items()]))
-    ros_targets = dict(map(lambda x: (x[0], median), filter(lambda x: x[1] < median, hist.items())))
-    if len(ros_targets) > 0:
-        from imblearn.over_sampling import RandomOverSampler
-        sampler = RandomOverSampler(random_state=42, sampling_strategy=ros_targets)
-        X, y = sampler.fit_resample(X, y)
 
-    rus_targets = dict(map(lambda x: (x, median), [k for k in hist.keys() if k not in ros_targets]))
+    def _split_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
+        X = df[df.columns[df.columns != target]]  # type: ignore
+        y = df[target]
+        return X, y
+
+    # Filters out rows having NaN values for over-sampling
+    X[target] = y
+    X_notna, y_notna = _split_data(X.dropna())
+    X_na, y_na = _split_data(X[X.isnull().any(axis=1)])
+
+    # Over-sampling for training data whose row number is smaller than the median value
+    hist_na = dict(Counter(y_na).items())  # type: ignore
+    smote_targets = []
+    kn = 5  # `k_neighbors` default value in `SMOTEN`
+    for key, count in hist.items():
+        if count < median:
+            nna = hist_na[key] if key in hist_na else 0
+            if count - nna > kn:
+                smote_targets.append((key, median - nna))
+            else:
+                logging.warning(f"Over-sampling of '{key}' in y='{target}' failed because the number of the clean rows "
+                                f"is too small: {count - nna}")
+
+    if len(smote_targets) > 0:
+        from imblearn.over_sampling import SMOTEN
+        sampler = SMOTEN(random_state=42, sampling_strategy=dict(smote_targets), k_neighbors=kn)
+        X_notna, y_notna = sampler.fit_resample(X_notna, y_notna)
+
+    X = pd.concat([X_notna, X_na])
+    y = pd.concat([y_notna, y_na])
+
+    # Under-sampling for training data whose row number is greater than the median value
+    rus_targets = list(map(lambda x: (x[0], median), filter(lambda x: x[1] > median, hist.items())))
     if len(rus_targets) > 0:
+        # NOTE: The other smarter implementations can skew samples if there are many rows having NaN values,
+        # so we just use `RandomUnderSampler` here.
         from imblearn.under_sampling import RandomUnderSampler
-        sampler = RandomUnderSampler(random_state=42, sampling_strategy=rus_targets)
+        sampler = RandomUnderSampler(random_state=42, sampling_strategy=dict(rus_targets))
         X, y = sampler.fit_resample(X, y)
 
-    logging.debug("class hist: {} => {}".format(hist.items(), Counter(y).items()))
+    logging.warning("class hist: {} => {}".format(hist.items(), Counter(y).items()))
     return X, y
 
 
@@ -785,12 +818,9 @@ class RepairModel():
         self._intermediate_views_on_runtime.append(view_name)
         return self._spark.table(view_name)
 
-    def _create_temp_name(self, prefix: str = "temp") -> str:
-        return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
-
     def _create_temp_view(self, df: Any, prefix: str = "temp") -> str:
         assert isinstance(df, DataFrame)
-        temp_name = self._create_temp_name(prefix)
+        temp_name = _create_temp_name(prefix)
         df.createOrReplaceTempView(temp_name)
         self._intermediate_views_on_runtime.append(temp_name)
         return temp_name
@@ -1084,7 +1114,7 @@ class RepairModel():
                 len(transformer_map[y]), ",".join(feature_map[y]), ",".join(X.columns)))
 
             # Re-balance target classes in training data
-            X, _y = _rebalance_training_data(X, train_pdf[y]) \
+            X, _y = _rebalance_training_data(X, train_pdf[y], y) \
                 if is_discrete and self.training_data_rebalancing_enabled \
                 else (X, train_pdf[y])
 
@@ -1115,7 +1145,7 @@ class RepairModel():
 
         # To build repair models in parallel, it assigns each model training into a single task
         train_dfs_per_target: List[DataFrame] = []
-        target_column = self._create_temp_name("target_column")
+        target_column = _create_temp_name("target_column")
 
         for y in target_columns:
             if y in models:
@@ -1187,7 +1217,7 @@ class RepairModel():
                 X = transformer.transform(X)
 
             # Re-balance target classes in training data
-            X, y_ = _rebalance_training_data(X, pdf[y]) if is_discrete and training_data_rebalancing_enabled \
+            X, y_ = _rebalance_training_data(X, pdf[y], y) if is_discrete and training_data_rebalancing_enabled \
                 else (X, pdf[y])
 
             ((model, params, score), elapsed_time) = \
@@ -1349,7 +1379,7 @@ class RepairModel():
 
         # Sets a grouping key for inference
         num_parallelism = self._spark.sparkContext.defaultParallelism
-        grouping_key = self._create_temp_name("grouping_key")
+        grouping_key = _create_temp_name("grouping_key")
         dirty_rows_df = dirty_rows_df.withColumn(
             grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
 
