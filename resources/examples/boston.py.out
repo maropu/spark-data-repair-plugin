@@ -80,6 +80,8 @@ only showing top 1 row
 ...   .setDbName("default") \
 ...   .setTableName("boston") \
 ...   .setRowId("tid") \
+...   .setDiscreteThreshold(30) \
+...   .option("hp.no_progress_loss", "300") \
 ...   .run()
 Detecting errors in a table `default.boston` (506 rows x 14 cols)...
 ...
@@ -104,7 +106,7 @@ Detecting errors in a table `default.boston` (506 rows x 14 cols)...
 >>> f1 = (2.0 * precision * recall) / (precision + recall)
 >>> 
 >>> print("Precision={} Recall={} F1={}".format(precision, recall, f1))
-Precision=0.8733333333333333 Recall=0.5177865612648221 F1=0.6501240694789083
+Precision=0.9666666666666667 Recall=0.9666666666666667 F1=0.9666666666666667
 >>> 
 >>> # Computes performance numbers for continous attributes (RMSE)
 ... is_continous = f"NOT({is_discrete)"

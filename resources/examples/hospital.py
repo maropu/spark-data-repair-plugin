@@ -42,8 +42,8 @@ repaired_df = scavenger.repair \
     .setRowId("tid") \
     .setErrorDetectors(error_detectors) \
     .setDiscreteThreshold(100) \
-    .setInferenceOrder("entropy") \
-    .option("hp.no_progress_loss", "1000") \
+    .setRuleBasedModelEnabled(True) \
+    .option("hp.no_progress_loss", "100") \
     .run()
 
 # Computes performance numbers (precision & recall)

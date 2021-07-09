@@ -91,5 +91,5 @@ only showing top 1 row
 ...   .rmse
 >>> 
 >>> print(f"RMSE={rmse}")
-RMSE=0.4064564495531232
+RMSE=0.34484599368184604
 

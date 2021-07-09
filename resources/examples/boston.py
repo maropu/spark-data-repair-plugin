@@ -40,7 +40,7 @@ repaired_df = scavenger.repair \
     .setTableName("boston") \
     .setRowId("tid") \
     .setDiscreteThreshold(30) \
-    .setInferenceOrder("entropy") \
+    .option("hp.no_progress_loss", "300") \
     .run()
 
 # Computes performance numbers for discrete attributes (precision & recall)
