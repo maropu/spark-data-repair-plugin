@@ -19,7 +19,7 @@ jobs:
     env:
       SPARK_LOCAL_IP: localhost
       CONDA_DISABLED: 1
-      MAVEN_OPTS: -Xmx4g
+      MAVEN_OPTS: -Xmx7g
     steps:
       - name: Checkout Scavenger repository
         uses: actions/checkout@v2
@@ -55,7 +55,7 @@ jobs:
       - name: Run tests
         run: |
           ./build/mvn -q clean package
-          ./bin/run-tests
+          ./bin/run-tests --parallelism 1
       - name: Upload test results to report
         if: always()
         uses: actions/upload-artifact@v2
