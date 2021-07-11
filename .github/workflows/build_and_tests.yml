@@ -19,6 +19,7 @@ jobs:
     env:
       SPARK_LOCAL_IP: localhost
       CONDA_DISABLED: 1
+      MAVEN_OPTS: -Xmx4g
     steps:
       - name: Checkout Scavenger repository
         uses: actions/checkout@v2
