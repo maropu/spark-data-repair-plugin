@@ -1190,13 +1190,17 @@ class RepairModel():
         if num_tasks == 0:
             return models
 
+        # TODO: A larger `training_n_jobs` value can cause high pressure on executors
+        training_n_jobs = max(1, int(self._num_cores_per_executor() / num_tasks))
+        logging.debug(f"Setting {training_n_jobs} to `n_jobs` for training in parallel")
+
         broadcasted_target_column = self._spark.sparkContext.broadcast(target_column)
         broadcasted_continous_attrs = self._spark.sparkContext.broadcast(continous_attrs)
         broadcasted_transformer_map = self._spark.sparkContext.broadcast(transformer_map)
         broadcasted_num_class_map = self._spark.sparkContext.broadcast(num_class_map)
         broadcasted_training_data_rebalancing_enabled = \
             self._spark.sparkContext.broadcast(self.training_data_rebalancing_enabled)
-        broadcasted_n_jobs = self._spark.sparkContext.broadcast(max(1, int(self._num_cores_per_executor() / num_tasks)))
+        broadcasted_n_jobs = self._spark.sparkContext.broadcast(training_n_jobs)
         broadcasted_opts = self._spark.sparkContext.broadcast(self.opts)
 
         @functions.pandas_udf("target: STRING, model: BINARY, score: DOUBLE, elapsed: DOUBLE",
