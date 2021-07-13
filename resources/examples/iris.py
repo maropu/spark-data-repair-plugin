@@ -37,10 +37,18 @@ repaired_df = scavenger.repair \
 cmp_df = repaired_df.join(spark.table("iris_clean"), ["tid", "attribute"], "inner")
 cmp_df.orderBy("attribute").show()
 
-# Computes performance numbers for continous attributes (RMSE)
+# Show a scatter plog for repaired/correct_val values
+import matplotlib.pyplot as plt
+g = cmp_df.selectExpr("double(repaired)", "double(correct_val)").toPandas().plot.scatter(x="correct_val", y="repaired")
+plt.show(g)
+
+# Computes performance numbers for continous attributes (RMSE/MAE)
 n = repaired_df.count()
 rmse = cmp_df.selectExpr(f"sqrt(sum(pow(correct_val - repaired, 2.0)) / {n}) rmse") \
     .collect()[0] \
     .rmse
+mae = cmp_df.selectExpr(f"sum(abs(correct_val - repaired)) / {n} mae") \
+    .collect()[0] \
+    .mae
 
-print(f"RMSE={rmse}")
+print(f"RMSE={rmse} MAE={mae} RMSE/MAE={rmse/mae}")

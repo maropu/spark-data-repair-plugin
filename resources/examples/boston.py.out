@@ -110,14 +110,21 @@ Precision=0.9666666666666667 Recall=0.9666666666666667 F1=0.9666666666666667
 >>> 
 >>> # Computes performance numbers for continous attributes (RMSE)
 ... is_continous = f"NOT({is_discrete)"
->>> n = repaired_df.count()
->>> rmse = repaired_df \
-...   .where(is_continous) \
-...   .join(spark.table("boston_clean"), ["tid", "attribute"], "inner") \
-...   .selectExpr(f"sqrt(sum(pow(correct_val - repaired, 2.0)) / {n}) rmse") \
-...   .collect()[0] \
-...   .rmse
->>> 
->>> print(f"RMSE={rmse}")
-RMSE=2.0626999993860706
+... continous_pdf = pdf.where(is_continous)
+...
+>>> # Show a scatter plog for repaired/correct_val values
+... import matplotlib.pyplot as plt
+... g = continous_pdf.selectExpr("double(repaired)", "double(correct_val)").toPandas().plot.scatter(x="correct_val", y="repaired")
+... plt.show(g)
+...
+>>> n = continous_pdf.count()
+... rmse = continous_pdf.selectExpr(f"sqrt(sum(pow(correct_val - repaired, 2.0)) / {n}) rmse") \
+...     .collect()[0] \
+...     .rmse
+... mae = continous_pdf.selectExpr(f"sum(abs(correct_val - repaired)) / {n} mae") \
+...     .collect()[0] \
+...     .mae
+...
+>>> print(f"RMSE={rmse} MAE={mae} RMSE/MAE={rmse/mae}")
+RMSE=4.464236826877203 MAE=2.3646451454614987 RMSE/MAE=1.8879098352010593
 
