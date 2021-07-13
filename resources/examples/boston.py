@@ -69,7 +69,8 @@ continous_pdf = pdf.where(is_continous)
 
 # Show a scatter plog for repaired/correct_val values
 import matplotlib.pyplot as plt
-g = continous_pdf.selectExpr("double(repaired)", "double(correct_val)").toPandas().plot.scatter(x="correct_val", y="repaired")
+g = continous_pdf.selectExpr("double(repaired)", "double(correct_val)") \
+    .toPandas().plot.scatter(x="correct_val", y="repaired")
 plt.show(g)
 
 n = continous_pdf.count()
