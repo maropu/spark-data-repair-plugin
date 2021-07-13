@@ -204,7 +204,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
 
         msg = f"target:hospital precision:{precision} recall:{recall} f1:{f1}"
         logging.info(msg)
-        self.assertTrue(precision > 0.85 and recall > 0.85 and f1 > 0.85, msg=msg)
+        self.assertTrue(precision > 0.90 and recall > 0.90 and f1 > 0.90, msg=msg)
 
 
 if __name__ == "__main__":

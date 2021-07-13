@@ -556,7 +556,6 @@ class RepairModelTests(ReusedSQLTestCase):
         self.assertEqual(pmf[2].tolist(), [1.0])
         self.assertEqual(pmf[3].tolist(), [1.0])
 
-    @unittest.skip(reason="TODO: Fix this")
     def test_timeout(self):
         with Eventually(180):
             rows = RepairModel() \
