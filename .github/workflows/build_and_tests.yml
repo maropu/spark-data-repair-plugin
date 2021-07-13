@@ -11,10 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # TODO: On jdk9+, Pandas UDF does not work correctly
-        # because of Arrow integration.
-        # java: [1.8, 11]
-        java: [1.8]
+        java: [1.8, 11]
         python: [3.6, 3.7, 3.8]
     env:
       SPARK_LOCAL_IP: localhost
