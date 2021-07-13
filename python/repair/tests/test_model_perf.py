@@ -36,6 +36,8 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
     @classmethod
     def conf(cls):
         return SparkConf() \
+            .set("spark.master", "local[*]") \
+            .set("spark.driver.memory", "6g") \
             .set("spark.jars", os.getenv("REPAIR_API_LIB")) \
             .set("spark.sql.cbo.enabled", "true") \
             .set("spark.sql.statistics.histogram.enabled", "true") \
@@ -93,7 +95,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .collect()[0] \
             .rmse
 
-    @unittest.skip(reason="")
     def test_perf_iris_target_num_1(self):
         test_params = [
             ("sepal_width", 0.3455068740271313),
@@ -109,7 +110,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 logging.info(f"target:iris({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.01)
 
-    @unittest.skip(reason="")
     def test_perf_iris_target_num_2(self):
         test_params = [
             ("sepal_width", "sepal_length", 0.6595452979136459),
@@ -125,7 +125,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 logging.info(f"target:iris({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.01)
 
-    @unittest.skip(reason="")
     def test_perf_boston_target_num_1(self):
         test_params = [
             ("NOX", 0.03053089633885037),
@@ -141,7 +140,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 logging.info(f"target:boston({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.01)
 
-    @unittest.skip(reason="")
     def test_perf_boston_target_num_2(self):
         test_params = [
             ("NOX", "PTRATIO", 0.4691041696958255),
@@ -202,7 +200,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
 
         msg = f"target:hospital precision:{precision} recall:{recall} f1:{f1}"
         logging.info(msg)
-        self.assertTrue(precision > 0.70 and recall > 0.65 and f1 > 0.65, msg=msg)
+        self.assertTrue(precision > 0.85 and recall > 0.85 and f1 > 0.85, msg=msg)
 
 
 if __name__ == "__main__":
