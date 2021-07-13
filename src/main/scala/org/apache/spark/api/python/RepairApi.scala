@@ -262,66 +262,49 @@ object RepairApi extends RepairBase {
     Seq("repair_base" -> repairBaseView).asJson
   }
 
-  def computeAttrStats(
+  private def computeAttrStats(
       discreteAttrView: String,
-      errCellView: String,
-      rowId: String,
+      discreteAttrs: Seq[String],
+      attrPairsToRepair: Seq[(String, String)],
       statSampleRatio: Double,
       statThreshold: Double): String = {
-
-    logBasedOnLevel(s"computeAttrStats called with: discreteAttrView=$discreteAttrView " +
-      s"errCellView=$errCellView rowId=$rowId statSampleRatio=$statSampleRatio " +
-      s"statThreshold=$statThreshold")
-
-    // Computes numbers for single and pair-wise statistics in the input table
-    val discreteAttrs = spark.table(discreteAttrView).schema.map(_.name).filter(_ != rowId)
-    val attrsToRepair = {
-      val attrs = spark.sql(s"SELECT collect_set(attribute) FROM $errCellView")
-        .collect.head.getSeq[String](0)
-      attrs.filter(discreteAttrs.contains)
+    assert(discreteAttrs.nonEmpty && attrPairsToRepair.nonEmpty)
+    val pairSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
+    val inputDf = if (statSampleRatio < 1.0) {
+      spark.table(discreteAttrView).sample(statSampleRatio)
+    } else {
+      spark.table(discreteAttrView)
     }
-    val attrPairsToRepair = attrsToRepair.flatMap { attrToRepair =>
-      discreteAttrs.filter(attrToRepair != _).map(a => (attrToRepair, a))
-    }
-
-    val statDf = {
-      val pairSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
-      val inputDf = if (statSampleRatio < 1.0) {
-        spark.table(discreteAttrView).sample(statSampleRatio)
+    val statDf = withTempView(inputDf) { inputView =>
+      val filterClauseOption = if (statThreshold > 0.0) {
+        val cond = s"HAVING cnt > ${(inputDf.count * statThreshold).toInt}"
+        logBasedOnLevel(s"Attributes stats filter enabled: $cond")
+        cond
       } else {
-        spark.table(discreteAttrView)
+        ""
       }
-      withTempView(inputDf) { inputView =>
-        val filterClauseOption = if (statThreshold > 0.0) {
-          val cond = s"HAVING cnt > ${(inputDf.count * statThreshold).toInt}"
-          logBasedOnLevel(s"Attributes stats filter enabled: $cond")
-          cond
-        } else {
-          ""
-        }
-        spark.sql(
-          s"""
-             |SELECT ${discreteAttrs.mkString(", ")}, COUNT(1) cnt
-             |FROM $inputView
-             |GROUP BY GROUPING SETS (
-             |  ${discreteAttrs.map(a => s"($a)").mkString(", ")},
-             |  ${pairSets.map(_.toSeq).map { case Seq(a1, a2) => s"($a1,$a2)" }.mkString(", ")}
-             |)
-             |$filterClauseOption
-           """.stripMargin)
-      }
+      spark.sql(
+        s"""
+           |SELECT ${discreteAttrs.mkString(", ")}, COUNT(1) cnt
+           |FROM $inputView
+           |GROUP BY GROUPING SETS (
+           |  ${discreteAttrs.map(a => s"($a)").mkString(", ")},
+           |  ${pairSets.map(_.toSeq).map { case Seq(a1, a2) => s"($a1,$a2)" }.mkString(", ")}
+           |)
+           |$filterClauseOption
+         """.stripMargin)
     }
-    val attrStatsView = createAndCacheTempView(statDf, "attr_stats")
-    Seq("attr_stats" -> attrStatsView).asJson
+    createAndCacheTempView(statDf, "attr_stats")
   }
 
   def computeDomainInErrorCells(
       discreteAttrView: String,
-      attrStatView: String,
       errCellView: String,
       rowId: String,
       continuousAttrList: String,
       maxAttrsToComputeDomains: Int,
+      statSampleRatio: Double,
+      statThreshold: Double,
       minCorrThres: Double,
       domain_threshold_alpha: Double,
       domain_threshold_beta: Double): String = {
@@ -333,10 +316,11 @@ object RepairApi extends RepairBase {
     require(0.0 <= domain_threshold_beta && domain_threshold_beta <= 1.0,
       "domain_threashold_beta should be in [0.0, 1.0].")
 
-    logBasedOnLevel(s"computeDomainInErrorCells called with: discreteAttrView=$discreteAttrView " +
-      s"attrStatView=$attrStatView errCellView=$errCellView rowId=$rowId " +
-      s"continousAttrList=${if (!continuousAttrList.isEmpty) continuousAttrList else "<none>"} " +
-      s"maxAttrsToComputeDomains=$maxAttrsToComputeDomains minCorrThres=$minCorrThres " +
+    logBasedOnLevel(s"computeDomainInErrorCells called with: " +
+      s"discreteAttrView=$discreteAttrView errCellView=$errCellView rowId=$rowId " +
+      s"continousAttrList=${if (continuousAttrList.nonEmpty) continuousAttrList else "<none>"} " +
+      s"maxAttrsToComputeDomains=$maxAttrsToComputeDomains " +
+      s"statSampleRatio=$statSampleRatio statThreshold=$statThreshold minCorrThres=$minCorrThres " +
       s"domain_threshold=alpha:$domain_threshold_alpha,beta=$domain_threshold_beta")
 
     // TODO: Needs more strict checks for input data, e.g., schema/data validation
@@ -348,6 +332,8 @@ object RepairApi extends RepairBase {
     val discreteAttrs = spark.table(discreteAttrView).schema.map(_.name).filter(_ != rowId)
     val rowCnt = spark.table(discreteAttrView).count()
 
+    assert(discreteAttrs.nonEmpty && rowCnt > 0)
+
     val attrsToRepair = {
       val attrs = spark.sql(s"SELECT collect_set(attribute) FROM $errCellView")
         .collect.head.getSeq[String](0)
@@ -356,6 +342,9 @@ object RepairApi extends RepairBase {
     val attrPairsToRepair = attrsToRepair.flatMap { attrToRepair =>
       discreteAttrs.filter(attrToRepair != _).map(a => (attrToRepair, a))
     }
+
+    val attrStatView = computeAttrStats(
+      discreteAttrView, discreteAttrs, attrPairsToRepair, statSampleRatio, statThreshold)
 
     def whereCaluseToFilterStat(a: String): String =
       s"$a IS NOT NULL AND ${discreteAttrs.filter(_ != a).map(a => s"$a IS NULL").mkString(" AND ")}"

@@ -914,16 +914,6 @@ class RepairModel():
 
         return ret_as_json["discrete_features"], ret_as_json["distinct_stats"]
 
-    def _compute_attr_stats(self, discrete_features: str, noisy_cells: str) -> str:
-        ret_as_json = json.loads(self._repair_api.computeAttrStats(
-            discrete_features,
-            noisy_cells,
-            str(self.row_id),
-            self.attr_stat_sample_ratio,
-            self.attr_stat_threshold))
-        self._intermediate_views_on_runtime.append(ret_as_json["attr_stats"])
-        return ret_as_json["attr_stats"]
-
     @_spark_job_group(name="cell domain analysis")
     def _analyze_error_cell_domain(
             self, input_table: str, noisy_cells: str,
@@ -939,13 +929,13 @@ class RepairModel():
                           self.attr_stat_sample_ratio,
                           self.attr_stat_threshold))
 
-        attr_stats = self._compute_attr_stats(discrete_features, noisy_cells)
-
         logging.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
         ret_as_json = json.loads(self._repair_api.computeDomainInErrorCells(
-            discrete_features, attr_stats, noisy_cells, str(self.row_id),
+            discrete_features, noisy_cells, str(self.row_id),
             ",".join(continous_attrs),
             self.max_attrs_to_compute_domains,
+            self.attr_stat_sample_ratio,
+            self.attr_stat_threshold,
             self.min_corr_thres,
             self.domain_threshold_alpha,
             self.domain_threshold_beta))
