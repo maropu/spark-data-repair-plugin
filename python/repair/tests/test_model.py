@@ -62,6 +62,17 @@ class RepairModelTests(ReusedSQLTestCase):
         load_testdata(cls.spark, "adult_repair.csv").createOrReplaceTempView("adult_repair")
         load_testdata(cls.spark, "adult_clean.csv").createOrReplaceTempView("adult_clean")
 
+        # Define some expected results
+        cls.expected_adult_result_without_repaired = [
+            Row(tid="12", attribute="Age", current_value=None),
+            Row(tid="12", attribute="Sex", current_value=None),
+            Row(tid="16", attribute="Income", current_value=None),
+            Row(tid="3", attribute="Sex", current_value=None),
+            Row(tid="5", attribute="Age", current_value=None),
+            Row(tid="5", attribute="Income", current_value=None),
+            Row(tid="7", attribute="Sex", current_value=None)
+        ]
+
     @classmethod
     def tearDownClass(cls):
         super(ReusedSQLTestCase, cls).tearDownClass()
@@ -189,17 +200,14 @@ class RepairModelTests(ReusedSQLTestCase):
             current_view_nums)
 
     def test_parallel_stat_training(self):
-        expected_result = self.spark.table("adult_repair") \
-            .orderBy("tid", "attribute").collect()
-        test_model = self._build_model() \
+        df = self._build_model() \
             .setTableName("adult") \
             .setRowId("tid") \
-            .setParallelStatTrainingEnabled(True)
-        # TODO: Fix this
-        # self.assertEqual(
-        #     test_model.run().orderBy("tid", "attribute").collect(),
-        #     expected_result)
-        self.assertEqual(test_model.run().count(), 7)
+            .setParallelStatTrainingEnabled(True) \
+            .run()
+        self.assertEqual(
+            df.selectExpr("tid", "attribute", "current_value").orderBy("tid", "attribute").collect(),
+            self.expected_adult_result_without_repaired)
 
     def test_table_input(self):
         expected_result = self.spark.table("adult_repair") \
@@ -289,6 +297,29 @@ class RepairModelTests(ReusedSQLTestCase):
         _test_setErrorCells("adult_dirty")
         _test_setErrorCells(self.spark.table("adult_dirty"))
 
+    def _assert_adult_without_repaired(self, test_model):
+        def _test(df):
+            self.assertEqual(
+                df.selectExpr("tid", "attribute", "current_value").orderBy("tid", "attribute").collect(),
+                self.expected_adult_result_without_repaired)
+        _test(test_model.run())
+        _test(test_model.setParallelStatTrainingEnabled(True).run())
+
+    def test_setMaxTrainingRowNum(self):
+        row_num = int(self.spark.table("adult").count() / 2)
+        test_model = self._build_model() \
+            .setTableName("adult") \
+            .setRowId("tid") \
+            .setMaxTrainingRowNum(row_num)
+        self._assert_adult_without_repaired(test_model)
+
+    def test_setMaxTrainingColumnNum(self):
+        test_model = self._build_model() \
+            .setTableName("adult") \
+            .setRowId("tid") \
+            .setMaxTrainingColumnNum(2)
+        self._assert_adult_without_repaired(test_model)
+
     def test_error_cells_having_no_existent_attribute(self):
         error_cells = [
             Row(tid="1", attribute="NoExistent"),
@@ -313,14 +344,8 @@ class RepairModelTests(ReusedSQLTestCase):
             .setRowId("tid") \
             .run(detect_errors_only=True)
         self.assertEqual(
-            null_errors.orderBy("tid", "attribute").collect(), [
-                Row(tid="12", attribute="Age", current_value=None),
-                Row(tid="12", attribute="Sex", current_value=None),
-                Row(tid="16", attribute="Income", current_value=None),
-                Row(tid="3", attribute="Sex", current_value=None),
-                Row(tid="5", attribute="Age", current_value=None),
-                Row(tid="5", attribute="Income", current_value=None),
-                Row(tid="7", attribute="Sex", current_value=None)])
+            null_errors.orderBy("tid", "attribute").collect(),
+            self.expected_adult_result_without_repaired)
 
         # Tests for `RegExErrorDetector`
         error_detectors = [

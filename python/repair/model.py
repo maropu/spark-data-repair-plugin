@@ -168,9 +168,6 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
     model_class = lgb.LGBMClassifier if is_discrete \
         else lgb.LGBMRegressor
 
-    params: Dict[str, Any] = {}
-    min_loss = float("nan")
-
     def _create_model(params: Dict[str, Any]) -> Any:
         # Some params must be int
         for k in ["num_leaves", "subsample_freq", "min_child_samples"]:
@@ -208,14 +205,11 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
     cv = StratifiedKFold(n_splits=_n_splits(), shuffle=True) if is_discrete \
         else KFold(n_splits=_n_splits(), shuffle=True)
 
-    # TODO: Columns where domain size is small are assumed to be categorical
-    categorical_feature = "auto"
-
     def _objective(params: Dict[str, Any]) -> float:
         model = _create_model(params)
         fit_params = {
             # TODO: Raises an error if a single regressor is used
-            # "categorical_feature": categorical_feature,
+            # "categorical_feature": "auto",
             "verbose": 0
         }
         try:
@@ -227,7 +221,7 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
         # it might throw an exception because `y` contains
         # previously unseen labels.
         except Exception as e:
-            logging.warn(f"{e.__class__}: {e}")
+            logging.warning(f"{e.__class__}: {e}")
             return 0.0
 
     def _early_stop_fn() -> Any:
@@ -245,30 +239,31 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
 
         return timeout_fn
 
-    trials = Trials()
+    try:
+        trials = Trials()
+        best_params = fmin(
+            fn=_objective,
+            space=param_space,
+            algo=tpe.suggest,
+            trials=trials,
+            max_evals=_max_eval(),
+            early_stop_fn=_early_stop_fn(),
+            rstate=np.random.RandomState(42),
+            show_progressbar=False,
+            verbose=False)
 
-    best_params = fmin(
-        fn=_objective,
-        space=param_space,
-        algo=tpe.suggest,
-        trials=trials,
-        max_evals=_max_eval(),
-        early_stop_fn=_early_stop_fn(),
-        rstate=np.random.RandomState(42),
-        show_progressbar=False,
-        verbose=False)
+        logging.info("hyperopt: #eval={}/{}".format(len(trials.trials), _max_eval()))
 
-    logging.info("hyperopt: #eval={}/{}".format(len(trials.trials), _max_eval()))
+        # Builds a model with `best_params`
+        model = _create_model(best_params)
+        model.fit(X, y)
 
-    sorted_lst = sorted(trials.trials, key=lambda x: x['result']['loss'])
-    min_loss = sorted_lst[0]['result']['loss']
-    params = best_params
-
-    # Builds a model with `best_params`
-    model = _create_model(params)
-    model.fit(X, y)
-
-    return model, params, -min_loss
+        sorted_lst = sorted(trials.trials, key=lambda x: x['result']['loss'])
+        min_loss = sorted_lst[0]['result']['loss']
+        return model, -min_loss
+    except Exception as e:
+        logging.warning(f"Failed to build a stat model because: ${e}")
+        return PoorModel(None), 0.0
 
 
 def _create_temp_name(prefix: str = "temp") -> str:
@@ -874,7 +869,7 @@ class RepairModel():
             # with probability because the computational cost is much high.
             self.domain_threshold_beta = 1.0
         else:
-            # Applys error detectors to get noisy cells
+            # Applies error detectors to get noisy cells
             noisy_cells_df = self._detect_error_cells(input_table)
             logging.info(f'[Error Detection Phase] Detecting errors '
                          f'in a table `{input_table}` '
@@ -882,19 +877,21 @@ class RepairModel():
 
         # Filters target attributes if `self.targets` defined
         if len(self.targets) > 0:
-            return noisy_cells_df.where("attribute IN ({})".format(",".join(map(lambda x: f"'{x}'", self.targets))))
+            target_columns = ",".join(map(lambda x: f"'{x}'", self.targets))
+            logging.info(f"[Error Detection Phase] Target attributes to repair: {target_columns}")
+            return noisy_cells_df.where(f"attribute IN ({target_columns})")
         else:
             return noisy_cells_df
 
-    def _prepare_repair_base(self, input_table: str, noisy_cells: str,
-                             num_input_rows: int, num_attrs: int) -> str:
+    def _prepare_repair_base_cells(
+            self, input_table: str, noisy_cells: str, num_input_rows: int, num_attrs: int) -> str:
         # Sets NULL at the detected noisy cells
         logging.debug("{}/{} noisy cells found, then converts them into NULL cells...".format(
             self._spark.table(noisy_cells).count(), num_input_rows * num_attrs))
         ret_as_json = json.loads(self._repair_api.convertErrorCellsToNull(
             input_table, noisy_cells, str(self.row_id)))
 
-        return self._register_table(ret_as_json["repair_base"])
+        return self._register_table(ret_as_json["repair_base_cells"])
 
     # Checks if attributes are discrete or not, and discretizes continous ones
     def _discretize_attrs(self, input_table: str, continous_attrs: List[str]) -> Tuple[str, Dict[str, str]]:
@@ -904,14 +901,14 @@ class RepairModel():
             input_table, str(self.row_id), self.discrete_thres))
 
         df = self._register_and_get_df(ret_as_json["discrete_features"])
-        logging.debug("Valid {} attributes ({}) found in the {} input attributes ({}) and "
-                      "{} continous attributes ({}) included in them".format(
-                          len(df.columns),
-                          ",".join(df.columns),
-                          len(self._spark.table(input_table).columns),
-                          ",".join(self._spark.table(input_table).columns),
-                          len(continous_attrs),
-                          ",".join(continous_attrs)))
+        logging.info("Valid {} attributes ({}) found in the {} input attributes ({}) and "
+                     "{} continous attributes ({}) included in them".format(
+                         len(df.columns),
+                         ",".join(df.columns),
+                         len(self._spark.table(input_table).columns),
+                         ",".join(self._spark.table(input_table).columns),
+                         len(continous_attrs),
+                         ",".join(continous_attrs)))
 
         return ret_as_json["discrete_features"], ret_as_json["distinct_stats"]
 
@@ -941,8 +938,8 @@ class RepairModel():
 
         return ret_as_json["cell_domain"], ret_as_json["pairwise_attr_stats"]
 
-    def _extract_error_cells(self, cell_domain: str, repair_base: str,
-                             num_input_rows: int, num_attrs: int) -> Tuple[DataFrame, str, str]:
+    def _extract_error_cells(self, cell_domain: str, repair_base_cells: str,
+                             num_input_rows: int, num_attrs: int) -> Tuple[DataFrame, str]:
         # Fixes cells if an inferred value is the same with an initial one
         fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) value"
         weak_df = self._spark.table(cell_domain).selectExpr(
@@ -952,7 +949,7 @@ class RepairModel():
             .selectExpr(str(self.row_id), "attribute", "value repaired")
         weak = self._create_temp_view(weak_df.cache(), "weak")
         partial_repaired = self._create_temp_view(
-            self._repair_attrs(weak, repair_base), "partial_repaired")
+            self._repair_attrs(weak, repair_base_cells), "partial_repaired")
 
         logging.info('[Error Detection Phase] {} noisy cells fixed and '
                      '{} error cells ({}%) remaining...'.format(
@@ -960,7 +957,7 @@ class RepairModel():
                          error_cells_df.count(),
                          error_cells_df.count() * 100.0 / (num_attrs * num_input_rows)))
 
-        return error_cells_df, weak, partial_repaired
+        return error_cells_df, partial_repaired
 
     def _split_clean_and_dirty_rows(
             self, partial_repaired_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame, List[str]]:
@@ -996,19 +993,20 @@ class RepairModel():
     # it is important to drop non-relevant in advance.
     def _select_features(self, pairwise_stats: Dict[str, str], y: str, features: List[str]) -> List[str]:
         if self.max_training_column_num is not None and \
-                int(self.max_training_column_num) < len(features):
+                int(self.max_training_column_num) < len(features) and \
+                y in pairwise_stats:
             heap: List[Tuple[float, str]] = []
-            for f, corr in map(lambda x: tuple(x), float(pairwise_stats[y])):  # type: ignore
+            for f, corr in map(lambda x: tuple(x), pairwise_stats[y]):  # type: ignore
                 if f in features:
                     # Converts to a negative value for extracting higher values
-                    heapq.heappush(heap, (-corr, f))
+                    heapq.heappush(heap, (-float(corr), f))
 
             fts = [heapq.heappop(heap) for i in range(len(features))]
             top_k_fts: List[Tuple[float, str]] = []
             for corr, f in fts:  # type: ignore
                 # TODO: Parameterize a minimum corr to filter out irrelevant features
-                if len(top_k_fts) <= 1 or (-corr >= 0.0 and len(top_k_fts) < int(self.max_training_column_num)):
-                    top_k_fts.append((corr, f))
+                if len(top_k_fts) <= 1 or (-float(corr) >= 0.0 and len(top_k_fts) < int(self.max_training_column_num)):
+                    top_k_fts.append((float(corr), f))
 
             logging.info("[Repair Model Training Phase] {} features ({}) selected from {} features".format(
                 len(top_k_fts), ",".join(map(lambda f: f"{f[1]}:{-f[0]}", top_k_fts)), len(features)))
@@ -1061,6 +1059,18 @@ class RepairModel():
         else:
             return None
 
+    def _sample_training_data_from(self, df: DataFrame, training_data_num: int) -> DataFrame:
+        # The value of `max_training_row_num` highly depends on
+        # the performance of pandas and LightGBM.
+        sampling_ratio = 1.0
+        if training_data_num > self.max_training_row_num:
+            sampling_ratio = float(self.max_training_row_num) / training_data_num
+            logging.info(f'To reduce training data, extracts {sampling_ratio * 100.0}% samples '
+                         f'from {training_data_num} rows')
+
+        # TODO: Needs more smart sampling, e.g., stratified sampling
+        return df.sample(sampling_ratio)
+
     def _build_repair_stat_models_in_series(
             self, models: Dict[str, Any], train_df: DataFrame,
             target_columns: List[str], continous_attrs: List[str],
@@ -1085,16 +1095,10 @@ class RepairModel():
                 models[y] = (PoorModel(None), feature_map[y], None)
                 continue
 
-            # The value of `max_training_row_num` highly depends on
-            # the performance of pandas and LightGBM.
-            sampling_ratio = float(self.max_training_row_num) / training_data_num \
-                if training_data_num > self.max_training_row_num else 1.0
-
-            # TODO: Needs more smart sampling, e.g., stratified sampling
-            train_pdf = df.sample(sampling_ratio).toPandas()
+            train_pdf = self._sample_training_data_from(df, training_data_num).toPandas()
             is_discrete = y not in continous_attrs
 
-            X = train_pdf[train_pdf.columns[train_pdf.columns != y]]  # type: ignore
+            X = train_pdf[feature_map[y]]  # type: ignore
             for transformer in transformer_map[y]:
                 X = transformer.fit_transform(X)
             logging.debug("{} encoders transform ({})=>({})".format(
@@ -1111,7 +1115,7 @@ class RepairModel():
                 y, ",".join(feature_map[y]),
                 len(train_pdf),
                 f" #class={num_class_map[y]}" if num_class_map[y] > 0 else ""))
-            ((model, params, score), elapsed_time) = \
+            ((model, score), elapsed_time) = \
                 _build_lgb_model(X, _y, is_discrete, num_class_map[y], n_jobs=-1, opts=self.opts)
             logging.info("Finishes building '{}' model...  score={} elapsed={}s".format(
                 y, score, elapsed_time))
@@ -1148,18 +1152,12 @@ class RepairModel():
                 models[y] = (PoorModel(None), feature_map[y], None)
                 continue
 
-            # The value of `max_training_row_num` highly depends on
-            # the performance of pandas and LightGBM.
-            sampling_ratio = float(self.max_training_row_num) / training_data_num \
-                if training_data_num > self.max_training_row_num else 1.0
-
-            # TODO: Needs more smart sampling, e.g., stratified sampling
-            df = df.sample(sampling_ratio)
+            df = self._sample_training_data_from(df, training_data_num)
             train_dfs_per_target.append(df.withColumn(target_column, functions.lit(y)))
 
             # TODO: Removes duplicate feature transformations
             train_pdf = df.toPandas()
-            X = train_pdf[train_pdf.columns[train_pdf.columns != y]]  # type: ignore
+            X = train_pdf[feature_map[y]]  # type: ignore
             transformers = transformer_map[y]
             for transformer in transformers:
                 X = transformer.fit_transform(X)
@@ -1183,6 +1181,7 @@ class RepairModel():
 
         broadcasted_target_column = self._spark.sparkContext.broadcast(target_column)
         broadcasted_continous_attrs = self._spark.sparkContext.broadcast(continous_attrs)
+        broadcasted_feature_map = self._spark.sparkContext.broadcast(feature_map)
         broadcasted_transformer_map = self._spark.sparkContext.broadcast(transformer_map)
         broadcasted_num_class_map = self._spark.sparkContext.broadcast(num_class_map)
         broadcasted_training_data_rebalancing_enabled = \
@@ -1196,6 +1195,7 @@ class RepairModel():
             target_column = broadcasted_target_column.value
             y = pdf.at[0, target_column]
             continous_attrs = broadcasted_continous_attrs.value
+            features = broadcasted_feature_map.value[y]
             transformers = broadcasted_transformer_map.value[y]
             is_discrete = y not in continous_attrs
             num_class = broadcasted_num_class_map.value[y]
@@ -1203,7 +1203,7 @@ class RepairModel():
             n_jobs = broadcasted_n_jobs.value
             opts = broadcasted_opts.value
 
-            X = pdf.drop([y, target_column], axis=1)
+            X = pdf[features]
             for transformer in transformers:
                 X = transformer.transform(X)
 
@@ -1211,7 +1211,7 @@ class RepairModel():
             X, y_ = _rebalance_training_data(X, pdf[y], y) if is_discrete and training_data_rebalancing_enabled \
                 else (X, pdf[y])
 
-            ((model, params, score), elapsed_time) = \
+            ((model, score), elapsed_time) = \
                 _build_lgb_model(X, y_, is_discrete, num_class, n_jobs, opts)
             row = [y, pickle.dumps(model), score, elapsed_time]
             return pd.DataFrame([row])
@@ -1518,8 +1518,7 @@ class RepairModel():
 
         # Sets NULL to noisy cells
         noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells")
-        repair_base = self._prepare_repair_base(
-            input_table, noisy_cells, num_input_rows, num_attrs)
+        repair_base_cells = self._prepare_repair_base_cells(input_table, noisy_cells, num_input_rows, num_attrs)
 
         # Selects error cells based on the result of domain analysis
         discrete_features, distinct_stats = self._discretize_attrs(input_table, continous_attrs)
@@ -1534,8 +1533,8 @@ class RepairModel():
             raise ValueError("Noisy cells have valid discrete properties for domain analysis")
 
         # If `detect_errors_only` is True, returns found error cells
-        error_cells_df, weak, partial_repaired = self._extract_error_cells(
-            cell_domain, repair_base, num_input_rows, num_attrs)
+        error_cells_df, partial_repaired = \
+            self._extract_error_cells(cell_domain, repair_base_cells, num_input_rows, num_attrs)
         if detect_errors_only:
             return error_cells_df
 

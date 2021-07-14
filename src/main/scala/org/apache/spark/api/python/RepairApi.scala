@@ -258,8 +258,8 @@ object RepairApi extends RepairBase {
            |ON $discreteAttrView.$rowId = $errAttrView.$rowId
          """.stripMargin)
     }
-    val repairBaseView = createAndCacheTempView(repairBase, "repair_base")
-    Seq("repair_base" -> repairBaseView).asJson
+    val repairBaseView = createAndCacheTempView(repairBase, "repair_base_cells")
+    Seq("repair_base_cells" -> repairBaseView).asJson
   }
 
   private def computeAttrStats(
