@@ -1292,15 +1292,13 @@ class RepairModel():
             num_class_map[y] = train_df.selectExpr(f"count(distinct `{y}`) cnt").collect()[0].cnt \
                 if is_discrete else 0
 
-            # We should filter out invalid targets before repairing
-            assert not is_discrete or num_class_map[y] > 1
-            # # Skips building a model if num_class <= 1
-            # if is_discrete and num_class_map[y] <= 1:
-            #     logging.info("Skipping {}/{} model... type=rule y={} num_class={}".format(
-            #         index, len(target_columns), y, num_class_map[y]))
-            #     v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
-            #         if num_class_map[y] == 1 else None
-            #     models[y] = (PoorModel(v), feature_map[y], None)
+            # Skips building a model if num_class <= 1
+            if is_discrete and num_class_map[y] <= 1:
+                logging.info("Skipping {}/{} model... type=rule y={} num_class={}".format(
+                    index, len(target_columns), y, num_class_map[y]))
+                v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
+                    if num_class_map[y] == 1 else None
+                models[y] = (PoorModel(v), feature_map[y], None)
 
             # If `y` is functionally-dependent on one of clean attributes,
             # builds a model based on the rule.
