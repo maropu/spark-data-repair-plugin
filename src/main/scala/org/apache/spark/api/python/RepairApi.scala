@@ -296,6 +296,120 @@ object RepairApi extends RepairBase {
     }
   }
 
+  private def whereCaluseToFilterStat(a: String, attrs: Seq[String]): String = {
+    s"$a IS NOT NULL AND ${attrs.filter(_ != a).map(a => s"$a IS NULL").mkString(" AND ")}"
+  }
+
+  private def compuatePairwiseAttrStats(
+      rowCnt: Long,
+      attrStatView: String,
+      discreteAttrView: String,
+      discreteAttrs: Seq[String],
+      attrPairsToRepair: Seq[(String, String)],
+      minCorrThres: Double): (Map[String, Seq[(String, Double)]], Map[String, Long]) = {
+    assert(rowCnt > 0 && discreteAttrs.nonEmpty && attrPairsToRepair.nonEmpty)
+    // Computes the conditional entropy: H(x|y) = H(x,y) - H(y).
+    // H(x,y) denotes H(x U y). If H(x|y) = 0, then y determines x, i.e., y -> x.
+    val hXYs = withJobDescription("compute conditional entropy H(x|y)") {
+      val pairSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
+      pairSets.map { attrPairKey =>
+        attrPairKey -> {
+          val Seq(a1, a2) = attrPairKey.toSeq
+          val df = spark.sql(
+            s"""
+               |SELECT -SUM(hXY) hXY
+               |FROM (
+               |  SELECT $a1 X, $a2 Y, (cnt / $rowCnt) * log10(cnt / $rowCnt) hXY
+               |  FROM $attrStatView
+               |  WHERE $a1 IS NOT NULL AND
+               |    $a2 IS NOT NULL
+               |)
+             """.stripMargin)
+
+          df.collect().map { row =>
+            if (!row.isNullAt(0)) row.getDouble(0) else 0.0
+          }.head
+        }
+      }.toMap
+    }
+
+    val hYs = withJobDescription("compute entropy H(y)") {
+      discreteAttrs.map { attrKey =>
+        attrKey -> {
+          val df = spark.sql(
+            s"""
+               |SELECT -SUM(hY) hY
+               |FROM (
+               |  /* TODO: Needs to reconsider how-to-handle NULL */
+               |  /* Use `MAX` to drop ($attrKey, null) tuples in `$discreteAttrView` */
+               |  SELECT $attrKey Y, (MAX(cnt) / $rowCnt) * log10(MAX(cnt) / $rowCnt) hY
+               |  FROM $attrStatView
+               |  WHERE ${whereCaluseToFilterStat(attrKey, discreteAttrs)}
+               |  GROUP BY $attrKey
+               |)
+             """.stripMargin)
+
+          df.collect().map { row =>
+            if (!row.isNullAt(0)) row.getDouble(0) else 0.0
+          }.head
+        }
+      }.toMap
+    }
+
+    // Uses the domain size of X as a log base for normalization
+    val domainStatMap = computeAndGetTableStats(discreteAttrView).mapValues(_.distinctCount)
+    val pairwiseStats = attrPairsToRepair.map { case attrPair @ (rvX, rvY) =>
+      // The conditional entropy is 0 for strongly correlated attributes and 1 for completely independent
+      // attributes. We reverse this to reflect the correlation.
+      val domainSize = domainStatMap(rvX)
+      attrPair -> (1.0 - ((hXYs(Set(rvX, rvY)) - hYs(rvY)) / scala.math.log10(domainSize)))
+    }
+
+    val pairwiseStatMap = pairwiseStats.groupBy { case ((attrToRepair, _), _) =>
+      attrToRepair
+    }.map { case (k, v) =>
+      k -> v.map { case ((_, attr), v) =>
+        (attr, v)
+      }.sortBy(_._2).reverse
+    }
+    logBasedOnLevel({
+      val pairStats = pairwiseStatMap.map { case (k, v) =>
+        val stats = v.map { case (attribute, h) =>
+          val isEmployed = if (h > minCorrThres) "*" else ""
+          s"$isEmployed$attribute:$h"
+        }.mkString("\n    ")
+        s"""$k (min=${v.last._2} max=${v.head._2}):
+           |    $stats
+         """.stripMargin
+      }
+      s"""
+         |Pair-wise statistics H(x,y) '*' means it exceeds the threshold(=$minCorrThres):
+         |
+         |  ${pairStats.mkString("\n  ")}
+       """.stripMargin
+    })
+
+    (pairwiseStatMap, domainStatMap)
+  }
+
+  private def computeCorrAttrs(
+      pairwiseStatMap: Map[String, Seq[(String, Double)]],
+      maxAttrsToComputeDomains: Int,
+      minCorrThres: Double): Map[String, Seq[(String, Double)]] = {
+    pairwiseStatMap.map { case (k, v) =>
+      val attrs = v.filter(_._2 > minCorrThres)
+      (k, if (attrs.size > maxAttrsToComputeDomains) {
+        attrs.take(maxAttrsToComputeDomains)
+      } else if (attrs.isEmpty) {
+        // If correlated attributes not found, we pick up data from its domain randomly
+        logWarning(s"Correlated attributes not found for $k")
+        Nil
+      } else {
+        attrs
+      })
+    }
+  }
+
   def computeDomainInErrorCells(
       discreteAttrView: String,
       errCellView: String,
@@ -307,7 +421,6 @@ object RepairApi extends RepairBase {
       minCorrThres: Double,
       domain_threshold_alpha: Double,
       domain_threshold_beta: Double): String = {
-
     require(0 < maxAttrsToComputeDomains, "maxAttrsToComputeDomains should be greater than 0.")
     require(0.0 <= minCorrThres && minCorrThres < 1.0, "minCorrThres should be in [0.0, 1.0).")
     require(0.0 <= domain_threshold_alpha && domain_threshold_alpha <= 1.0,
@@ -344,7 +457,7 @@ object RepairApi extends RepairBase {
 
     val domainType = "ARRAY<STRUCT<n: STRING, cnt: DOUBLE>>"
     if (attrPairsToRepair.isEmpty) {
-      // TODO: XXX
+      // TODO: Moves this check into the earlier stage
       val rowIdType = spark.table(discreteAttrView).schema.find(_.name == rowId).get.dataType.sql
       val cellDomainDf = createEmptyTable(
         s"$rowId $rowIdType, attribute STRING, current_value STRING, domain $domainType")
@@ -357,108 +470,17 @@ object RepairApi extends RepairBase {
         discreteAttrView, discreteAttrs, attrPairsToRepair, statSampleRatio, statThreshold)
 
       withTempView(attrStatDf, cache = true) { attrStatView =>
-        def whereCaluseToFilterStat(a: String): String =
-          s"$a IS NOT NULL AND ${discreteAttrs.filter(_ != a).map(a => s"$a IS NULL").mkString(" AND ")}"
+        val (pairwiseStatMap, domainStatMap) = compuatePairwiseAttrStats(
+          rowCnt, attrStatView, discreteAttrView, discreteAttrs,
+          attrPairsToRepair, minCorrThres)
 
-        // Computes the conditional entropy: H(x|y) = H(x,y) - H(y).
-        // H(x,y) denotes H(x U y). If H(x|y) = 0, then y determines x, i.e., y -> x.
-        val hXYs = withJobDescription("compute conditional entropy H(x|y)") {
-          val pairSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
-          pairSets.map { attrPairKey =>
-            attrPairKey -> {
-              val Seq(a1, a2) = attrPairKey.toSeq
-              val df = spark.sql(
-                s"""
-                   |SELECT -SUM(hXY) hXY
-                   |FROM (
-                   |  SELECT $a1 X, $a2 Y, (cnt / $rowCnt) * log10(cnt / $rowCnt) hXY
-                   |  FROM $attrStatView
-                   |  WHERE $a1 IS NOT NULL AND
-                   |    $a2 IS NOT NULL
-                   |)
-                 """.stripMargin)
-
-              df.collect().map { row =>
-                if (!row.isNullAt(0)) row.getDouble(0) else 0.0
-              }.head
-            }
-          }.toMap
-        }
-
-        val hYs = withJobDescription("compute entropy H(y)") {
-          discreteAttrs.map { attrKey =>
-            attrKey -> {
-              val df = spark.sql(
-                s"""
-                   |SELECT -SUM(hY) hY
-                   |FROM (
-                   |  /* TODO: Needs to reconsider how-to-handle NULL */
-                   |  /* Use `MAX` to drop ($attrKey, null) tuples in `$discreteAttrView` */
-                   |  SELECT $attrKey Y, (MAX(cnt) / $rowCnt) * log10(MAX(cnt) / $rowCnt) hY
-                   |  FROM $attrStatView
-                   |  WHERE ${whereCaluseToFilterStat(attrKey)}
-                   |  GROUP BY $attrKey
-                   |)
-                 """.stripMargin)
-
-              df.collect().map { row =>
-                if (!row.isNullAt(0)) row.getDouble(0) else 0.0
-              }.head
-            }
-          }.toMap
-        }
-
-        // Uses the domain size of X as a log base for normalization
-        val domainStatMap = computeAndGetTableStats(discreteAttrView).mapValues(_.distinctCount)
-        val pairWiseStats = attrPairsToRepair.map { case attrPair @ (rvX, rvY) =>
-          // The conditional entropy is 0 for strongly correlated attributes and 1 for completely independent
-          // attributes. We reverse this to reflect the correlation.
-          val domainSize = domainStatMap(rvX)
-          attrPair -> (1.0 - ((hXYs(Set(rvX, rvY)) - hYs(rvY)) / scala.math.log10(domainSize)))
-        }
-
-        val pairWiseStatMap = pairWiseStats.groupBy { case ((attrToRepair, _), _) =>
-          attrToRepair
-        }.map { case (k, v) =>
-          k -> v.map { case ((_, attr), v) =>
-            (attr, v)
-          }.sortBy(_._2).reverse
-        }
-        logBasedOnLevel({
-          val pairStats = pairWiseStatMap.map { case (k, v) =>
-            val stats = v.map { case (attribute, h) =>
-              val isEmployed = if (h > minCorrThres) "*" else ""
-              s"$isEmployed$attribute:$h"
-            }.mkString("\n    ")
-            s"""$k (min=${v.last._2} max=${v.head._2}):
-               |    $stats
-             """.stripMargin
-          }
-          s"""
-             |Pair-wise statistics H(x,y) '*' means it exceeds the threshold(=$minCorrThres):
-             |
-             |  ${pairStats.mkString("\n  ")}
-           """.stripMargin
-        })
-
-        val corrAttrs = pairWiseStatMap.map { case (k, v) =>
-          val attrs = v.filter(_._2 > minCorrThres)
-          (k, if (attrs.size > maxAttrsToComputeDomains) {
-            attrs.take(maxAttrsToComputeDomains)
-          } else if (attrs.isEmpty) {
-            // If correlated attributes not found, we pick up data from its domain randomly
-            logWarning(s"Correlated attributes not found for $k")
-            Nil
-          } else {
-            attrs
-          })
-        }
+        val corrAttrs = computeCorrAttrs(
+          pairwiseStatMap, maxAttrsToComputeDomains, minCorrThres)
 
         val attrToId = discreteAttrs.zipWithIndex.toMap
         spark.udf.register("extractField", (row: Row, attribute: String) => {
           row.getString(attrToId(attribute))
         })
-
         val domainInitValue = s"CAST(NULL AS $domainType)"
         val cellExprs = discreteAttrs.map { a => s"CAST(l.$a AS STRING) $a" }
         val repairCellDf = spark.sql(
@@ -480,7 +502,7 @@ object RepairApi extends RepairBase {
                  |  $discreteAttrView l, $repairCellView r
                  |WHERE
                  |  l.$rowId = r.$rowId
-             """.stripMargin)
+               """.stripMargin)
           }
         } else {
           // Needs to keep the correlated attributes for selecting their domains
@@ -587,7 +609,7 @@ object RepairApi extends RepairBase {
                      |  ) d LEFT OUTER JOIN (
                      |    SELECT $attribute, MAX(cnt) cnt
                      |    FROM $attrStatView
-                     |    WHERE ${whereCaluseToFilterStat(attribute)}
+                     |    WHERE ${whereCaluseToFilterStat(attribute, discreteAttrs)}
                      |    GROUP BY $attribute
                      |  ) s
                      |  ON
@@ -631,7 +653,7 @@ object RepairApi extends RepairBase {
         // Checks if # of rows in `cellDomainView` is the same with # of error cells
         assert(cellDomainDf.count == repairCellDf.count)
         Seq("cell_domain" -> cellDomainView,
-          "pairwise_attr_stats" -> pairWiseStatMap.mapValues(seqToJson)
+          "pairwise_attr_stats" -> pairwiseStatMap.mapValues(seqToJson)
         ).asJson
       }
     }
