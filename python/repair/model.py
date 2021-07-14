@@ -896,7 +896,8 @@ class RepairModel():
 
         return self._register_table(ret_as_json["repair_base"])
 
-    def _preprocess(self, input_table: str, continous_attrs: List[str]) -> Tuple[str, str]:
+    # Checks if attributes are discrete or not, and discretizes continous ones
+    def _discretize_attrs(self, input_table: str, continous_attrs: List[str]) -> Tuple[str, Dict[str, str]]:
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
         ret_as_json = json.loads(self._repair_api.convertToDiscreteFeatures(
@@ -916,11 +917,7 @@ class RepairModel():
 
     @_spark_job_group(name="cell domain analysis")
     def _analyze_error_cell_domain(
-            self, input_table: str, noisy_cells: str,
-            continous_attrs: List[str]) -> Tuple[str, str, str]:
-
-        # Checks if attributes are discrete or not, and discretizes continous ones
-        discrete_features, distinct_stats = self._preprocess(input_table, continous_attrs)
+            self, noisy_cells: str, discrete_features: str, continous_attrs: List[str]) -> Tuple[str, str]:
 
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
@@ -942,7 +939,7 @@ class RepairModel():
 
         self._register_and_get_df(ret_as_json["cell_domain"])
 
-        return ret_as_json["cell_domain"], distinct_stats, ret_as_json["pairwise_attr_stats"]
+        return ret_as_json["cell_domain"], ret_as_json["pairwise_attr_stats"]
 
     def _extract_error_cells(self, cell_domain: str, repair_base: str,
                              num_input_rows: int, num_attrs: int) -> Tuple[DataFrame, str, str]:
@@ -1295,13 +1292,15 @@ class RepairModel():
             num_class_map[y] = train_df.selectExpr(f"count(distinct `{y}`) cnt").collect()[0].cnt \
                 if is_discrete else 0
 
-            # Skips building a model if num_class <= 1
-            if is_discrete and num_class_map[y] <= 1:
-                logging.info("Skipping {}/{} model... type=rule y={} num_class={}".format(
-                    index, len(target_columns), y, num_class_map[y]))
-                v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
-                    if num_class_map[y] == 1 else None
-                models[y] = (PoorModel(v), feature_map[y], None)
+            # We should filter out invalid targets before repairing
+            assert not is_discrete or num_class_map[y] > 1
+            # # Skips building a model if num_class <= 1
+            # if is_discrete and num_class_map[y] <= 1:
+            #     logging.info("Skipping {}/{} model... type=rule y={} num_class={}".format(
+            #         index, len(target_columns), y, num_class_map[y]))
+            #     v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
+            #         if num_class_map[y] == 1 else None
+            #     models[y] = (PoorModel(v), feature_map[y], None)
 
             # If `y` is functionally-dependent on one of clean attributes,
             # builds a model based on the rule.
@@ -1525,8 +1524,16 @@ class RepairModel():
             input_table, noisy_cells, num_input_rows, num_attrs)
 
         # Selects error cells based on the result of domain analysis
-        cell_domain, distinct_stats, pairwise_stats = self._analyze_error_cell_domain(
-            input_table, noisy_cells, continous_attrs)
+        discrete_features, distinct_stats = self._discretize_attrs(input_table, continous_attrs)
+        if len(self._spark.table(discrete_features).columns) <= 1:
+            raise ValueError("At least one valid discretizable feature is needed to repair error cells, "
+                             "but no such feature found")
+
+        # TODO: Needs to separate the domain analysis from the error detection
+        cell_domain, pairwise_stats = self._analyze_error_cell_domain(
+            noisy_cells, discrete_features, continous_attrs)
+        if self._spark.table(cell_domain).count() == 0:
+            raise ValueError("Noisy cells have valid discrete properties for domain analysis")
 
         # If `detect_errors_only` is True, returns found error cells
         error_cells_df, weak, partial_repaired = self._extract_error_cells(
@@ -1558,7 +1565,7 @@ class RepairModel():
         num_features = len(fixed_rows_df.columns) - len(target_columns)
         if num_features == 0:
             raise ValueError("At least one feature is needed to repair error cells, "
-                             "but no features found")
+                             "but no feature found")
 
         train_df = self._spark.table(partial_repaired)
         models = self._build_repair_models(

@@ -369,8 +369,7 @@ class RepairModelTests(ReusedSQLTestCase):
             test_model.run(repair_data=True).orderBy("tid").collect(),
             expected_result)
 
-    @unittest.skip(reason="TODO: Fix a bug that throws a SQL exception")
-    def test_poor_model(self):
+    def test_no_valid_discrete_feature_exists(self):
         with self.tempView("inputView"):
             rows = [
                 (1, "1", None),
@@ -385,12 +384,30 @@ class RepairModelTests(ReusedSQLTestCase):
             test_model = self._build_model() \
                 .setTableName("inputView") \
                 .setRowId("tid")
+            self.assertRaisesRegexp(
+                ValueError,
+                "At least one valid discretizable feature is needed to repair error cells",
+                lambda: test_model.run())
 
-            self.assertEqual(
-                test_model.run().orderBy("tid", "attribute").collect(), [
-                    Row(tid=1, attribute="y", current_value=None, repaired="test-1"),
-                    Row(tid=2, attribute="y", current_value=None, repaired="test-1"),
-                    Row(tid=6, attribute="y", current_value=None, repaired="test-1")])
+    def test_no_valid_noisy_cell_exists(self):
+        with self.tempView("inputView"):
+            rows = [
+                (1, "1", None),
+                (2, "2", None),
+                (3, "1", "test-1"),
+                (4, "1", "test-1"),
+                (5, "1", "test-1"),
+                (6, "1", None)
+            ]
+            self.spark.createDataFrame(rows, ["tid", "x", "y"]) \
+                .createOrReplaceTempView("inputView")
+            test_model = self._build_model() \
+                .setTableName("inputView") \
+                .setRowId("tid")
+            self.assertRaisesRegexp(
+                ValueError,
+                "Noisy cells have valid discrete properties for domain analysis",
+                lambda: test_model.run())
 
     def test_regressor_model(self):
         with self.tempView("inputView"):
