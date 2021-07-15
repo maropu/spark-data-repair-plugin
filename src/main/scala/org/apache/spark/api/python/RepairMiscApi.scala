@@ -196,8 +196,9 @@ object RepairMiscApi extends RepairBase {
     val (inputDf, _) = checkAndGetQualifiedInputName(dbName, tableName)
 
     // `repairedCells` must have `$rowId`, `attribute`, and `repaired` columns
-    // TODO: Needs more strict validation for the input schema
-    checkIfColumnsExistIn(repairUpdates, rowId :: "attribute" :: "repaired" :: Nil)
+    if (!checkSchema(repairUpdates, "attribute STRING, repaired STRING", rowId, strict = false)) {
+      throw AnalysisException(s"Table '$repairUpdates' must have '$rowId', 'attribute', and 'repaired' columns")
+    }
 
     val continousAttrTypeMap = inputDf.schema.filter(f => continousTypes.contains(f.dataType))
       .map { f => f.name -> f.dataType }.toMap
@@ -276,7 +277,9 @@ object RepairMiscApi extends RepairBase {
       s"dbName=$dbName tableName=$tableName rowId=$rowId")
 
     // `errCellView` must have `$rowId` and `attribute` columns
-    checkIfColumnsExistIn(errCellView, rowId :: "attribute" :: Nil)
+    if (!checkSchema(errCellView, "attribute STRING", rowId, strict = false)) {
+      throw AnalysisException(s"Table '$errCellView' must have '$rowId' and 'attribute' columns")
+    }
 
     val (inputDf, _) = checkAndGetQualifiedInputName(dbName, tableName, rowId)
     val attrsToRepair = {

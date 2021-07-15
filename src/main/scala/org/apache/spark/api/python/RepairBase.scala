@@ -92,14 +92,6 @@ abstract class RepairBase extends LoggingBasedOnLevel {
     viewName
   }
 
-  protected def checkIfColumnsExistIn(tableName: String, expectedColumns: Seq[String]): Unit = {
-    val columnsInRepairedCells = spark.table(tableName).columns
-    if (!expectedColumns.forall(columnsInRepairedCells.contains)) {
-      throw AnalysisException(s"'$tableName' must have " +
-        s"${expectedColumns.map(c => s"'$c'").mkString(", ")} columns.")
-    }
-  }
-
   protected def checkAndGetQualifiedInputName(dbName: String, tableName: String, rowId: String = "")
     : (DataFrame, String) = {
     val qualifiedInputName = if (dbName.nonEmpty) s"$dbName.$tableName" else tableName

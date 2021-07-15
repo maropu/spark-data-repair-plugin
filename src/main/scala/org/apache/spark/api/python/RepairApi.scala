@@ -75,6 +75,8 @@ object RepairApi extends RepairBase {
     logBasedOnLevel(s"extractCurrentValues called with: inputView=$inputView " +
       s"errCellView=$errCellView rowId=$rowId targetAttrList=$targetAttrList")
 
+    assert(checkSchema(errCellView, "attribute STRING", rowId, strict = false))
+
     val targetAttrs = targetAttrList.split(",").map(_.trim)
     assert(targetAttrList.nonEmpty && targetAttrs.length > 0)
     assert({
@@ -87,7 +89,7 @@ object RepairApi extends RepairBase {
       row.getString(attrToId(attribute))
     })
     val cellExprs = targetAttrs.map { a => s"CAST(r.`$a` AS STRING) $a" }
-    spark.sql(
+    val df = spark.sql(
       s"""
          |SELECT
          |  l.$rowId,
@@ -98,6 +100,8 @@ object RepairApi extends RepairBase {
          |WHERE
          |  l.$rowId = r.$rowId
        """.stripMargin)
+    assert(checkSchema(df, "attribute STRING, current_value STRING", rowId, strict = true))
+    df
   }
 
   case class ColumnStat(distinctCount: Long, min: Option[Any], max: Option[Any])
@@ -262,17 +266,19 @@ object RepairApi extends RepairBase {
     ).asJson
   }
 
-  def convertErrorCellsToNull(discreteAttrView: String, errCellView: String, rowId: String): String = {
+  def convertErrorCellsToNull(
+      discreteAttrView: String,
+      errCellView: String,
+      rowId: String,
+      targetAttrList: String): String = {
     logBasedOnLevel(s"convertErrorCellsToNull called with: discreteAttrView=$discreteAttrView " +
-      s"errCellView=$errCellView rowId=$rowId")
+      s"errCellView=$errCellView rowId=$rowId targetAttrList=$targetAttrList")
 
-    // `errCellView` must have `$rowId` and `attribute` columns
-    checkIfColumnsExistIn(errCellView, rowId :: "attribute" :: Nil)
+    // `errCellView` schema must have `$rowId`, `attribute`, and `current_value` columns
+    assert(checkSchema(errCellView, "attribute STRING, current_value STRING", rowId, strict = true))
 
-    val attrsToRepair = {
-      spark.sql(s"SELECT collect_set(attribute) FROM $errCellView")
-        .collect.head.getSeq[String](0).toSet
-    }
+    val attrsToRepair = targetAttrList.split(",").map(_.trim)
+    assert(targetAttrList.nonEmpty && attrsToRepair.length > 0)
 
     val errAttrDf = spark.sql(
       s"""

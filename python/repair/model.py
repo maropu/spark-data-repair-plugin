@@ -820,7 +820,11 @@ class RepairModel():
         self._intermediate_views_on_runtime.append(temp_name)
         return temp_name
 
-    def _repair_attrs(self, repair_updates: str, base_table: str) -> DataFrame:
+    def _repair_attrs(self, repair_updates: Union[str, DataFrame], base_table: Union[str, DataFrame]) -> DataFrame:
+        repair_updates = self._create_temp_view(repair_updates, "repair_updates") \
+            if type(repair_updates) is DataFrame else repair_updates
+        base_table = self._create_temp_view(base_table, "base_table") \
+            if type(base_table) is DataFrame else base_table
         jdf = self._jvm.RepairMiscApi.repairAttrsFrom(
             repair_updates, "", base_table, str(self.row_id))
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
@@ -908,16 +912,16 @@ class RepairModel():
         return noisy_cells_df, noisy_columns
 
     def _prepare_repair_base_cells(
-            self, input_table: str, noisy_cells_df: DataFrame,
-            num_input_rows: int, num_attrs: int) -> str:
+            self, input_table: str, noisy_cells_df: DataFrame, target_columns: List[str],
+            num_input_rows: int, num_attrs: int) -> DataFrame:
         # Sets NULL at the detected noisy cells
         logging.debug("{}/{} noisy cells found, then converts them into NULL cells...".format(
             noisy_cells_df.count(), num_input_rows * num_attrs))
         noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells")
         ret_as_json = json.loads(self._repair_api.convertErrorCellsToNull(
-            input_table, noisy_cells, str(self.row_id)))
+            input_table, noisy_cells, str(self.row_id), ",".join(target_columns)))
 
-        return self._register_table(ret_as_json["repair_base_cells"])
+        return self._register_and_get_df(ret_as_json["repair_base_cells"])
 
     # Checks if attributes are discrete or not, and discretizes continous ones
     def _discretize_attrs(self, input_table: str, continous_attrs: List[str]) -> Tuple[str, List[str], Dict[str, str]]:
@@ -958,26 +962,22 @@ class RepairModel():
 
         return ret_as_json["cell_domain"], ret_as_json["pairwise_attr_stats"]
 
-    def _extract_error_cells(self, noisy_cells_df: DataFrame, cell_domain: str, repair_base_cells: str,
+    def _extract_error_cells(self, noisy_cells_df: DataFrame, cell_domain: str,
                              num_input_rows: int, num_attrs: int) -> Tuple[DataFrame, DataFrame]:
         # Fixes cells if a predicted value is the same with an initial one
         fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) repaired"
-        weak_labeled_df = self._spark.table(cell_domain) \
+        weak_labeled_cells_df = self._spark.table(cell_domain) \
             .selectExpr(str(self.row_id), "attribute", fix_cells_expr) \
             .where("repaired IS NOT NULL")
 
-        # Updates the base cells by using the predicted values
-        weak_labeled_cells = self._create_temp_view(weak_labeled_df.cache(), "weak_labeled_cells")
-        repair_base_df = self._repair_attrs(weak_labeled_cells, repair_base_cells)
-
         # Removes weak labeled cells from the noisy cells
-        error_cells_df = noisy_cells_df.join(weak_labeled_df, str(self.row_id), "anti")
+        error_cells_df = noisy_cells_df.join(weak_labeled_cells_df, str(self.row_id), "anti")
         logging.info('[Error Detection Phase] {} noisy cells fixed and '
                      '{} error cells ({}%) remaining...'.format(
-                         weak_labeled_df.count(), error_cells_df.count(),
+                         weak_labeled_cells_df.count(), error_cells_df.count(),
                          error_cells_df.count() * 100.0 / (num_attrs * num_input_rows)))
 
-        return error_cells_df, repair_base_df
+        return error_cells_df, weak_labeled_cells_df
 
     def _split_clean_and_dirty_rows(
             self, repair_base_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame]:
@@ -1550,21 +1550,17 @@ class RepairModel():
         logging.info(f"Target repairable columns are {','.join(target_columns)} "
                      f"in noisy columns ({','.join(noisy_columns)})")
 
-        # Clear out noisy cells (to NULL)
-        repair_base_cells = self._prepare_repair_base_cells(
-            input_table, noisy_cells_df, num_input_rows, num_attrs)
-
         # Defines true error cells based on the result of domain analysis
         error_cells_df = noisy_cells_df
-        repair_base_df = self._spark.table(repair_base_cells)
+        weak_labeled_cells_df_opt = None
         pairwise_stats: Dict[str, List[str]] = {}
 
         # Checks if pairwise stats can be computed
         if len(target_columns) > 0 and len(discretized_columns) > 1:
             cell_domain, pairwise_stats = self._analyze_error_cell_domain(
                 noisy_cells_df, discretized_table, continous_attrs)
-            error_cells_df, repair_base_df = self._extract_error_cells(
-                noisy_cells_df, cell_domain, repair_base_cells, num_input_rows, num_attrs)
+            error_cells_df, weak_labeled_cells_df_opt = self._extract_error_cells(
+                noisy_cells_df, cell_domain, num_input_rows, num_attrs)
 
         # If `detect_errors_only` is True, returns found error cells
         if detect_errors_only:
@@ -1572,6 +1568,10 @@ class RepairModel():
 
         if len(target_columns) == 0:
             raise ValueError("To repair noisy cells, they should be discretizable")
+
+        # Filters out non-repairable columns from `error_cells_df`
+        error_cells_df = error_cells_df. \
+            where("attribute IN ({})".format(",".join(map(lambda x: f"'{x}'", target_columns))))
 
         # If no error found, we don't need to do nothing
         if error_cells_df.count() == 0:
@@ -1581,9 +1581,12 @@ class RepairModel():
             else:
                 return input_df
 
-        # Filters out non-repairable columns from `error_cells_df`
-        error_cells_df = error_cells_df. \
-            where("attribute IN ({})".format(",".join(map(lambda x: f"'{x}'", target_columns))))
+        # Clear out noisy cells (to NULL)
+        repair_base_df = self._prepare_repair_base_cells(
+            input_table, noisy_cells_df, target_columns, num_input_rows, num_attrs)
+        # Updates the base cells by using the predicted weak labeled ones
+        repair_base_df = self._repair_attrs(weak_labeled_cells_df_opt, repair_base_df) \
+            if weak_labeled_cells_df_opt is not None else repair_base_df
 
         #################################################################################
         # 2. Repair Model Training Phase

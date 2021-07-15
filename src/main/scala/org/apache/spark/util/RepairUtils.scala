@@ -44,10 +44,29 @@ object RepairUtils {
     ret
   }
 
-  def checkSchema(viewName: String, schema: String): Boolean = {
+  def checkSchema(
+      df: DataFrame,
+      expectedSchemDDL: String,
+      rowId: String,
+      strict: Boolean): Boolean = {
+    val viewSchema = df.schema
+    val hasRowId = viewSchema.exists(_.name == rowId)
+    val expectedSchema = StructType.fromDDL(expectedSchemDDL)
+    val hasEnoughFields = !strict || viewSchema.length - 1 == expectedSchema.length
+    val viewFieldSet = viewSchema.map(f => (f.name, f.dataType)).toSet
+    hasRowId && hasEnoughFields && expectedSchema.forall { f =>
+      viewFieldSet.contains((f.name, f.dataType))
+    }
+  }
+
+  def checkSchema(
+      viewName: String,
+      expectedSchemDDL: String,
+      rowId: String,
+      strict: Boolean): Boolean = {
     assert(SparkSession.getActiveSession.nonEmpty)
     val spark = SparkSession.getActiveSession.get
-    spark.table(viewName).schema.toDDL == StructType.fromDDL(schema).toDDL
+    checkSchema(spark.table(viewName), expectedSchemDDL, rowId, strict)
   }
 
   def createEmptyTable(schema: String): DataFrame = {

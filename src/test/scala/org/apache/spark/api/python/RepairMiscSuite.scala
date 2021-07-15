@@ -142,7 +142,7 @@ class RepairMiscSuite extends QueryTest with SharedSparkSession {
         createEmptyTable("tid STRING, illegal STRING").createOrReplaceTempView("IllegalView")
         RepairMiscApi.toErrorMap("IllegalView", "default", "t", "tid")
       }.getMessage
-      assert(errMsg.contains("'IllegalView' must have 'tid', 'attribute' columns"))
+      assert(errMsg.contains("'IllegalView' must have 'tid' and 'attribute' columns"))
     }
   }
 }
