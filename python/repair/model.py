@@ -1556,14 +1556,6 @@ class RepairModel():
             # self._show_histogram(hist_df)
             return hist_df
 
-        # Checks if we have the enough number of features for inference
-        # TODO: In case of `num_features == 0`, we might be able to select the most accurate and
-        # predictable column as a staring feature.
-        num_features = len(fixed_rows_df.columns) - len(target_columns)
-        if num_features == 0:
-            raise ValueError("At least one feature is needed to repair error cells, "
-                             "but no feature found")
-
         train_df = self._spark.table(partial_repaired)
         models = self._build_repair_models(
             train_df, target_columns, continous_attrs, distinct_stats, pairwise_stats)
