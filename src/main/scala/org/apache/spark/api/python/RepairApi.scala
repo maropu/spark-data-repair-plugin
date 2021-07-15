@@ -77,8 +77,8 @@ object RepairApi extends RepairBase {
 
     assert(checkSchema(errCellView, "attribute STRING", rowId, strict = false))
 
-    val targetAttrs = targetAttrList.split(",").map(_.trim)
-    assert(targetAttrList.nonEmpty && targetAttrs.length > 0)
+    val targetAttrs = SparkUtils.stringToSeq(targetAttrList)
+    assert(targetAttrs.nonEmpty)
     assert({
       val inputAttrSet = spark.table(inputView).columns.toSet
       targetAttrs.forall(inputAttrSet.contains)
@@ -276,8 +276,8 @@ object RepairApi extends RepairBase {
     // `errCellView` schema must have `$rowId`, `attribute`, and `current_value` columns
     assert(checkSchema(errCellView, "attribute STRING, current_value STRING", rowId, strict = true))
 
-    val attrsToRepair = targetAttrList.split(",").map(_.trim)
-    assert(targetAttrList.nonEmpty && attrsToRepair.length > 0)
+    val attrsToRepair = SparkUtils.stringToSeq(targetAttrList)
+    assert(attrsToRepair.nonEmpty)
 
     val errAttrDf = spark.sql(
       s"""
@@ -455,18 +455,21 @@ object RepairApi extends RepairBase {
     }
   }
 
-  // TODO: Adds tests for this method
   def computeDomainInErrorCells(
       discreteAttrView: String,
       errCellView: String,
       rowId: String,
       continuousAttrList: String,
+      targetAttrList: String,
+      discreteAttrList: String,
+      rowCount: Long,
       maxAttrsToComputeDomains: Int,
       statSampleRatio: Double,
       statThreshold: Double,
       minCorrThres: Double,
       domain_threshold_alpha: Double,
       domain_threshold_beta: Double): String = {
+    assert(0 < rowCount, "rowCount should be greater than 0.")
     assert(0 < maxAttrsToComputeDomains, "maxAttrsToComputeDomains should be greater than 0.")
     assert(0.0 <= minCorrThres && minCorrThres < 1.0, "minCorrThres should be in [0.0, 1.0).")
     assert(0.0 <= domain_threshold_alpha && domain_threshold_alpha <= 1.0,
@@ -477,62 +480,38 @@ object RepairApi extends RepairBase {
     logBasedOnLevel(s"computeDomainInErrorCells called with: " +
       s"discreteAttrView=$discreteAttrView errCellView=$errCellView rowId=$rowId " +
       s"continousAttrList=${if (continuousAttrList.nonEmpty) continuousAttrList else "<none>"} " +
-      s"maxAttrsToComputeDomains=$maxAttrsToComputeDomains " +
+      s"targetAttrList=$targetAttrList discreteAttrList=$discreteAttrList " +
+      s"rowCount=$rowCount maxAttrsToComputeDomains=$maxAttrsToComputeDomains " +
       s"statSampleRatio=$statSampleRatio statThreshold=$statThreshold minCorrThres=$minCorrThres " +
       s"domain_threshold=alpha:$domain_threshold_alpha,beta=$domain_threshold_beta")
 
-    // TODO: Needs more strict checks for input data, e.g., schema/data validation
-    assert({
-      val df = spark.table(errCellView)
-      df.distinct().count() == df.count()
-    })
+    val discreteAttrs = SparkUtils.stringToSeq(discreteAttrList)
+    val attrsToRepair = SparkUtils.stringToSeq(targetAttrList)
 
-    val discreteAttrs = spark.table(discreteAttrView).schema.map(_.name).filter(_ != rowId)
-    val rowCnt = spark.table(discreteAttrView).count()
+    assert(checkSchema(errCellView, "attribute STRING, current_value STRING", rowId, strict = true))
+    assert(discreteAttrs.nonEmpty && attrsToRepair.nonEmpty)
 
-    assert(discreteAttrs.nonEmpty && rowCnt > 0)
-
-    val attrsToRepair = {
-      val attrs = spark.sql(s"SELECT collect_set(attribute) FROM $errCellView")
-        .collect.head.getSeq[String](0)
-      attrs.filter(discreteAttrs.contains)
-    }
     val attrPairsToRepair = attrsToRepair.flatMap { attrToRepair =>
       discreteAttrs.filter(attrToRepair != _).map(a => (attrToRepair, a))
     }
-
     val attrStatDf = computeAttrStats(
       discreteAttrView, discreteAttrs, attrPairsToRepair, statSampleRatio, statThreshold)
 
     withTempView(attrStatDf, cache = true) { attrStatView =>
       val (pairwiseStatMap, domainStatMap) = compuatePairwiseAttrStats(
-        rowCnt, attrStatView, discreteAttrView, discreteAttrs,
+        rowCount, attrStatView, discreteAttrView, discreteAttrs,
         attrPairsToRepair, minCorrThres)
-
-      val corrAttrs = computeCorrAttrs(
-        pairwiseStatMap, maxAttrsToComputeDomains, minCorrThres)
-
-      val attrToId = discreteAttrs.zipWithIndex.toMap
-      spark.udf.register("extractField", (row: Row, attribute: String) => {
-        row.getString(attrToId(attribute))
-      })
+      val corrAttrs = computeCorrAttrs(pairwiseStatMap, maxAttrsToComputeDomains, minCorrThres)
       val domainInitValue = s"CAST(NULL AS ARRAY<STRUCT<n: STRING, cnt: DOUBLE>>)"
-      val cellExprs = discreteAttrs.map { a => s"CAST(l.`$a` AS STRING) $a" }
-      val repairCellDf = spark.sql(
-        s"""SELECT * FROM $errCellView
-           |WHERE attribute IN (${attrsToRepair.map(a => s"'$a'").mkString(", ")})
-         """.stripMargin)
-
+      val repairCellDf = spark.table(errCellView).where(
+        s"attribute IN (${attrsToRepair.map(a => s"'$a'").mkString(", ")})")
       val cellDomainDf = if (domain_threshold_beta >= 1.0) {
         // The case where we don't need to compute error domains
         withTempView(repairCellDf) { repairCellView =>
           spark.sql(
             s"""
                |SELECT
-               |  l.$rowId,
-               |  r.attribute,
-               |  extractField(struct(${cellExprs.mkString(", ")}), r.attribute) current_value,
-               |  $domainInitValue domain
+               |  l.$rowId, r.attribute, r.current_value, $domainInitValue domain
                |FROM
                |  $discreteAttrView l, $repairCellView r
                |WHERE
@@ -552,10 +531,7 @@ object RepairApi extends RepairBase {
           spark.sql(
             s"""
                |SELECT
-               |  l.$rowId,
-               |  r.attribute,
-               |  extractField(struct(${cellExprs.mkString(", ")}), r.attribute) current_value
-               |  $corrCols
+               |  l.$rowId, r.attribute, r.current_value $corrCols
                |FROM
                |  $discreteAttrView l, $repairCellView r
                |WHERE
@@ -584,7 +560,7 @@ object RepairApi extends RepairBase {
                   val tau = {
                     // `tau` becomes a threshold on co-occurrence frequency
                     val productSpaceSize = domainStatMap(attr) * domainStatMap(attribute)
-                    (domain_threshold_alpha * (rowCnt / productSpaceSize)).toLong
+                    (domain_threshold_alpha * (rowCount / productSpaceSize)).toLong
                   }
                   spark.sql(
                     s"""
@@ -632,7 +608,7 @@ object RepairApi extends RepairBase {
                    |    attribute,
                    |    current_value,
                    |    domain_value_with_freq.n domain_value,
-                   |    exp(ln(cnt / $rowCnt) + ln(domain_value_with_freq.cnt / cnt)) score
+                   |    exp(ln(cnt / $rowCount) + ln(domain_value_with_freq.cnt / cnt)) score
                    |  FROM (
                    |    SELECT
                    |      $rowId,

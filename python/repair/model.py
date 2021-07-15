@@ -937,7 +937,8 @@ class RepairModel():
     @_spark_job_group(name="cell domain analysis")
     def _analyze_error_cell_domain(
             self, noisy_cells_df: DataFrame, discretized_table: str,
-            continous_attrs: List[str]) -> Tuple[str, str]:
+            continous_attrs: List[str], target_columns: List[str], discretized_columns: List[str],
+            num_input_rows: int) -> Tuple[str, str]:
 
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
@@ -951,6 +952,9 @@ class RepairModel():
         ret_as_json = json.loads(self._repair_api.computeDomainInErrorCells(
             discretized_table, noisy_cells, str(self.row_id),
             ",".join(continous_attrs),
+            ",".join(target_columns),
+            ",".join(discretized_columns),
+            num_input_rows,
             self.max_attrs_to_compute_domains,
             self.attr_stat_sample_ratio,
             self.attr_stat_threshold,
@@ -1558,7 +1562,8 @@ class RepairModel():
         # Checks if pairwise stats can be computed
         if len(target_columns) > 0 and len(discretized_columns) > 1:
             cell_domain, pairwise_stats = self._analyze_error_cell_domain(
-                noisy_cells_df, discretized_table, continous_attrs)
+                noisy_cells_df, discretized_table, continous_attrs, target_columns,
+                discretized_columns, num_input_rows)
             error_cells_df, weak_labeled_cells_df_opt = self._extract_error_cells(
                 noisy_cells_df, cell_domain, num_input_rows, num_attrs)
 

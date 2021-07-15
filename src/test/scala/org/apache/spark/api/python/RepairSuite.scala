@@ -212,4 +212,8 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         "MeasureCode" -> 56))
     }
   }
+
+  ignore("computeDomainInErrorCells") {
+    // TODO: Adds tests here
+  }
 }
