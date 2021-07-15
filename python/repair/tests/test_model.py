@@ -478,7 +478,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 lambda: test_model.run(detect_errors_only=False))
             self.assertEqual(
                 test_model.run(detect_errors_only=True).collect(), [
-                    Row(tid=1, attribute="y")])
+                    Row(tid=1, attribute="y", current_value=None)])
 
     def test_no_valid_noisy_cell_exists(self):
         with self.tempView("inputView"):

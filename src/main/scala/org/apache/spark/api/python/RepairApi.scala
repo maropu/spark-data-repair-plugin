@@ -67,6 +67,39 @@ object RepairApi extends RepairBase {
     ).asJson
   }
 
+  def withCurrentValues(
+      inputView: String,
+      errCellView: String,
+      rowId: String,
+      targetAttrList: String): DataFrame = {
+    logBasedOnLevel(s"extractCurrentValues called with: inputView=$inputView " +
+      s"errCellView=$errCellView rowId=$rowId targetAttrList=$targetAttrList")
+
+    val targetAttrs = targetAttrList.split(",").map(_.trim)
+    assert(targetAttrList.nonEmpty && targetAttrs.length > 0)
+    assert({
+      val inputAttrSet = spark.table(inputView).columns.toSet
+      targetAttrs.forall(inputAttrSet.contains)
+    })
+
+    val attrToId = targetAttrs.zipWithIndex.toMap
+    spark.udf.register("extractField", (row: Row, attribute: String) => {
+      row.getString(attrToId(attribute))
+    })
+    val cellExprs = targetAttrs.map { a => s"CAST(r.`$a` AS STRING) $a" }
+    spark.sql(
+      s"""
+         |SELECT
+         |  l.$rowId,
+         |  l.attribute,
+         |  extractField(struct(${cellExprs.mkString(", ")}), l.attribute) current_value
+         |FROM
+         |  $errCellView l, $inputView r
+         |WHERE
+         |  l.$rowId = r.$rowId
+       """.stripMargin)
+  }
+
   case class ColumnStat(distinctCount: Long, min: Option[Any], max: Option[Any])
 
   private[python] def computeAndGetTableStats(tableIdent: String): Map[String, ColumnStat] = {
@@ -489,7 +522,7 @@ object RepairApi extends RepairBase {
           row.getString(attrToId(attribute))
         })
         val domainInitValue = s"CAST(NULL AS $domainType)"
-        val cellExprs = discreteAttrs.map { a => s"CAST(l.$a AS STRING) $a" }
+        val cellExprs = discreteAttrs.map { a => s"CAST(l.`$a` AS STRING) $a" }
         val repairCellDf = spark.sql(
           s"""SELECT * FROM $errCellView
              |WHERE attribute IN (${attrsToRepair.map(a => s"'$a'").mkString(", ")})
