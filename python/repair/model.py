@@ -842,7 +842,7 @@ class RepairModel():
         input_table = ret_as_json["input_table"]
         num_input_rows = int(ret_as_json["num_input_rows"])
         num_attrs = int(ret_as_json["num_attrs"])
-        continous_columns = ret_as_json["continous_columns"].split(",")
+        continous_columns = ret_as_json["continous_attrs"].split(",")
 
         return input_table, num_input_rows, num_attrs, \
             continous_columns if continous_columns != [""] else []
@@ -920,7 +920,8 @@ class RepairModel():
         return self._register_and_get_df(ret_as_json["repair_base_cells"])
 
     # Checks if attributes are discrete or not, and discretizes continous ones
-    def _discretize_attrs(self, input_table: str, continous_columns: List[str]) -> Tuple[str, List[str], Dict[str, str]]:
+    def _discretize_attrs(self, input_table: str,
+                          continous_columns: List[str]) -> Tuple[str, List[str], Dict[str, str]]:
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
         ret_as_json = json.loads(self._repair_api.convertToDiscretizedTable(
