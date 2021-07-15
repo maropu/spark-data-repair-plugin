@@ -22,8 +22,8 @@ import java.net.URI
 import scala.collection.mutable
 import scala.io.Source
 
-import org.apache.spark.SparkException
 import org.apache.spark.python.DenialConstraints
+import org.apache.spark.sql.ExceptionUtils.AnalysisException
 import org.apache.spark.sql._
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.util.RepairUtils._
@@ -37,16 +37,23 @@ object RepairApi extends RepairBase {
 
     val unsupportedTypes = inputDf.schema.map(_.dataType).filterNot(supportedType.contains)
     if (unsupportedTypes.nonEmpty) {
-      throw new SparkException(
-        s"Supported types are ${supportedType.map(_.catalogString).mkString(",")}, but " +
-          s"unsupported ones found: ${unsupportedTypes.map(_.catalogString).mkString(",")}")
+      val supportedTypeMsg = supportedType.map(_.catalogString).mkString(",")
+      val unsupportedTypeMsg = unsupportedTypes.map(_.catalogString).mkString(",")
+      throw AnalysisException(s"Supported types are $supportedTypeMsg, but " +
+        s"unsupported ones found: $unsupportedTypeMsg")
+    }
+
+    // Checks if the input table has enough columns for repairing
+    if (!(inputDf.columns.length >= 3)) {
+      throw AnalysisException(s"A least three columns (`$rowId` columns + two more ones) " +
+        s"in table '$qualifiedName'")
     }
 
     // Checks if `row_id` is unique
     val rowCnt = inputDf.count()
     val distinctCnt = inputDf.selectExpr(rowId).distinct().count()
     if (distinctCnt != rowCnt) {
-      throw new SparkException(s"Uniqueness does not hold in column '$rowId' " +
+      throw AnalysisException(s"Uniqueness does not hold in column '$rowId' " +
         s"of table '$qualifiedName' (# of distinct '$rowId': $distinctCnt, # of rows: $rowCnt)")
     }
 

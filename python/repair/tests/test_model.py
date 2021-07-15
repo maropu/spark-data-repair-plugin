@@ -22,6 +22,7 @@ import pandas as pd  # type: ignore[import]
 
 from pyspark import SparkConf
 from pyspark.sql import Row
+from pyspark.sql.utils import AnalysisException
 
 from repair.misc import RepairMisc
 from repair.model import FunctionalDepModel, RepairModel, PoorModel
@@ -393,6 +394,43 @@ class RepairModelTests(ReusedSQLTestCase):
         self.assertEqual(
             test_model.run(repair_data=True).orderBy("tid").collect(),
             expected_result)
+
+    def test_unsupported_types(self):
+        with self.tempView("inputView"):
+            self.spark.range(1).selectExpr("id tid", "1 AS x", "CAST('2021-08-01' AS DATE) y") \
+                .createOrReplaceTempView("inputView")
+            test_model = self._build_model() \
+                .setTableName("inputView") \
+                .setRowId("tid")
+            self.assertRaises(AnalysisException, lambda: test_model.run())
+
+    def test_table_has_no_enough_columns(self):
+        with self.tempView("inputView"):
+            rows = [
+                (1, None),
+                (2, "test-1"),
+                (3, "test-1")
+            ]
+            self.spark.createDataFrame(rows, ["tid", "x"]) \
+                .createOrReplaceTempView("inputView")
+            test_model = self._build_model() \
+                .setTableName("inputView") \
+                .setRowId("tid")
+            self.assertRaises(AnalysisException, lambda: test_model.run())
+
+    def test_rowid_uniqueness(self):
+        with self.tempView("inputView"):
+            rows = [
+                (1, 1, None),
+                (1, 1, "test-1"),
+                (1, 2, "test-1")
+            ]
+            self.spark.createDataFrame(rows, ["tid", "x", "y"]) \
+                .createOrReplaceTempView("inputView")
+            test_model = self._build_model() \
+                .setTableName("inputView") \
+                .setRowId("tid")
+            self.assertRaises(AnalysisException, lambda: test_model.run())
 
     def test_no_valid_discrete_feature_exists(self):
         with self.tempView("inputView"):

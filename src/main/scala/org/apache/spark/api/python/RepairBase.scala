@@ -17,7 +17,7 @@
 
 package org.apache.spark.api.python
 
-import org.apache.spark.SparkException
+import org.apache.spark.sql.ExceptionUtils.AnalysisException
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.util.LoggingBasedOnLevel
@@ -95,7 +95,7 @@ abstract class RepairBase extends LoggingBasedOnLevel {
   protected def checkIfColumnsExistIn(tableName: String, expectedColumns: Seq[String]): Unit = {
     val columnsInRepairedCells = spark.table(tableName).columns
     if (!expectedColumns.forall(columnsInRepairedCells.contains)) {
-      throw new SparkException(s"'$tableName' must have " +
+      throw AnalysisException(s"'$tableName' must have " +
         s"${expectedColumns.map(c => s"'$c'").mkString(", ")} columns.")
     }
   }
@@ -107,11 +107,11 @@ abstract class RepairBase extends LoggingBasedOnLevel {
     // Checks if the given table has a column named `rowId`
     if (rowId.nonEmpty && !inputDf.columns.contains(rowId)) {
       // TODO: Implicitly adds unique row IDs if they don't exist in a given table
-      throw new SparkException(s"Column '$rowId' does not exist in '$qualifiedInputName'.")
+      throw AnalysisException(s"Column '$rowId' does not exist in '$qualifiedInputName'.")
     }
     if (rowId.nonEmpty && inputDf.columns.length <= 1) {
-      throw new SparkException(
-        s"At least one valid column needs to exist, but only one column '$rowId' exists.")
+      throw AnalysisException("At least one valid column needs to exist, but " +
+        s"only one column '$rowId' exists.")
     }
     (inputDf, qualifiedInputName)
   }

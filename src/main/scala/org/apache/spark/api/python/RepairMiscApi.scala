@@ -21,9 +21,9 @@ import scala.collection.mutable
 import scala.util.Try
 import scala.collection.JavaConverters._
 
-import org.apache.spark.SparkException
 import org.apache.spark.ml.clustering.{BisectingKMeans, KMeans}
 import org.apache.spark.ml.feature.CountVectorizer
+import org.apache.spark.sql.ExceptionUtils.AnalysisException
 import org.apache.spark.sql.{DataFrame, Row, SparkCommandUtils}
 import org.apache.spark.sql.catalyst.plans.logical.Histogram
 import org.apache.spark.sql.functions.{lit, udf}
@@ -95,7 +95,7 @@ object RepairMiscApi extends RepairBase {
       val attrs = SparkUtils.stringToSeq(targetAttrList)
       val unknownAttrs = attrs.filterNot(inputDf.columns.contains)
       if (unknownAttrs.nonEmpty) {
-        throw new SparkException(s"Columns '${unknownAttrs.mkString(", ")}' " +
+        throw AnalysisException(s"Columns '${unknownAttrs.mkString(", ")}' " +
           s"do not exist in '$qualifiedName'")
       }
       attrs
@@ -168,7 +168,7 @@ object RepairMiscApi extends RepairBase {
       val attrs = SparkUtils.stringToSeq(targetAttrList)
       val unknownAttrs = attrs.filterNot(inputDf.columns.contains)
       if (unknownAttrs.nonEmpty) {
-        throw new SparkException(s"Columns '${unknownAttrs.mkString(", ")}' " +
+        throw AnalysisException(s"Columns '${unknownAttrs.mkString(", ")}' " +
           s"do not exist in '$qualifiedName'")
       }
       attrs.toSet
