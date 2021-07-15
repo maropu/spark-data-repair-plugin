@@ -931,7 +931,7 @@ class RepairModel():
         return ret_as_json["cell_domain"], ret_as_json["pairwise_attr_stats"]
 
     def _extract_error_cells(self, cell_domain: str, repair_base_cells: str,
-                             num_input_rows: int, num_attrs: int) -> Tuple[DataFrame, str]:
+                             num_input_rows: int, num_attrs: int) -> Tuple[DataFrame, DataFrame]:
         # Fixes cells if an inferred value is the same with an initial one
         fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) value"
         weak_df = self._spark.table(cell_domain).selectExpr(
@@ -940,8 +940,7 @@ class RepairModel():
         weak_df = weak_df.where("value IS NOT NULL") \
             .selectExpr(str(self.row_id), "attribute", "value repaired")
         weak = self._create_temp_view(weak_df.cache(), "weak")
-        partial_repaired = self._create_temp_view(
-            self._repair_attrs(weak, repair_base_cells), "partial_repaired")
+        repair_base_df = self._repair_attrs(weak, repair_base_cells)
 
         logging.info('[Error Detection Phase] {} noisy cells fixed and '
                      '{} error cells ({}%) remaining...'.format(
@@ -949,17 +948,14 @@ class RepairModel():
                          error_cells_df.count(),
                          error_cells_df.count() * 100.0 / (num_attrs * num_input_rows)))
 
-        return error_cells_df, partial_repaired
+        return error_cells_df, repair_base_df
 
     def _split_clean_and_dirty_rows(
-            self, partial_repaired_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame, List[str]]:
-        error_rows_df = error_cells_df.selectExpr(str(self.row_id)).distinct().cache()
-        clean_rows_df = partial_repaired_df.join(error_rows_df, str(self.row_id), "left_anti").cache()
-        dirty_rows_df = partial_repaired_df.join(error_rows_df, str(self.row_id), "left_semi").cache()
-        error_attrs = error_cells_df.groupBy("attribute") \
-            .agg(functions.count("attribute").alias("cnt")).collect()
-        assert len(error_attrs) > 0
-        return clean_rows_df, dirty_rows_df, list(map(lambda x: x.attribute, error_attrs))
+            self, repair_base_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame]:
+        error_rows_df = error_cells_df.selectExpr(str(self.row_id))
+        clean_rows_df = repair_base_df.join(error_rows_df, str(self.row_id), "left_anti")
+        dirty_rows_df = repair_base_df.join(error_rows_df, str(self.row_id), "left_semi")
+        return clean_rows_df, dirty_rows_df
 
     def _convert_to_histogram(self, df: DataFrame) -> DataFrame:
         input_table = self._create_temp_view(df)
@@ -1511,7 +1507,7 @@ class RepairModel():
             else:
                 return input_df
 
-        # Selects error cells based on the result of domain analysis
+        # Defines true error cells based on the result of domain analysis
         discretized_table, discretized_columns, distinct_stats = \
             self._discretize_attrs(input_table, continous_attrs)
         if not len(discretized_columns) > 0:
@@ -1532,7 +1528,7 @@ class RepairModel():
             raise ValueError("Noisy cells have valid discrete properties for domain analysis")
 
         # If `detect_errors_only` is True, returns found error cells
-        error_cells_df, partial_repaired = \
+        error_cells_df, repair_base_df = \
             self._extract_error_cells(cell_domain, repair_base_cells, num_input_rows, num_attrs)
         if detect_errors_only:
             return error_cells_df
@@ -1549,18 +1545,23 @@ class RepairModel():
         # 2. Repair Model Training Phase
         #################################################################################
 
-        # Selects rows for training, build models, and repair cells
-        clean_rows_df, dirty_rows_df, target_columns = self._split_clean_and_dirty_rows(
-            self._spark.table(partial_repaired), error_cells_df)
+        # Target columns to repair
+        target_columns = error_cells_df \
+            .selectExpr("collect_set(attribute) columns") \
+            .collect()[0] \
+            .columns
+
+        # Selects rows for training, building models, and repairing cells
+        clean_rows_df, dirty_rows_df = \
+            self._split_clean_and_dirty_rows(repair_base_df, error_cells_df)
         if compute_training_target_hist:
             df = clean_rows_df.selectExpr(target_columns)
             hist_df = self._convert_to_histogram(df)
             # self._show_histogram(hist_df)
             return hist_df
 
-        train_df = self._spark.table(partial_repaired)
         models = self._build_repair_models(
-            train_df, target_columns, continous_attrs, distinct_stats, pairwise_stats)
+            repair_base_df, target_columns, continous_attrs, distinct_stats, pairwise_stats)
 
         #################################################################################
         # 3. Repair Phase
