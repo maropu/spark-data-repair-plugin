@@ -110,6 +110,10 @@ class RepairModelTests(ReusedSQLTestCase):
             ValueError,
             "`attrs` has at least one attribute",
             lambda: RepairModel().setTargets([]))
+        self.assertRaisesRegexp(
+            ValueError,
+            "threshold must be bigger than 1",
+            lambda: RepairModel().setDiscreteThreshold(1))
 
     def test_exclusive_params(self):
         def _assert_exclusive_params(func):

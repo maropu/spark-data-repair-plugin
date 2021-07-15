@@ -1506,7 +1506,10 @@ class RepairModel():
         noisy_cells_df = self._detect_errors(input_table, num_attrs, num_input_rows)
         if noisy_cells_df.count() == 0:  # type: ignore
             logging.info("Any error cell not found, so the input data is already clean")
-            return noisy_cells_df if not repair_data else input_df
+            if not repair_data:
+                return noisy_cells_df
+            else:
+                return input_df
 
         # Selects error cells based on the result of domain analysis
         discretized_table, discretized_columns, distinct_stats = \
