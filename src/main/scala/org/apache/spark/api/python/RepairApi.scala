@@ -50,11 +50,11 @@ object RepairApi extends RepairBase {
     }
 
     // Checks if `row_id` is unique
-    val rowCnt = inputDf.count()
-    val distinctCnt = inputDf.selectExpr(rowId).distinct().count()
-    if (distinctCnt != rowCnt) {
+    val rowCount = inputDf.count()
+    val distinctCount = inputDf.selectExpr(rowId).distinct().count()
+    if (distinctCount != rowCount) {
       throw AnalysisException(s"Uniqueness does not hold in column '$rowId' " +
-        s"of table '$qualifiedName' (# of distinct '$rowId': $distinctCnt, # of rows: $rowCnt)")
+        s"of table '$qualifiedName' (# of distinct '$rowId': $distinctCount, # of rows: $rowCount)")
     }
 
     val continousAttrs = inputDf.schema.filter(f => continousTypes.contains(f.dataType))
@@ -72,7 +72,7 @@ object RepairApi extends RepairBase {
       errCellView: String,
       rowId: String,
       targetAttrList: String): DataFrame = {
-    logBasedOnLevel(s"extractCurrentValues called with: inputView=$inputView " +
+    logBasedOnLevel(s"withCurrentValues called with: inputView=$inputView " +
       s"errCellView=$errCellView rowId=$rowId targetAttrList=$targetAttrList")
 
     assert(checkSchema(errCellView, "attribute STRING", rowId, strict = false))
@@ -118,15 +118,14 @@ object RepairApi extends RepairBase {
     columnStats
   }
 
-  def computeDomainSizes(discreteAttrView: String): String = {
-    logBasedOnLevel(s"computeDomainSizes called with: discreteAttrView=$discreteAttrView")
-
-    val statMap = computeAndGetTableStats(discreteAttrView)
+  def computeDomainSizes(discretizedInputView: String): String = {
+    logBasedOnLevel(s"computeDomainSizes called with: discretizedInputView=$discretizedInputView")
+    val statMap = computeAndGetTableStats(discretizedInputView)
     Seq("distinct_stats" -> statMap.mapValues(_.distinctCount.toString)).asJson
   }
 
   def computeFunctionalDeps(inputView: String, constraintFilePath: String): String = {
-    logBasedOnLevel(s"computeFunctionalDep called with: discreteAttrView=$inputView " +
+    logBasedOnLevel(s"computeFunctionalDep called with: discretizedInputView=$inputView " +
       s"constraintFilePath=$constraintFilePath")
 
     val (inputDf, qualifiedName) = checkAndGetQualifiedInputName("", inputView)
@@ -207,22 +206,22 @@ object RepairApi extends RepairBase {
     val statMap = computeAndGetTableStats(inputView)
     val inputDf = spark.table(inputView)
     val attrTypeMap = inputDf.schema.map { f => f.name -> f.dataType }.toMap
-    val discreteExprs = inputDf.columns.flatMap { attr =>
+    val discretizedExprs = inputDf.columns.flatMap { attr =>
       (statMap(attr), attrTypeMap(attr)) match {
         case (ColumnStat(_, min, max), tpe) if continousTypes.contains(tpe) =>
           logBasedOnLevel(s"'$attr' regraded as a continuous attribute (min=${min.get}, " +
             s"max=${max.get}), so discretized into [0, $discreteThres)")
           Some(s"int(($attr - ${min.get}) / (${max.get} - ${min.get}) * $discreteThres) $attr")
-        case (ColumnStat(distinctCnt, _, _), _)
-          if whitelist.contains(attr) || (1 < distinctCnt && distinctCnt < discreteThres) =>
+        case (ColumnStat(distinctCount, _, _), _)
+          if whitelist.contains(attr) || (1 < distinctCount && distinctCount < discreteThres) =>
           Some(attr)
-        case (ColumnStat(distinctCnt, _, _), _) =>
-          logWarning(s"'$attr' dropped because of its unsuitable domain (size=$distinctCnt)")
+        case (ColumnStat(distinctCount, _, _), _) =>
+          logWarning(s"'$attr' dropped because of its unsuitable domain (size=$distinctCount)")
           None
       }
     }
-    val discreteDf = inputDf.selectExpr(discreteExprs: _*)
-    (discreteDf, statMap)
+    val df = inputDf.selectExpr(discretizedExprs: _*)
+    (df, statMap)
   }
 
   def convertToDiscretizedTable(
@@ -234,8 +233,8 @@ object RepairApi extends RepairBase {
       s"rowId=$rowId discreteThres=$discreteThres")
     val (discreteDf, statMap) = discretizeTable(qualifiedName, discreteThres, Set(rowId))
     val distinctStats = statMap.mapValues(_.distinctCount.toString)
-    val discreteFeaturesView = createAndCacheTempView(discreteDf, "discretized_table")
-    Seq("discretized_table" -> discreteFeaturesView,
+    val discretizedView = createAndCacheTempView(discreteDf, "discretized_table")
+    Seq("discretized_table" -> discretizedView,
       "distinct_stats" -> distinctStats
     ).asJson
   }
@@ -244,16 +243,15 @@ object RepairApi extends RepairBase {
     logBasedOnLevel(s"convertToHistogram called with: inputView=$inputView " +
       s"discreteThres=$discreteThres")
 
-    val (discreteDf, _) = discretizeTable(inputView, discreteThres)
-
+    val (df, _) = discretizeTable(inputView, discreteThres)
     val histogramDf = {
-      withTempView(discreteDf, cache = true) { discreteView =>
-        val sqls = discreteDf.columns.map { attr =>
+      withTempView(df, cache = true) { discretizedView =>
+        val sqls = df.columns.map { attr =>
           s"""
              |SELECT '$attr' attribute, collect_list(b) histogram
              |FROM (
              |  SELECT named_struct('value', $attr, 'cnt', COUNT(1)) b
-             |  FROM $discreteView
+             |  FROM $discretizedView
              |  GROUP BY $attr
              |)
            """.stripMargin
@@ -266,11 +264,11 @@ object RepairApi extends RepairBase {
   }
 
   def convertErrorCellsToNull(
-      discreteAttrView: String,
+      discretizedInputView: String,
       errCellView: String,
       rowId: String,
       targetAttrList: String): String = {
-    logBasedOnLevel(s"convertErrorCellsToNull called with: discreteAttrView=$discreteAttrView " +
+    logBasedOnLevel(s"convertErrorCellsToNull called with: discretizedInputView=$discretizedInputView " +
       s"errCellView=$errCellView rowId=$rowId targetAttrList=$targetAttrList")
 
     // `errCellView` schema must have `$rowId`, `attribute`, and `current_value` columns
@@ -287,9 +285,9 @@ object RepairApi extends RepairBase {
        """.stripMargin)
 
     val repairBase = withTempView(errAttrDf) { errAttrView =>
-      val cleanAttrs = spark.table(discreteAttrView).columns.map {
+      val cleanAttrs = spark.table(discretizedInputView).columns.map {
         case attr if attr == rowId =>
-          s"$discreteAttrView.$rowId"
+          s"$discretizedInputView.$rowId"
         case attr if attrsToRepair.contains(attr) =>
           s"IF(array_contains(errors, '$attr'), NULL, $attr) AS $attr"
         case cleanAttr =>
@@ -298,9 +296,9 @@ object RepairApi extends RepairBase {
       spark.sql(
         s"""
            |SELECT ${cleanAttrs.mkString(", ")}
-           |FROM $discreteAttrView
+           |FROM $discretizedInputView
            |LEFT OUTER JOIN $errAttrView
-           |ON $discreteAttrView.$rowId = $errAttrView.$rowId
+           |ON $discretizedInputView.$rowId = $errAttrView.$rowId
          """.stripMargin)
     }
     val repairBaseView = createAndCacheTempView(repairBase, "repair_base_cells")
@@ -308,17 +306,17 @@ object RepairApi extends RepairBase {
   }
 
   private[python] def computeAttrStats(
-      discreteAttrView: String,
-      discreteAttrs: Seq[String],
+      discretizedInputView: String,
+      discretizedAttrs: Seq[String],
       attrPairsToRepair: Seq[(String, String)],
       statSampleRatio: Double,
       statThreshold: Double): DataFrame = {
-    assert(discreteAttrs.nonEmpty && attrPairsToRepair.nonEmpty)
+    assert(discretizedAttrs.nonEmpty && attrPairsToRepair.nonEmpty)
     val pairSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
     val inputDf = if (statSampleRatio < 1.0) {
-      spark.table(discreteAttrView).sample(statSampleRatio)
+      spark.table(discretizedInputView).sample(statSampleRatio)
     } else {
-      spark.table(discreteAttrView)
+      spark.table(discretizedInputView)
     }
     withTempView(inputDf) { inputView =>
       val filterClauseOption = if (statThreshold > 0.0) {
@@ -330,10 +328,10 @@ object RepairApi extends RepairBase {
       }
       spark.sql(
         s"""
-           |SELECT ${discreteAttrs.mkString(", ")}, COUNT(1) cnt
+           |SELECT ${discretizedAttrs.mkString(", ")}, COUNT(1) cnt
            |FROM $inputView
            |GROUP BY GROUPING SETS (
-           |  ${discreteAttrs.map(a => s"($a)").mkString(", ")},
+           |  ${discretizedAttrs.map(a => s"($a)").mkString(", ")},
            |  ${pairSets.map(_.toSeq).map { case Seq(a1, a2) => s"($a1,$a2)" }.mkString(", ")}
            |)
            |$filterClauseOption
@@ -346,13 +344,13 @@ object RepairApi extends RepairBase {
   }
 
   private[python] def compuatePairwiseAttrStats(
-      rowCnt: Long,
+      rowCount: Long,
       attrStatView: String,
-      discreteAttrView: String,
-      discreteAttrs: Seq[String],
+      discretizedInputView: String,
+      discretizedAttrs: Seq[String],
       attrPairsToRepair: Seq[(String, String)],
       minCorrThres: Double): (Map[String, Seq[(String, Double)]], Map[String, Long]) = {
-    assert(rowCnt > 0 && discreteAttrs.nonEmpty && attrPairsToRepair.nonEmpty)
+    assert(rowCount > 0 && discretizedAttrs.nonEmpty && attrPairsToRepair.nonEmpty)
     // Computes the conditional entropy: H(x|y) = H(x,y) - H(y).
     // H(x,y) denotes H(x U y). If H(x|y) = 0, then y determines x, i.e., y -> x.
     val hXYs = withJobDescription("compute conditional entropy H(x|y)") {
@@ -364,7 +362,7 @@ object RepairApi extends RepairBase {
             s"""
                |SELECT -SUM(hXY) hXY
                |FROM (
-               |  SELECT $a1 X, $a2 Y, (cnt / $rowCnt) * log10(cnt / $rowCnt) hXY
+               |  SELECT $a1 X, $a2 Y, (cnt / $rowCount) * log10(cnt / $rowCount) hXY
                |  FROM $attrStatView
                |  WHERE $a1 IS NOT NULL AND
                |    $a2 IS NOT NULL
@@ -379,17 +377,17 @@ object RepairApi extends RepairBase {
     }
 
     val hYs = withJobDescription("compute entropy H(y)") {
-      discreteAttrs.map { attrKey =>
+      discretizedAttrs.map { attrKey =>
         attrKey -> {
           val df = spark.sql(
             s"""
                |SELECT -SUM(hY) hY
                |FROM (
                |  /* TODO: Needs to reconsider how-to-handle NULL */
-               |  /* Use `MAX` to drop ($attrKey, null) tuples in `$discreteAttrView` */
-               |  SELECT $attrKey Y, (MAX(cnt) / $rowCnt) * log10(MAX(cnt) / $rowCnt) hY
+               |  /* Use `MAX` to drop ($attrKey, null) tuples in `$discretizedInputView` */
+               |  SELECT $attrKey Y, (MAX(cnt) / $rowCount) * log10(MAX(cnt) / $rowCount) hY
                |  FROM $attrStatView
-               |  WHERE ${whereCaluseToFilterStat(attrKey, discreteAttrs)}
+               |  WHERE ${whereCaluseToFilterStat(attrKey, discretizedAttrs)}
                |  GROUP BY $attrKey
                |)
              """.stripMargin)
@@ -402,7 +400,7 @@ object RepairApi extends RepairBase {
     }
 
     // Uses the domain size of X as a log base for normalization
-    val domainStatMap = computeAndGetTableStats(discreteAttrView).mapValues(_.distinctCount)
+    val domainStatMap = computeAndGetTableStats(discretizedInputView).mapValues(_.distinctCount)
     val pairwiseStats = attrPairsToRepair.map { case attrPair @ (rvX, rvY) =>
       // The conditional entropy is 0 for strongly correlated attributes and 1 for completely independent
       // attributes. We reverse this to reflect the correlation.
@@ -456,12 +454,12 @@ object RepairApi extends RepairBase {
   }
 
   def computeDomainInErrorCells(
-      discreteAttrView: String,
+      discretizedInputView: String,
       errCellView: String,
       rowId: String,
       continuousAttrList: String,
       targetAttrList: String,
-      discreteAttrList: String,
+      discretizedAttrList: String,
       rowCount: Long,
       maxAttrsToComputeDomains: Int,
       statSampleRatio: Double,
@@ -478,30 +476,30 @@ object RepairApi extends RepairBase {
       "domain_threashold_beta should be in [0.0, 1.0].")
 
     logBasedOnLevel(s"computeDomainInErrorCells called with: " +
-      s"discreteAttrView=$discreteAttrView errCellView=$errCellView rowId=$rowId " +
+      s"discretizedInputView=$discretizedInputView errCellView=$errCellView rowId=$rowId " +
       s"continousAttrList=${if (continuousAttrList.nonEmpty) continuousAttrList else "<none>"} " +
-      s"targetAttrList=$targetAttrList discreteAttrList=$discreteAttrList " +
+      s"targetAttrList=$targetAttrList discretizedAttrList=$discretizedAttrList " +
       s"rowCount=$rowCount maxAttrsToComputeDomains=$maxAttrsToComputeDomains " +
       s"statSampleRatio=$statSampleRatio statThreshold=$statThreshold minCorrThres=$minCorrThres " +
       s"domain_threshold=alpha:$domain_threshold_alpha,beta=$domain_threshold_beta")
 
-    val discreteAttrs = SparkUtils.stringToSeq(discreteAttrList)
+    val discretizedAttrs = SparkUtils.stringToSeq(discretizedAttrList)
     val attrsToRepair = SparkUtils.stringToSeq(targetAttrList)
 
     assert(checkSchema(errCellView, "attribute STRING, current_value STRING", rowId, strict = true))
-    assert(discreteAttrs.nonEmpty && attrsToRepair.nonEmpty)
+    assert(discretizedAttrs.nonEmpty && attrsToRepair.nonEmpty)
 
     val attrPairsToRepair = attrsToRepair.flatMap { attrToRepair =>
-      discreteAttrs.filter(attrToRepair != _).map(a => (attrToRepair, a))
+      discretizedAttrs.filter(attrToRepair != _).map(a => (attrToRepair, a))
     }
     val attrStatDf = computeAttrStats(
-      discreteAttrView, discreteAttrs, attrPairsToRepair, statSampleRatio, statThreshold)
+      discretizedInputView, discretizedAttrs, attrPairsToRepair, statSampleRatio, statThreshold)
 
     withTempView(attrStatDf, cache = true) { attrStatView =>
       val (pairwiseStatMap, domainStatMap) = compuatePairwiseAttrStats(
-        rowCount, attrStatView, discreteAttrView, discreteAttrs,
+        rowCount, attrStatView, discretizedInputView, discretizedAttrs,
         attrPairsToRepair, minCorrThres)
-      val corrAttrs = computeCorrAttrs(pairwiseStatMap, maxAttrsToComputeDomains, minCorrThres)
+      val corrAttrMap = computeCorrAttrs(pairwiseStatMap, maxAttrsToComputeDomains, minCorrThres)
       val domainInitValue = s"CAST(NULL AS ARRAY<STRUCT<n: STRING, cnt: DOUBLE>>)"
       val repairCellDf = spark.table(errCellView).where(
         s"attribute IN (${attrsToRepair.map(a => s"'$a'").mkString(", ")})")
@@ -513,15 +511,15 @@ object RepairApi extends RepairBase {
                |SELECT
                |  l.$rowId, r.attribute, r.current_value, $domainInitValue domain
                |FROM
-               |  $discreteAttrView l, $repairCellView r
+               |  $discretizedInputView l, $repairCellView r
                |WHERE
                |  l.$rowId = r.$rowId
              """.stripMargin)
         }
       } else {
         // Needs to keep the correlated attributes for selecting their domains
-        val corrAttrSet = corrAttrs.flatMap(_._2.map(_._1)).toSet
-        val corrCols = if (corrAttrSet.nonEmpty) {
+        val corrAttrSet = corrAttrMap.flatMap(_._2.map(_._1)).toSet
+        val corrAttrs = if (corrAttrSet.nonEmpty) {
           corrAttrSet.mkString(", ", ", ", "")
         } else {
           ""
@@ -531,9 +529,9 @@ object RepairApi extends RepairBase {
           spark.sql(
             s"""
                |SELECT
-               |  l.$rowId, r.attribute, r.current_value $corrCols
+               |  l.$rowId, r.attribute, r.current_value $corrAttrs
                |FROM
-               |  $discreteAttrView l, $repairCellView r
+               |  $discretizedInputView l, $repairCellView r
                |WHERE
                |  l.$rowId = r.$rowId
              """.stripMargin)
@@ -541,11 +539,11 @@ object RepairApi extends RepairBase {
 
         withTempView(rvDf) { rvView =>
           val continousAttrs = SparkUtils.stringToSeq(continuousAttrList).toSet
-          corrAttrs.map { case (attribute, corrAttrsWithScores) =>
+          corrAttrMap.map { case (attribute, corrAttrsWithScores) =>
             // Adds an empty domain for initial state
             val initDomainDf = spark.sql(
               s"""
-                 |SELECT $rowId, attribute, current_value, $domainInitValue domain $corrCols
+                 |SELECT $rowId, attribute, current_value, $domainInitValue domain $corrAttrs
                  |FROM $rvView
                  |WHERE attribute = '$attribute'
                """.stripMargin)
@@ -620,7 +618,7 @@ object RepairApi extends RepairBase {
                    |  ) d LEFT OUTER JOIN (
                    |    SELECT $attribute, MAX(cnt) cnt
                    |    FROM $attrStatView
-                   |    WHERE ${whereCaluseToFilterStat(attribute, discreteAttrs)}
+                   |    WHERE ${whereCaluseToFilterStat(attribute, discretizedAttrs)}
                    |    GROUP BY $attribute
                    |  ) s
                    |  ON

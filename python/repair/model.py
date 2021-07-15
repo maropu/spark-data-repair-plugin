@@ -846,10 +846,10 @@ class RepairModel():
         input_table = ret_as_json["input_table"]
         num_input_rows = int(ret_as_json["num_input_rows"])
         num_attrs = int(ret_as_json["num_attrs"])
-        continous_attrs = ret_as_json["continous_attrs"].split(",")
+        continous_columns = ret_as_json["continous_columns"].split(",")
 
         return input_table, num_input_rows, num_attrs, \
-            continous_attrs if continous_attrs != [""] else []
+            continous_columns if continous_columns != [""] else []
 
     def _detect_error_cells(self, input_table: str) -> DataFrame:
         # Initializes the given error detectors with the input params
@@ -924,7 +924,7 @@ class RepairModel():
         return self._register_and_get_df(ret_as_json["repair_base_cells"])
 
     # Checks if attributes are discrete or not, and discretizes continous ones
-    def _discretize_attrs(self, input_table: str, continous_attrs: List[str]) -> Tuple[str, List[str], Dict[str, str]]:
+    def _discretize_attrs(self, input_table: str, continous_columns: List[str]) -> Tuple[str, List[str], Dict[str, str]]:
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
         ret_as_json = json.loads(self._repair_api.convertToDiscretizedTable(
@@ -937,7 +937,7 @@ class RepairModel():
     @_spark_job_group(name="cell domain analysis")
     def _analyze_error_cell_domain(
             self, noisy_cells_df: DataFrame, discretized_table: str,
-            continous_attrs: List[str], target_columns: List[str], discretized_columns: List[str],
+            continous_columns: List[str], target_columns: List[str], discretized_columns: List[str],
             num_input_rows: int) -> Tuple[str, str]:
 
         # Computes attribute statistics to calculate domains with posteriori probability
@@ -951,7 +951,7 @@ class RepairModel():
         noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells")
         ret_as_json = json.loads(self._repair_api.computeDomainInErrorCells(
             discretized_table, noisy_cells, str(self.row_id),
-            ",".join(continous_attrs),
+            ",".join(continous_columns),
             ",".join(target_columns),
             ",".join(discretized_columns),
             num_input_rows,
@@ -1037,10 +1037,10 @@ class RepairModel():
         return features
 
     def _create_transformers(self, distinct_stats: Dict[str, str], features: List[str],
-                             continous_attrs: List[str]) -> List[Any]:
+                             continous_columns: List[str]) -> List[Any]:
         # Transforms discrete attributes with some categorical encoders if necessary
         import category_encoders as ce  # type: ignore[import]
-        discrete_columns = [c for c in features if c not in continous_attrs]
+        discrete_columns = [c for c in features if c not in continous_columns]
         transformers = []
         if len(discrete_columns) != 0:
             # TODO: Needs to reconsider feature transformation in this part, e.g.,
@@ -1094,7 +1094,7 @@ class RepairModel():
 
     def _build_repair_stat_models_in_series(
             self, models: Dict[str, Any], train_df: DataFrame,
-            target_columns: List[str], continous_attrs: List[str],
+            target_columns: List[str], continous_columns: List[str],
             num_class_map: Dict[str, int],
             feature_map: Dict[str, List[str]],
             transformer_map: Dict[str, List[Any]]) -> Dict[str, Any]:
@@ -1117,7 +1117,7 @@ class RepairModel():
                 continue
 
             train_pdf = self._sample_training_data_from(df, training_data_num).toPandas()
-            is_discrete = y not in continous_attrs
+            is_discrete = y not in continous_columns
 
             X = train_pdf[feature_map[y]]  # type: ignore
             for transformer in transformer_map[y]:
@@ -1132,7 +1132,7 @@ class RepairModel():
 
             logging.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
                 index, len(target_columns),
-                "classfier" if y not in continous_attrs else "regressor",
+                "classfier" if y not in continous_columns else "regressor",
                 y, ",".join(feature_map[y]),
                 len(train_pdf),
                 f" #class={num_class_map[y]}" if num_class_map[y] > 0 else ""))
@@ -1147,7 +1147,7 @@ class RepairModel():
 
     def _build_repair_stat_models_in_parallel(
             self, models: Dict[str, Any], train_df: DataFrame,
-            target_columns: List[str], continous_attrs: List[str],
+            target_columns: List[str], continous_columns: List[str],
             num_class_map: Dict[str, int],
             feature_map: Dict[str, List[str]],
             transformer_map: Dict[str, List[Any]]) -> Dict[str, Any]:
@@ -1187,7 +1187,7 @@ class RepairModel():
 
             logging.info("Start building {}/{} model in parallel... type={} y={} features={} #rows={}{}".format(
                 index, len(target_columns),
-                "classfier" if y not in continous_attrs else "regressor",
+                "classfier" if y not in continous_columns else "regressor",
                 y, ",".join(feature_map[y]),
                 len(train_pdf),
                 f" #class={num_class_map[y]}" if num_class_map[y] > 0 else ""))
@@ -1201,7 +1201,7 @@ class RepairModel():
         logging.debug(f"Setting {training_n_jobs} to `n_jobs` for training in parallel")
 
         broadcasted_target_column = self._spark.sparkContext.broadcast(target_column)
-        broadcasted_continous_attrs = self._spark.sparkContext.broadcast(continous_attrs)
+        broadcasted_continous_columns = self._spark.sparkContext.broadcast(continous_columns)
         broadcasted_feature_map = self._spark.sparkContext.broadcast(feature_map)
         broadcasted_transformer_map = self._spark.sparkContext.broadcast(transformer_map)
         broadcasted_num_class_map = self._spark.sparkContext.broadcast(num_class_map)
@@ -1215,10 +1215,10 @@ class RepairModel():
         def train(pdf: pd.DataFrame) -> pd.DataFrame:
             target_column = broadcasted_target_column.value
             y = pdf.at[0, target_column]
-            continous_attrs = broadcasted_continous_attrs.value
+            continous_columns = broadcasted_continous_columns.value
             features = broadcasted_feature_map.value[y]
             transformers = broadcasted_transformer_map.value[y]
-            is_discrete = y not in continous_attrs
+            is_discrete = y not in continous_columns
             num_class = broadcasted_num_class_map.value[y]
             training_data_rebalancing_enabled = broadcasted_training_data_rebalancing_enabled.value
             n_jobs = broadcasted_n_jobs.value
@@ -1252,7 +1252,7 @@ class RepairModel():
         return models
 
     @_spark_job_group(name="repair model training")
-    def _build_repair_models(self, train_df: DataFrame, target_columns: List[str], continous_attrs: List[str],
+    def _build_repair_models(self, train_df: DataFrame, target_columns: List[str], continous_columns: List[str],
                              distinct_stats: Dict[str, str],
                              pairwise_stats: Dict[str, str]) -> List[Any]:
         # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
@@ -1290,7 +1290,7 @@ class RepairModel():
             input_columns = [c for c in train_df.columns if c != y]  # type: ignore
             features = self._select_features(pairwise_stats, y, input_columns)  # type: ignore
             feature_map[y] = features
-            transformer_map[y] = self._create_transformers(distinct_stats, features, continous_attrs)
+            transformer_map[y] = self._create_transformers(distinct_stats, features, continous_columns)
 
         # If `self.rule_based_model_enabled` is `True`, try to analyze
         # functional deps on training data.
@@ -1309,7 +1309,7 @@ class RepairModel():
 
         for y in target_columns:
             index = len(models) + 1
-            is_discrete = y not in continous_attrs
+            is_discrete = y not in continous_columns
             num_class_map[y] = train_df.selectExpr(f"count(distinct `{y}`) cnt").collect()[0].cnt \
                 if is_discrete else 0
 
@@ -1341,7 +1341,7 @@ class RepairModel():
         build_stat_models = self._build_repair_stat_models_in_parallel \
             if self.parallel_stat_training_enabled else self._build_repair_stat_models_in_series
         build_stat_models(
-            models, train_df, target_columns, continous_attrs,
+            models, train_df, target_columns, continous_columns,
             num_class_map, feature_map, transformer_map)
 
         assert len(models) == len(target_columns)
@@ -1378,11 +1378,11 @@ class RepairModel():
         return list(models.items())
 
     @_spark_job_group(name="repairing")
-    def _repair(self, models: List[Any], continous_attrs: List[str],
+    def _repair(self, models: List[Any], continous_columns: List[str],
                 dirty_rows_df: DataFrame, error_cells_df: DataFrame,
                 compute_repair_candidate_prob: bool) -> pd.DataFrame:
         # Shares all the variables for the learnt models in a Spark cluster
-        broadcasted_continous_attrs = self._spark.sparkContext.broadcast(continous_attrs)
+        broadcasted_continous_columns = self._spark.sparkContext.broadcast(continous_columns)
         broadcasted_models = self._spark.sparkContext.broadcast(models)
         broadcasted_compute_repair_candidate_prob = \
             self._spark.sparkContext.broadcast(compute_repair_candidate_prob)
@@ -1398,7 +1398,7 @@ class RepairModel():
         # TODO: Runs the `repair` UDF based on checkpoint files
         @functions.pandas_udf(dirty_rows_df.schema, functions.PandasUDFType.GROUPED_MAP)
         def repair(pdf: pd.DataFrame) -> pd.DataFrame:
-            continous_attrs = broadcasted_continous_attrs.value
+            continous_columns = broadcasted_continous_columns.value
             models = broadcasted_models.value
             compute_repair_candidate_prob = broadcasted_compute_repair_candidate_prob.value
             maximal_likelihood_repair_enabled = \
@@ -1415,7 +1415,7 @@ class RepairModel():
                     for transformer in transformers:
                         X = transformer.transform(X)
 
-                need_to_compute_pmf = y not in continous_attrs and \
+                need_to_compute_pmf = y not in continous_columns and \
                     (compute_repair_candidate_prob or maximal_likelihood_repair_enabled)
                 if need_to_compute_pmf:
                     # TODO: Filters out top-k values to reduce the amount of data
@@ -1521,7 +1521,7 @@ class RepairModel():
 
     @elapsed_time  # type: ignore
     def _run(self, input_table: str, num_input_rows: int, num_attrs: int,
-             continous_attrs: List[str], detect_errors_only: bool,
+             continous_columns: List[str], detect_errors_only: bool,
              compute_training_target_hist: bool, compute_repair_candidate_prob: bool,
              compute_repair_prob: bool, compute_repair_score: bool,
              repair_data: bool) -> DataFrame:
@@ -1541,7 +1541,7 @@ class RepairModel():
                 return input_df
 
         discretized_table, discretized_columns, distinct_stats = \
-            self._discretize_attrs(input_table, continous_attrs)
+            self._discretize_attrs(input_table, continous_columns)
         if not len(discretized_columns) > 0:
             if not detect_errors_only:
                 raise ValueError("At least one valid discretizable feature is needed to repair error cells, "
@@ -1562,7 +1562,7 @@ class RepairModel():
         # Checks if pairwise stats can be computed
         if len(target_columns) > 0 and len(discretized_columns) > 1:
             cell_domain, pairwise_stats = self._analyze_error_cell_domain(
-                noisy_cells_df, discretized_table, continous_attrs, target_columns,
+                noisy_cells_df, discretized_table, continous_columns, target_columns,
                 discretized_columns, num_input_rows)
             error_cells_df, weak_labeled_cells_df_opt = self._extract_error_cells(
                 noisy_cells_df, cell_domain, num_input_rows, num_attrs)
@@ -1607,14 +1607,14 @@ class RepairModel():
             return hist_df
 
         models = self._build_repair_models(
-            repair_base_df, target_columns, continous_attrs, distinct_stats, pairwise_stats)
+            repair_base_df, target_columns, continous_columns, distinct_stats, pairwise_stats)
 
         #################################################################################
         # 3. Repair Phase
         #################################################################################
 
         repaired_df = self._repair(
-            models, continous_attrs, dirty_rows_df, error_cells_df,
+            models, continous_columns, dirty_rows_df, error_cells_df,
             compute_repair_candidate_prob)
 
         # If `compute_repair_candidate_prob` is True, returns probability mass function
@@ -1742,18 +1742,18 @@ class RepairModel():
 
         try:
             # Validates input data
-            input_table, num_input_rows, num_attrs, continous_attrs = self._check_input_table()
+            input_table, num_input_rows, num_attrs, continous_columns = self._check_input_table()
 
-            if compute_repair_candidate_prob and len(continous_attrs) != 0:
+            if compute_repair_candidate_prob and len(continous_columns) != 0:
                 raise ValueError("Cannot compute probability mass function of repairs "
                                  "when continous attributes found")
-            if self.maximal_likelihood_repair_enabled and len(continous_attrs) != 0:
+            if self.maximal_likelihood_repair_enabled and len(continous_columns) != 0:
                 raise ValueError("Cannot enable maximal likelihood repair mode "
                                  "when continous attributes found")
 
             df, elapsed_time = self._run(
                 input_table, num_input_rows, num_attrs,
-                continous_attrs, detect_errors_only,
+                continous_columns, detect_errors_only,
                 compute_training_target_hist, compute_repair_candidate_prob,
                 compute_repair_prob, compute_repair_score, repair_data)
             logging.info(f"!!!Total Processing time is {elapsed_time}(s)!!!")
