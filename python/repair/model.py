@@ -893,13 +893,17 @@ class RepairModel():
             noisy_cells_df = self._filter_columns_from(noisy_cells_df, self.targets)
 
         noisy_columns: List[str] = []
-        if noisy_cells_df.count() > 0:
+        num_noisy_cells = noisy_cells_df.count()
+        if num_noisy_cells > 0:
             noisy_columns = noisy_cells_df \
                 .selectExpr("collect_set(attribute) columns") \
                 .collect()[0] \
                 .columns
             noisy_cells_df = self._with_current_values(
                 input_table, noisy_cells_df, noisy_columns)
+
+        logging.info('[Error Detection Phase] {} noisy cells found ({}%)'.format(
+            num_noisy_cells, (num_noisy_cells * 100.0) / (num_attrs * num_input_rows)))
 
         return noisy_cells_df, noisy_columns
 
@@ -1541,21 +1545,33 @@ class RepairModel():
             else:
                 return noisy_cells_df
 
+        # Target repairable(discretizable) columns
+        target_columns = list(filter(lambda c: c in discretized_columns, noisy_columns))
+        logging.info(f"Target repairable columns are {','.join(target_columns)} "
+                     f"in noisy columns ({','.join(noisy_columns)})")
+
         # Clear out noisy cells (to NULL)
         repair_base_cells = self._prepare_repair_base_cells(
             input_table, noisy_cells_df, num_input_rows, num_attrs)
 
         # Defines true error cells based on the result of domain analysis
-        cell_domain, pairwise_stats = self._analyze_error_cell_domain(
-            noisy_cells_df, discretized_table, continous_attrs)
-        if self._spark.table(cell_domain).count() == 0:
-            raise ValueError("Noisy cells have valid discrete properties for domain analysis")
+        error_cells_df = noisy_cells_df
+        repair_base_df = self._spark.table(repair_base_cells)
+        pairwise_stats: Dict[str, List[str]] = {}
+
+        # Checks if pairwise stats can be computed
+        if len(target_columns) > 0 and len(discretized_columns) > 1:
+            cell_domain, pairwise_stats = self._analyze_error_cell_domain(
+                noisy_cells_df, discretized_table, continous_attrs)
+            error_cells_df, repair_base_df = self._extract_error_cells(
+                noisy_cells_df, cell_domain, repair_base_cells, num_input_rows, num_attrs)
 
         # If `detect_errors_only` is True, returns found error cells
-        error_cells_df, repair_base_df = self._extract_error_cells(
-            noisy_cells_df, cell_domain, repair_base_cells, num_input_rows, num_attrs)
         if detect_errors_only:
             return error_cells_df
+
+        if len(target_columns) == 0:
+            raise ValueError("To repair noisy cells, they should be discretizable")
 
         # If no error found, we don't need to do nothing
         if error_cells_df.count() == 0:
@@ -1564,9 +1580,6 @@ class RepairModel():
                 return error_cells_df
             else:
                 return input_df
-
-        # Target repairable(discretizable) columns
-        target_columns = list(filter(lambda c: c in discretized_columns, noisy_columns))
 
         # Filters out non-repairable columns from `error_cells_df`
         error_cells_df = error_cells_df. \

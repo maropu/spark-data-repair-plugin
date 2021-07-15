@@ -62,7 +62,7 @@ object RepairApi extends RepairBase {
 
     Seq("input_table" -> qualifiedName,
       "num_input_rows" -> s"${inputDf.count}",
-      "num_attrs" -> s"${inputDf.columns.length}",
+      "num_attrs" -> s"${inputDf.columns.length - 1}",
       "continous_attrs" -> continousAttrs
     ).asJson
   }
@@ -125,7 +125,7 @@ object RepairApi extends RepairBase {
       inputView: String,
       discreteThres: Int,
       whitelist: Set[String] = Set.empty): (DataFrame, Map[String, ColumnStat]) = {
-    require(2 <= discreteThres && discreteThres < 65536, "discreteThres should be in [2, 65536).")
+    assert(2 <= discreteThres && discreteThres < 65536, "discreteThres should be in [2, 65536).")
 
     val statMap = computeAndGetTableStats(inputView)
     val inputDf = spark.table(inputView)
@@ -251,7 +251,7 @@ object RepairApi extends RepairBase {
       qualifiedName: String,
       rowId: String,
       discreteThres: Int): String = {
-    require(rowId.nonEmpty, s"$rowId should be a non-empty string.")
+    assert(rowId.nonEmpty, s"$rowId should be a non-empty string.")
     logBasedOnLevel(s"convertToDiscreteFeatures called with: qualifiedName=$qualifiedName " +
       s"rowId=$rowId discreteThres=$discreteThres")
     val (discreteDf, statMap) = doConvertToDiscreteFeatures(qualifiedName, discreteThres, Set(rowId))
@@ -461,11 +461,11 @@ object RepairApi extends RepairBase {
       minCorrThres: Double,
       domain_threshold_alpha: Double,
       domain_threshold_beta: Double): String = {
-    require(0 < maxAttrsToComputeDomains, "maxAttrsToComputeDomains should be greater than 0.")
-    require(0.0 <= minCorrThres && minCorrThres < 1.0, "minCorrThres should be in [0.0, 1.0).")
-    require(0.0 <= domain_threshold_alpha && domain_threshold_alpha <= 1.0,
+    assert(0 < maxAttrsToComputeDomains, "maxAttrsToComputeDomains should be greater than 0.")
+    assert(0.0 <= minCorrThres && minCorrThres < 1.0, "minCorrThres should be in [0.0, 1.0).")
+    assert(0.0 <= domain_threshold_alpha && domain_threshold_alpha <= 1.0,
       "domain_threashold_alpha should be in [0.0, 1.0].")
-    require(0.0 <= domain_threshold_beta && domain_threshold_beta <= 1.0,
+    assert(0.0 <= domain_threshold_beta && domain_threshold_beta <= 1.0,
       "domain_threashold_beta should be in [0.0, 1.0].")
 
     logBasedOnLevel(s"computeDomainInErrorCells called with: " +
@@ -495,207 +495,195 @@ object RepairApi extends RepairBase {
       discreteAttrs.filter(attrToRepair != _).map(a => (attrToRepair, a))
     }
 
-    val domainType = "ARRAY<STRUCT<n: STRING, cnt: DOUBLE>>"
-    if (attrPairsToRepair.isEmpty) {
-      // TODO: Moves this check into the earlier stage
-      val rowIdType = spark.table(discreteAttrView).schema.find(_.name == rowId).get.dataType.sql
-      val cellDomainDf = createEmptyTable(
-        s"$rowId $rowIdType, attribute STRING, current_value STRING, domain $domainType")
-      val cellDomainView = createAndCacheTempView(cellDomainDf, "cell_domain")
-      Seq("cell_domain" -> cellDomainView,
-        "pairwise_attr_stats" -> Map.empty[String, String]
-      ).asJson
-    } else {
-      val attrStatDf = computeAttrStats(
-        discreteAttrView, discreteAttrs, attrPairsToRepair, statSampleRatio, statThreshold)
+    val attrStatDf = computeAttrStats(
+      discreteAttrView, discreteAttrs, attrPairsToRepair, statSampleRatio, statThreshold)
 
-      withTempView(attrStatDf, cache = true) { attrStatView =>
-        val (pairwiseStatMap, domainStatMap) = compuatePairwiseAttrStats(
-          rowCnt, attrStatView, discreteAttrView, discreteAttrs,
-          attrPairsToRepair, minCorrThres)
+    withTempView(attrStatDf, cache = true) { attrStatView =>
+      val (pairwiseStatMap, domainStatMap) = compuatePairwiseAttrStats(
+        rowCnt, attrStatView, discreteAttrView, discreteAttrs,
+        attrPairsToRepair, minCorrThres)
 
-        val corrAttrs = computeCorrAttrs(
-          pairwiseStatMap, maxAttrsToComputeDomains, minCorrThres)
+      val corrAttrs = computeCorrAttrs(
+        pairwiseStatMap, maxAttrsToComputeDomains, minCorrThres)
 
-        val attrToId = discreteAttrs.zipWithIndex.toMap
-        spark.udf.register("extractField", (row: Row, attribute: String) => {
-          row.getString(attrToId(attribute))
-        })
-        val domainInitValue = s"CAST(NULL AS $domainType)"
-        val cellExprs = discreteAttrs.map { a => s"CAST(l.`$a` AS STRING) $a" }
-        val repairCellDf = spark.sql(
-          s"""SELECT * FROM $errCellView
-             |WHERE attribute IN (${attrsToRepair.map(a => s"'$a'").mkString(", ")})
-           """.stripMargin)
+      val attrToId = discreteAttrs.zipWithIndex.toMap
+      spark.udf.register("extractField", (row: Row, attribute: String) => {
+        row.getString(attrToId(attribute))
+      })
+      val domainInitValue = s"CAST(NULL AS ARRAY<STRUCT<n: STRING, cnt: DOUBLE>>)"
+      val cellExprs = discreteAttrs.map { a => s"CAST(l.`$a` AS STRING) $a" }
+      val repairCellDf = spark.sql(
+        s"""SELECT * FROM $errCellView
+           |WHERE attribute IN (${attrsToRepair.map(a => s"'$a'").mkString(", ")})
+         """.stripMargin)
 
-        val cellDomainDf = if (domain_threshold_beta >= 1.0) {
-          // The case where we don't need to compute error domains
-          withTempView(repairCellDf) { repairCellView =>
-            spark.sql(
-              s"""
-                 |SELECT
-                 |  l.$rowId,
-                 |  r.attribute,
-                 |  extractField(struct(${cellExprs.mkString(", ")}), r.attribute) current_value,
-                 |  $domainInitValue domain
-                 |FROM
-                 |  $discreteAttrView l, $repairCellView r
-                 |WHERE
-                 |  l.$rowId = r.$rowId
-               """.stripMargin)
-          }
+      val cellDomainDf = if (domain_threshold_beta >= 1.0) {
+        // The case where we don't need to compute error domains
+        withTempView(repairCellDf) { repairCellView =>
+          spark.sql(
+            s"""
+               |SELECT
+               |  l.$rowId,
+               |  r.attribute,
+               |  extractField(struct(${cellExprs.mkString(", ")}), r.attribute) current_value,
+               |  $domainInitValue domain
+               |FROM
+               |  $discreteAttrView l, $repairCellView r
+               |WHERE
+               |  l.$rowId = r.$rowId
+             """.stripMargin)
+        }
+      } else {
+        // Needs to keep the correlated attributes for selecting their domains
+        val corrAttrSet = corrAttrs.flatMap(_._2.map(_._1)).toSet
+        val corrCols = if (corrAttrSet.nonEmpty) {
+          corrAttrSet.mkString(", ", ", ", "")
         } else {
-          // Needs to keep the correlated attributes for selecting their domains
-          val corrAttrSet = corrAttrs.flatMap(_._2.map(_._1)).toSet
-          val corrCols = if (corrAttrSet.nonEmpty) {
-            corrAttrSet.mkString(", ", ", ", "")
-          } else {
-            ""
-          }
+          ""
+        }
 
-          val rvDf = withTempView(repairCellDf) { repairCellView =>
-            spark.sql(
+        val rvDf = withTempView(repairCellDf) { repairCellView =>
+          spark.sql(
+            s"""
+               |SELECT
+               |  l.$rowId,
+               |  r.attribute,
+               |  extractField(struct(${cellExprs.mkString(", ")}), r.attribute) current_value
+               |  $corrCols
+               |FROM
+               |  $discreteAttrView l, $repairCellView r
+               |WHERE
+               |  l.$rowId = r.$rowId
+             """.stripMargin)
+        }
+
+        withTempView(rvDf) { rvView =>
+          val continousAttrs = SparkUtils.stringToSeq(continuousAttrList).toSet
+          corrAttrs.map { case (attribute, corrAttrsWithScores) =>
+            // Adds an empty domain for initial state
+            val initDomainDf = spark.sql(
               s"""
-                 |SELECT
-                 |  l.$rowId,
-                 |  r.attribute,
-                 |  extractField(struct(${cellExprs.mkString(", ")}), r.attribute) current_value
-                 |  $corrCols
-                 |FROM
-                 |  $discreteAttrView l, $repairCellView r
-                 |WHERE
-                 |  l.$rowId = r.$rowId
+                 |SELECT $rowId, attribute, current_value, $domainInitValue domain $corrCols
+                 |FROM $rvView
+                 |WHERE attribute = '$attribute'
                """.stripMargin)
-          }
 
-          withTempView(rvDf) { rvView =>
-            val continousAttrs = SparkUtils.stringToSeq(continuousAttrList).toSet
-            corrAttrs.map { case (attribute, corrAttrsWithScores) =>
-              // Adds an empty domain for initial state
-              val initDomainDf = spark.sql(
-                s"""
-                   |SELECT $rowId, attribute, current_value, $domainInitValue domain $corrCols
-                   |FROM $rvView
-                   |WHERE attribute = '$attribute'
-                 """.stripMargin)
+            val domainDf = if (!continousAttrs.contains(attribute) && corrAttrsWithScores.nonEmpty) {
+              val corrAttrs = corrAttrsWithScores.map(_._1)
+              logBasedOnLevel(s"Computing '$attribute' domain from ${corrAttrs.size} correlated " +
+                s"attributes (${corrAttrs.mkString(",")})...")
 
-              val domainDf = if (!continousAttrs.contains(attribute) && corrAttrsWithScores.nonEmpty) {
-                val corrAttrs = corrAttrsWithScores.map(_._1)
-                logBasedOnLevel(s"Computing '$attribute' domain from ${corrAttrs.size} correlated " +
-                  s"attributes (${corrAttrs.mkString(",")})...")
-
-                corrAttrs.foldLeft(initDomainDf) { case (df, attr) =>
-                  withTempView(df) { domainSpaceView =>
-                    val tau = {
-                      // `tau` becomes a threshold on co-occurrence frequency
-                      val productSpaceSize = domainStatMap(attr) * domainStatMap(attribute)
-                      (domain_threshold_alpha * (rowCnt / productSpaceSize)).toLong
-                    }
-                    spark.sql(
-                      s"""
-                         |SELECT
-                         |  $rowId,
-                         |  attribute,
-                         |  current_value,
-                         |  IF(ISNOTNULL(l.domain), CONCAT(l.domain, r.d), r.d) domain,
-                         |  ${corrAttrSet.map(a => s"l.$a").mkString(",")}
-                         |FROM
-                         |  $domainSpaceView l
-                         |LEFT OUTER JOIN (
-                         |  SELECT $attr, collect_set(named_struct('n', $attribute, 'cnt', array_max(array(double(cnt) - 1.0, 0.1)))) d
-                         |  FROM (
-                         |    SELECT *
-                         |    FROM $attrStatView
-                         |    WHERE $attribute IS NOT NULL AND
-                         |      $attr IS NOT NULL AND
-                         |      cnt > $tau
-                         |  )
-                         |  GROUP BY
-                         |    $attr
-                         |) r
-                         |ON
-                         |  l.$attr = r.$attr
-                       """.stripMargin)
+              corrAttrs.foldLeft(initDomainDf) { case (df, attr) =>
+                withTempView(df) { domainSpaceView =>
+                  val tau = {
+                    // `tau` becomes a threshold on co-occurrence frequency
+                    val productSpaceSize = domainStatMap(attr) * domainStatMap(attribute)
+                    (domain_threshold_alpha * (rowCnt / productSpaceSize)).toLong
                   }
+                  spark.sql(
+                    s"""
+                       |SELECT
+                       |  $rowId,
+                       |  attribute,
+                       |  current_value,
+                       |  IF(ISNOTNULL(l.domain), CONCAT(l.domain, r.d), r.d) domain,
+                       |  ${corrAttrSet.map(a => s"l.$a").mkString(",")}
+                       |FROM
+                       |  $domainSpaceView l
+                       |LEFT OUTER JOIN (
+                       |  SELECT $attr, collect_set(named_struct('n', $attribute, 'cnt', array_max(array(double(cnt) - 1.0, 0.1)))) d
+                       |  FROM (
+                       |    SELECT *
+                       |    FROM $attrStatView
+                       |    WHERE $attribute IS NOT NULL AND
+                       |      $attr IS NOT NULL AND
+                       |      cnt > $tau
+                       |  )
+                       |  GROUP BY
+                       |    $attr
+                       |) r
+                       |ON
+                       |  l.$attr = r.$attr
+                     """.stripMargin)
                 }
-              } else {
-                initDomainDf
               }
-
-              // To prune the domain, we use NaiveBayes that is an estimator of posterior probabilities
-              // using the naive independence assumption where
-              //   p(v_cur | v_init) = p(v_cur) * \prod_i (v_init_i | v_cur)
-              // where v_init_i is the init value for corresponding to attribute i.
-              val domainWithScoreDf = withTempView(domainDf) { domainView =>
-                spark.sql(
-                  s"""
-                     |SELECT
-                     |  $rowId, attribute, current_value, domain_value, SUM(score) score
-                     |FROM (
-                     |  SELECT
-                     |    $rowId,
-                     |    attribute,
-                     |    current_value,
-                     |    domain_value_with_freq.n domain_value,
-                     |    exp(ln(cnt / $rowCnt) + ln(domain_value_with_freq.cnt / cnt)) score
-                     |  FROM (
-                     |    SELECT
-                     |      $rowId,
-                     |      attribute,
-                     |      current_value,
-                     |      explode_outer(domain) domain_value_with_freq
-                     |    FROM
-                     |      $domainView
-                     |  ) d LEFT OUTER JOIN (
-                     |    SELECT $attribute, MAX(cnt) cnt
-                     |    FROM $attrStatView
-                     |    WHERE ${whereCaluseToFilterStat(attribute, discreteAttrs)}
-                     |    GROUP BY $attribute
-                     |  ) s
-                     |  ON
-                     |    d.domain_value_with_freq.n = s.$attribute
-                     |)
-                     |GROUP BY
-                     |  $rowId, attribute, current_value, domain_value
-                   """.stripMargin)
-              }
-
-              withTempView(domainWithScoreDf) { domainWithScoreView =>
-                spark.sql(
-                  s"""
-                     |SELECT
-                     |  l.$rowId,
-                     |  l.attribute,
-                     |  current_value,
-                     |  filter(collect_set(named_struct('n', domain_value, 'prob', score / denom)), x -> x.prob > $domain_threshold_beta) domain
-                     |FROM
-                     |  $domainWithScoreView l, (
-                     |    SELECT
-                     |      $rowId, attribute, SUM(score) denom
-                     |    FROM
-                     |      $domainWithScoreView
-                     |    GROUP BY
-                     |      $rowId, attribute
-                     |  ) r
-                     |WHERE
-                     |  l.$rowId = r.$rowId AND l.attribute = r.attribute
-                     |GROUP BY
-                     |  l.$rowId, l.attribute, current_value
-                   """.stripMargin)
-              }
+            } else {
+              initDomainDf
             }
-          }.reduce(_.union(_))
-        }
 
-        val cellDomainView = withJobDescription("compute domain values with posteriori probability") {
-          createAndCacheTempView(cellDomainDf, "cell_domain")
-        }
-        // Checks if # of rows in `cellDomainView` is the same with # of error cells
-        assert(cellDomainDf.count == repairCellDf.count)
-        Seq("cell_domain" -> cellDomainView,
-          "pairwise_attr_stats" -> pairwiseStatMap.mapValues(seqToJson)
-        ).asJson
+            // To prune the domain, we use NaiveBayes that is an estimator of posterior probabilities
+            // using the naive independence assumption where
+            //   p(v_cur | v_init) = p(v_cur) * \prod_i (v_init_i | v_cur)
+            // where v_init_i is the init value for corresponding to attribute i.
+            val domainWithScoreDf = withTempView(domainDf) { domainView =>
+              spark.sql(
+                s"""
+                   |SELECT
+                   |  $rowId, attribute, current_value, domain_value, SUM(score) score
+                   |FROM (
+                   |  SELECT
+                   |    $rowId,
+                   |    attribute,
+                   |    current_value,
+                   |    domain_value_with_freq.n domain_value,
+                   |    exp(ln(cnt / $rowCnt) + ln(domain_value_with_freq.cnt / cnt)) score
+                   |  FROM (
+                   |    SELECT
+                   |      $rowId,
+                   |      attribute,
+                   |      current_value,
+                   |      explode_outer(domain) domain_value_with_freq
+                   |    FROM
+                   |      $domainView
+                   |  ) d LEFT OUTER JOIN (
+                   |    SELECT $attribute, MAX(cnt) cnt
+                   |    FROM $attrStatView
+                   |    WHERE ${whereCaluseToFilterStat(attribute, discreteAttrs)}
+                   |    GROUP BY $attribute
+                   |  ) s
+                   |  ON
+                   |    d.domain_value_with_freq.n = s.$attribute
+                   |)
+                   |GROUP BY
+                   |  $rowId, attribute, current_value, domain_value
+                 """.stripMargin)
+            }
+
+            withTempView(domainWithScoreDf) { domainWithScoreView =>
+              spark.sql(
+                s"""
+                   |SELECT
+                   |  l.$rowId,
+                   |  l.attribute,
+                   |  current_value,
+                   |  filter(collect_set(named_struct('n', domain_value, 'prob', score / denom)), x -> x.prob > $domain_threshold_beta) domain
+                   |FROM
+                   |  $domainWithScoreView l, (
+                   |    SELECT
+                   |      $rowId, attribute, SUM(score) denom
+                   |    FROM
+                   |      $domainWithScoreView
+                   |    GROUP BY
+                   |      $rowId, attribute
+                   |  ) r
+                   |WHERE
+                   |  l.$rowId = r.$rowId AND l.attribute = r.attribute
+                   |GROUP BY
+                   |  l.$rowId, l.attribute, current_value
+                 """.stripMargin)
+            }
+          }
+        }.reduce(_.union(_))
       }
+
+      val cellDomainView = withJobDescription("compute domain values with posteriori probability") {
+        createAndCacheTempView(cellDomainDf, "cell_domain")
+      }
+      // Checks if # of rows in `cellDomainView` is the same with # of error cells
+      assert(cellDomainDf.count == repairCellDf.count)
+      Seq("cell_domain" -> cellDomainView,
+        "pairwise_attr_stats" -> pairwiseStatMap.mapValues(seqToJson)
+      ).asJson
     }
   }
 }

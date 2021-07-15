@@ -480,7 +480,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 test_model.run(detect_errors_only=True).collect(), [
                     Row(tid=1, attribute="y", current_value=None)])
 
-    def test_no_valid_noisy_cell_exists(self):
+    def test_no_repairable_cell_exists(self):
         with self.tempView("inputView"):
             rows = [
                 (1, "1", None),
@@ -497,8 +497,13 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setRowId("tid")
             self.assertRaisesRegexp(
                 ValueError,
-                "Noisy cells have valid discrete properties for domain analysis",
-                lambda: test_model.run())
+                "To repair noisy cells, they should be discretizable",
+                lambda: test_model.run(detect_errors_only=False))
+            self.assertEqual(
+                test_model.run(detect_errors_only=True).orderBy("tid", "attribute").collect(), [
+                    Row(tid=1, attribute="y", current_value=None),
+                    Row(tid=2, attribute="y", current_value=None),
+                    Row(tid=6, attribute="y", current_value=None)])
 
     def test_regressor_model(self):
         with self.tempView("inputView"):

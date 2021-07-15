@@ -17,8 +17,7 @@
 
 package org.apache.spark.api.python
 
-import org.apache.spark.SparkException
-import org.apache.spark.sql.{QueryTest, Row}
+import org.apache.spark.sql.{AnalysisException, QueryTest, Row}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.util.RepairUtils._
@@ -90,7 +89,7 @@ class RepairMiscSuite extends QueryTest with SharedSparkSession {
     assert(df2.schema.toDDL === expectedSchema)
     assert(df2.select("k").collect.map(_.getInt(0)).toSet === Set(0, 1))
 
-    val errMsg = intercept[SparkException] {
+    val errMsg = intercept[AnalysisException] {
       RepairMiscApi.splitInputTableInto(2, "default", "t", "tid", "non-existent", "")
     }.getMessage
     assert(errMsg.contains("Columns 'non-existent' do not exist in 'default.t'"))
@@ -117,7 +116,7 @@ class RepairMiscSuite extends QueryTest with SharedSparkSession {
       Nil
     )
 
-    val errMsg = intercept[SparkException] {
+    val errMsg = intercept[AnalysisException] {
       RepairMiscApi.injectNullAt("default", "t", "non-existent", 1.0, 0)
     }.getMessage
     assert(errMsg.contains("Columns 'non-existent' do not exist in 'default.t'"))
@@ -139,7 +138,7 @@ class RepairMiscSuite extends QueryTest with SharedSparkSession {
         Nil
       )
 
-      val errMsg = intercept[SparkException] {
+      val errMsg = intercept[AnalysisException] {
         createEmptyTable("tid STRING, illegal STRING").createOrReplaceTempView("IllegalView")
         RepairMiscApi.toErrorMap("IllegalView", "default", "t", "tid")
       }.getMessage

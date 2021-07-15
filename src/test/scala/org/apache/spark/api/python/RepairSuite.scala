@@ -20,8 +20,7 @@ package org.apache.spark.api.python
 import org.json4s._
 import org.json4s.jackson.JsonMethods._
 
-import org.apache.spark.sql.QueryTest
-import org.apache.spark.SparkException
+import org.apache.spark.sql.{AnalysisException, QueryTest}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 
@@ -41,7 +40,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         .foreach { tpe =>
       withTable("t") {
         spark.sql(s"CREATE TABLE t(tid STRING, v $tpe) USING parquet")
-        val errMsg = intercept[SparkException] {
+        val errMsg = intercept[AnalysisException] {
           RepairApi.checkInputTable("default", "t", "tid")
         }.getMessage
         assert(errMsg.contains("unsupported ones found"))
@@ -58,7 +57,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       val data = jsonObj.asInstanceOf[JObject].values
       assert(data("input_table") === "t")
       assert(data("num_input_rows") === "1")
-      assert(data("num_attrs") === "3")
+      assert(data("num_attrs") === "2")
       assert(data("continous_attrs") === "v2")
     }
   }
@@ -96,10 +95,10 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       val jsonObj = parse(jsonString)
       val data = jsonObj.asInstanceOf[JObject].values
 
-      val discreteFeatures = data("discrete_features").toString
-      assert(discreteFeatures.startsWith("discrete_features_"))
-      val discreteCols = spark.table(discreteFeatures).columns
-      assert(discreteCols.toSet === Set("tid", "HospitalType", "EmergencyService", "State"))
+      val discretizedTable = data("discretized_table").toString
+      assert(discretizedTable.startsWith("discretized_table_"))
+      val discretizedCols = spark.table(discretizedTable).columns
+      assert(discretizedCols.toSet === Set("tid", "HospitalType", "EmergencyService", "State"))
 
       assert(data("distinct_stats") === Map(
         "HospitalOwner" -> 28,

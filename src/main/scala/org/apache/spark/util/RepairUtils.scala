@@ -44,6 +44,12 @@ object RepairUtils {
     ret
   }
 
+  def checkSchema(viewName: String, schema: String): Boolean = {
+    assert(SparkSession.getActiveSession.nonEmpty)
+    val spark = SparkSession.getActiveSession.get
+    spark.table(viewName).schema.toDDL == StructType.fromDDL(schema).toDDL
+  }
+
   def createEmptyTable(schema: String): DataFrame = {
     assert(SparkSession.getActiveSession.nonEmpty)
     val spark = SparkSession.getActiveSession.get
