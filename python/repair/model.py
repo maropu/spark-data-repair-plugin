@@ -894,27 +894,19 @@ class RepairModel():
         return self._register_table(ret_as_json["repair_base_cells"])
 
     # Checks if attributes are discrete or not, and discretizes continous ones
-    def _discretize_attrs(self, input_table: str, continous_attrs: List[str]) -> Tuple[str, Dict[str, str]]:
+    def _discretize_attrs(self, input_table: str, continous_attrs: List[str]) -> Tuple[str, List[str], Dict[str, str]]:
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
         ret_as_json = json.loads(self._repair_api.convertToDiscreteFeatures(
             input_table, str(self.row_id), self.discrete_thres))
-
-        df = self._register_and_get_df(ret_as_json["discrete_features"])
-        logging.info("Valid {} attributes ({}) found in the {} input attributes ({}) and "
-                     "{} continous attributes ({}) included in them".format(
-                         len(df.columns),
-                         ",".join(df.columns),
-                         len(self._spark.table(input_table).columns),
-                         ",".join(self._spark.table(input_table).columns),
-                         len(continous_attrs),
-                         ",".join(continous_attrs)))
-
-        return ret_as_json["discrete_features"], ret_as_json["distinct_stats"]
+        discretized_table = self._register_table(ret_as_json["discretized_table"])
+        discretized_columns = self._spark.table(discretized_table).columns
+        discretized_columns.remove(str(self.row_id))
+        return discretized_table, discretized_columns, ret_as_json["distinct_stats"]
 
     @_spark_job_group(name="cell domain analysis")
     def _analyze_error_cell_domain(
-            self, noisy_cells: str, discrete_features: str, continous_attrs: List[str]) -> Tuple[str, str]:
+            self, noisy_cells: str, discretized_table: str, continous_attrs: List[str]) -> Tuple[str, str]:
 
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
@@ -925,7 +917,7 @@ class RepairModel():
 
         logging.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
         ret_as_json = json.loads(self._repair_api.computeDomainInErrorCells(
-            discrete_features, noisy_cells, str(self.row_id),
+            discretized_table, noisy_cells, str(self.row_id),
             ",".join(continous_attrs),
             self.max_attrs_to_compute_domains,
             self.attr_stat_sample_ratio,
@@ -962,12 +954,12 @@ class RepairModel():
     def _split_clean_and_dirty_rows(
             self, partial_repaired_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame, List[str]]:
         error_rows_df = error_cells_df.selectExpr(str(self.row_id)).distinct().cache()
-        fixed_rows_df = partial_repaired_df.join(error_rows_df, str(self.row_id), "left_anti").cache()
+        clean_rows_df = partial_repaired_df.join(error_rows_df, str(self.row_id), "left_anti").cache()
         dirty_rows_df = partial_repaired_df.join(error_rows_df, str(self.row_id), "left_semi").cache()
         error_attrs = error_cells_df.groupBy("attribute") \
             .agg(functions.count("attribute").alias("cnt")).collect()
         assert len(error_attrs) > 0
-        return fixed_rows_df, dirty_rows_df, list(map(lambda x: x.attribute, error_attrs))
+        return clean_rows_df, dirty_rows_df, list(map(lambda x: x.attribute, error_attrs))
 
     def _convert_to_histogram(self, df: DataFrame) -> DataFrame:
         input_table = self._create_temp_view(df)
@@ -1516,19 +1508,23 @@ class RepairModel():
             logging.info("Any error cell not found, so the input data is already clean")
             return noisy_cells_df if not repair_data else input_df
 
-        # Sets NULL to noisy cells
+        # Selects error cells based on the result of domain analysis
+        discretized_table, discretized_columns, distinct_stats = \
+            self._discretize_attrs(input_table, continous_attrs)
+        if not len(discretized_columns) > 0:
+            if not detect_errors_only:
+                raise ValueError("At least one valid discretizable feature is needed to repair error cells, "
+                                 "but no such feature found")
+            else:
+                return noisy_cells_df
+
+        # Clear out noisy cells (to NULL)
         noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells")
         repair_base_cells = self._prepare_repair_base_cells(input_table, noisy_cells, num_input_rows, num_attrs)
 
-        # Selects error cells based on the result of domain analysis
-        discrete_features, distinct_stats = self._discretize_attrs(input_table, continous_attrs)
-        if len(self._spark.table(discrete_features).columns) <= 1:
-            raise ValueError("At least one valid discretizable feature is needed to repair error cells, "
-                             "but no such feature found")
-
         # TODO: Needs to separate the domain analysis from the error detection
         cell_domain, pairwise_stats = self._analyze_error_cell_domain(
-            noisy_cells, discrete_features, continous_attrs)
+            noisy_cells, discretized_table, continous_attrs)
         if self._spark.table(cell_domain).count() == 0:
             raise ValueError("Noisy cells have valid discrete properties for domain analysis")
 
@@ -1541,17 +1537,20 @@ class RepairModel():
         # If no error found, we don't need to do nothing
         if error_cells_df.count() == 0:
             logging.info("Any error cells not found, so the input data is already clean")
-            return error_cells_df if not repair_data else input_df
+            if not repair_data:
+                return error_cells_df
+            else:
+                return input_df
 
         #################################################################################
         # 2. Repair Model Training Phase
         #################################################################################
 
         # Selects rows for training, build models, and repair cells
-        fixed_rows_df, dirty_rows_df, target_columns = self._split_clean_and_dirty_rows(
+        clean_rows_df, dirty_rows_df, target_columns = self._split_clean_and_dirty_rows(
             self._spark.table(partial_repaired), error_cells_df)
         if compute_training_target_hist:
-            df = fixed_rows_df.selectExpr(target_columns)
+            df = clean_rows_df.selectExpr(target_columns)
             hist_df = self._convert_to_histogram(df)
             # self._show_histogram(hist_df)
             return hist_df
@@ -1608,7 +1607,7 @@ class RepairModel():
                 .where("repaired IS NULL OR not(current_value <=> repaired)")
             return repair_candidates_df
         else:
-            clean_df = fixed_rows_df.union(repaired_df)
+            clean_df = clean_rows_df.union(repaired_df)
             assert clean_df.count() == input_df.count()
             return clean_df
 

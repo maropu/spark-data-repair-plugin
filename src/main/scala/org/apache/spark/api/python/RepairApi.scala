@@ -223,8 +223,8 @@ object RepairApi extends RepairBase {
       s"rowId=$rowId discreteThres=$discreteThres")
     val (discreteDf, statMap) = doConvertToDiscreteFeatures(qualifiedName, discreteThres, Set(rowId))
     val distinctStats = statMap.mapValues(_.distinctCount.toString)
-    val discreteFeaturesView = createAndCacheTempView(discreteDf, "discrete_features")
-    Seq("discrete_features" -> discreteFeaturesView,
+    val discreteFeaturesView = createAndCacheTempView(discreteDf, "discretized_table")
+    Seq("discretized_table" -> discreteFeaturesView,
       "distinct_stats" -> distinctStats
     ).asJson
   }

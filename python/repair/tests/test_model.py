@@ -303,7 +303,7 @@ class RepairModelTests(ReusedSQLTestCase):
             self.assertEqual(
                 df.selectExpr("tid", "attribute", "current_value").orderBy("tid", "attribute").collect(),
                 self.expected_adult_result_without_repaired)
-        _test(test_model.run())
+        _test(test_model.setParallelStatTrainingEnabled(False).run())
         _test(test_model.setParallelStatTrainingEnabled(True).run())
 
     def test_setMaxTrainingRowNum(self):
@@ -432,7 +432,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setRowId("tid")
             self.assertRaises(AnalysisException, lambda: test_model.run())
 
-    def test_no_valid_discrete_feature_exists(self):
+    def test_no_valid_discrete_feature_exists_1(self):
         with self.tempView("inputView"):
             rows = [
                 (1, "1", None),
@@ -451,6 +451,30 @@ class RepairModelTests(ReusedSQLTestCase):
                 ValueError,
                 "At least one valid discretizable feature is needed to repair error cells",
                 lambda: test_model.run())
+
+    def test_no_valid_discrete_feature_exists_2(self):
+        with self.tempView("inputView"):
+            rows = [
+                (1, "1", None),
+                (2, "2", "test-2"),
+                (3, "3", "test-3"),
+                (4, "4", "test-4"),
+                (5, "5", "test-5"),
+                (6, "6", "test-6")
+            ]
+            self.spark.createDataFrame(rows, ["tid", "x", "y"]) \
+                .createOrReplaceTempView("inputView")
+            test_model = self._build_model() \
+                .setTableName("inputView") \
+                .setRowId("tid") \
+                .setDiscreteThreshold(3)
+            self.assertRaisesRegexp(
+                ValueError,
+                "At least one valid discretizable feature is needed to repair error cells",
+                lambda: test_model.run(detect_errors_only=False))
+            self.assertEqual(
+                test_model.run(detect_errors_only=True).collect(), [
+                    Row(tid=1, attribute="y")])
 
     def test_no_valid_noisy_cell_exists(self):
         with self.tempView("inputView"):
