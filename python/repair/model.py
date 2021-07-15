@@ -128,10 +128,6 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
     def _n_splits() -> int:
         return int(_get_option("cv.n_splits", "3"))
 
-    def _parallelism() -> Optional[int]:
-        opt_value = _get_option("hp.parallelism", None)
-        return int(opt_value) if opt_value is not None else None
-
     def _timeout() -> Optional[int]:
         opt_value = _get_option("hp.timeout", None)
         return int(opt_value) if opt_value is not None else None
