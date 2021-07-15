@@ -307,7 +307,7 @@ object RepairApi extends RepairBase {
     Seq("repair_base_cells" -> repairBaseView).asJson
   }
 
-  private def computeAttrStats(
+  private[python] def computeAttrStats(
       discreteAttrView: String,
       discreteAttrs: Seq[String],
       attrPairsToRepair: Seq[(String, String)],
@@ -345,7 +345,7 @@ object RepairApi extends RepairBase {
     s"$a IS NOT NULL AND ${attrs.filter(_ != a).map(a => s"$a IS NULL").mkString(" AND ")}"
   }
 
-  private def compuatePairwiseAttrStats(
+  private[python] def compuatePairwiseAttrStats(
       rowCnt: Long,
       attrStatView: String,
       discreteAttrView: String,
@@ -437,7 +437,7 @@ object RepairApi extends RepairBase {
     (pairwiseStatMap, domainStatMap)
   }
 
-  private def computeCorrAttrs(
+  private[python] def computeCorrAttrs(
       pairwiseStatMap: Map[String, Seq[(String, Double)]],
       maxAttrsToComputeDomains: Int,
       minCorrThres: Double): Map[String, Seq[(String, Double)]] = {

@@ -213,6 +213,137 @@ class RepairSuite extends QueryTest with SharedSparkSession {
     }
   }
 
+  test("convertToHistogram") {
+    withTempView("tempView") {
+      spark.sql(
+        s"""
+           |CREATE TEMPORARY VIEW tempView(tid, x, y, z) AS SELECT * FROM VALUES
+           |  (1, "1", "test-1", 1.0),
+           |  (2, "1", "test-1", 2.0),
+           |  (3, "1", "test-2", 1.0)
+         """.stripMargin)
+
+      val jsonString = RepairApi.convertToHistogram("tempView", discreteThres = 10)
+      val jsonObj = parse(jsonString)
+      val data = jsonObj.asInstanceOf[JObject].values
+
+      val histogram = data("histogram").toString
+      assert(histogram.startsWith("histogram_"))
+      val df = spark.table(histogram)
+      assert(df.columns.toSet === Set("attribute", "histogram"))
+      checkAnswer(df.selectExpr("attribute", "inline(histogram)"), Seq(
+        Row("tid", "1", 1L),
+        Row("tid", "2", 1L),
+        Row("tid", "3", 1L),
+        Row("y", "test-1", 2L),
+        Row("y", "test-2", 1L),
+        Row("z", "1.0", 2L),
+        Row("z", "2.0", 1L)))
+    }
+  }
+
+  test("convertErrorCellsToNull") {
+    import testImplicits._
+    withTempView("input", "err") {
+      Seq(
+        (1, 100, "abc", 1.2),
+        (2, 200, "def", 3.2),
+        (3, 300, "ghi", 2.1),
+        (4, 400, "jkl", 1.9),
+        (5, 500, "mno", 0.5)
+      ).toDF("tid", "c0", "c1", "c2").createOrReplaceTempView("input")
+
+      Seq((2, "c1", "def"), (2, "c2", "3.2"), (3, "c0", "300"), (5, "c2", "0.5"))
+        .toDF("tid", "attribute", "current_value").createOrReplaceTempView("err")
+
+      val jsonString = RepairApi.convertErrorCellsToNull("input", "err", "tid", "c0,c1,c2")
+      val jsonObj = parse(jsonString)
+      val data = jsonObj.asInstanceOf[JObject].values
+
+      val viewName = data("repair_base_cells").toString
+      assert(viewName.startsWith("repair_base_cells_"))
+      checkAnswer(spark.table(viewName), Seq(
+        Row(1, 100, "abc", 1.2),
+        Row(2, 200, null, null),
+        Row(3, null, "ghi", 2.1),
+        Row(4, 400, "jkl", 1.9),
+        Row(5, 500, "mno", null)
+      ))
+    }
+  }
+
+  test("computeAttrStats") {
+    withTempView("tempView") {
+      spark.sql(
+        s"""
+           |CREATE TEMPORARY VIEW tempView(tid, x, y) AS SELECT * FROM VALUES
+           |  (1, "1", "test-1"),
+           |  (2, "2", "test-2"),
+           |  (3, "3", "test-3"),
+           |  (4, "2", "test-2"),
+           |  (5, "1", "test-1"),
+           |  (6, "1", "test-1"),
+           |  (7, "3", "test-3"),
+           |  (8, "3", "test-3"),
+           |  (9, "2", "test-2a")
+         """.stripMargin)
+
+      val df = RepairApi.computeAttrStats(
+        "tempView", Seq("x", "y"), Seq(("x", "y"), ("y", "x")), 1.0, 0.0)
+      checkAnswer(df, Seq(
+        Row("1", "test-1", 3),
+        Row("2", "test-2a", 1),
+        Row(null, "test-2a", 1),
+        Row("2", "test-2", 2),
+        Row(null, "test-2", 2),
+        Row("3", null, 3),
+        Row("3", "test-3", 3),
+        Row(null, "test-1", 3),
+        Row("2", null, 3),
+        Row(null, "test-3", 3),
+        Row("1", null, 3)
+      ))
+    }
+  }
+
+  test("compuatePairwiseAttrStats") {
+    withTempView("tempView", "attrStatView") {
+      spark.sql(
+        s"""
+           |CREATE TEMPORARY VIEW tempView(tid, x, y) AS SELECT * FROM VALUES
+           |  (1, "1", "test-1"),
+           |  (2, "2", "test-2"),
+           |  (3, "3", "test-3"),
+           |  (4, "2", "test-2"),
+           |  (5, "1", "test-1"),
+           |  (6, "1", "test-1"),
+           |  (7, "3", "test-3"),
+           |  (8, "3", "test-3"),
+           |  (9, "2", "test-2a")
+         """.stripMargin)
+
+      val statThreshold = 0.80
+      val df = RepairApi.computeAttrStats(
+        "tempView", Seq("x", "y"), Seq(("x", "y"), ("y", "x")), 1.0, statThreshold)
+      df.createOrReplaceTempView("attrStatView")
+
+      val (pairwiseStatMap, domainStatMap) = RepairApi.compuatePairwiseAttrStats(
+        9, "attrStatView", "tempView", Seq("x", "y"), Seq(("x", "y"), ("y", "x")), 0.3)
+      assert(pairwiseStatMap.keySet === Set("x", "y"))
+      assert(pairwiseStatMap("x").map(_._1) === Seq("y"))
+      assert(pairwiseStatMap("x").head._2 > statThreshold)
+      assert(pairwiseStatMap("y").map(_._1) === Seq("x"))
+      assert(pairwiseStatMap("y").head._2 > statThreshold)
+      assert(domainStatMap === Map("tid" -> 9, "x" -> 3, "y" -> 4))
+    }
+  }
+
+  test("computeCorrAttrs") {
+    val pairwiseStatMap = Map("y" -> Seq(("x", 0.9)), "x" -> Seq(("y", 0.9)))
+    val corrAttrs = RepairApi.computeCorrAttrs(pairwiseStatMap, 2, 0.80)
+    assert(corrAttrs === Map("y" -> Seq(("x", 0.9)), "x" -> Seq(("y", 0.9))))
+  }
+
   ignore("computeDomainInErrorCells") {
     // TODO: Adds tests here
   }
