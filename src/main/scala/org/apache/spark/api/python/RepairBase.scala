@@ -98,12 +98,7 @@ abstract class RepairBase extends LoggingBasedOnLevel {
     val inputDf = spark.table(qualifiedInputName)
     // Checks if the given table has a column named `rowId`
     if (rowId.nonEmpty && !inputDf.columns.contains(rowId)) {
-      // TODO: Implicitly adds unique row IDs if they don't exist in a given table
       throw AnalysisException(s"Column '$rowId' does not exist in '$qualifiedInputName'.")
-    }
-    if (rowId.nonEmpty && inputDf.columns.length <= 1) {
-      throw AnalysisException("At least one valid column needs to exist, but " +
-        s"only one column '$rowId' exists.")
     }
     (inputDf, qualifiedInputName)
   }

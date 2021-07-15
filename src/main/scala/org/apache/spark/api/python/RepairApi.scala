@@ -125,33 +125,6 @@ object RepairApi extends RepairBase {
     Seq("distinct_stats" -> statMap.mapValues(_.distinctCount.toString)).asJson
   }
 
-  private def doConvertToDiscreteFeatures(
-      inputView: String,
-      discreteThres: Int,
-      whitelist: Set[String] = Set.empty): (DataFrame, Map[String, ColumnStat]) = {
-    assert(2 <= discreteThres && discreteThres < 65536, "discreteThres should be in [2, 65536).")
-
-    val statMap = computeAndGetTableStats(inputView)
-    val inputDf = spark.table(inputView)
-    val attrTypeMap = inputDf.schema.map { f => f.name -> f.dataType }.toMap
-    val discreteExprs = inputDf.columns.flatMap { attr =>
-      (statMap(attr), attrTypeMap(attr)) match {
-        case (ColumnStat(_, min, max), tpe) if continousTypes.contains(tpe) =>
-          logBasedOnLevel(s"'$attr' regraded as a continuous attribute (min=${min.get}, " +
-            s"max=${max.get}), so discretized into [0, $discreteThres)")
-          Some(s"int(($attr - ${min.get}) / (${max.get} - ${min.get}) * $discreteThres) $attr")
-        case (ColumnStat(distinctCnt, _, _), _)
-            if whitelist.contains(attr) || (1 < distinctCnt && distinctCnt < discreteThres) =>
-          Some(attr)
-        case (ColumnStat(distinctCnt, _, _), _) =>
-          logWarning(s"'$attr' dropped because of its unsuitable domain (size=$distinctCnt)")
-          None
-      }
-    }
-    val discreteDf = inputDf.selectExpr(discreteExprs: _*)
-    (discreteDf, statMap)
-  }
-
   def computeFunctionalDeps(inputView: String, constraintFilePath: String): String = {
     logBasedOnLevel(s"computeFunctionalDep called with: discreteAttrView=$inputView " +
       s"constraintFilePath=$constraintFilePath")
@@ -226,11 +199,52 @@ object RepairApi extends RepairBase {
     }.mkString("{", ",", "}")
   }
 
+  private def discretizeTable(
+      inputView: String,
+      discreteThres: Int,
+      whitelist: Set[String] = Set.empty): (DataFrame, Map[String, ColumnStat]) = {
+    assert(2 <= discreteThres && discreteThres < 65536, "discreteThres should be in [2, 65536).")
+    val statMap = computeAndGetTableStats(inputView)
+    val inputDf = spark.table(inputView)
+    val attrTypeMap = inputDf.schema.map { f => f.name -> f.dataType }.toMap
+    val discreteExprs = inputDf.columns.flatMap { attr =>
+      (statMap(attr), attrTypeMap(attr)) match {
+        case (ColumnStat(_, min, max), tpe) if continousTypes.contains(tpe) =>
+          logBasedOnLevel(s"'$attr' regraded as a continuous attribute (min=${min.get}, " +
+            s"max=${max.get}), so discretized into [0, $discreteThres)")
+          Some(s"int(($attr - ${min.get}) / (${max.get} - ${min.get}) * $discreteThres) $attr")
+        case (ColumnStat(distinctCnt, _, _), _)
+          if whitelist.contains(attr) || (1 < distinctCnt && distinctCnt < discreteThres) =>
+          Some(attr)
+        case (ColumnStat(distinctCnt, _, _), _) =>
+          logWarning(s"'$attr' dropped because of its unsuitable domain (size=$distinctCnt)")
+          None
+      }
+    }
+    val discreteDf = inputDf.selectExpr(discreteExprs: _*)
+    (discreteDf, statMap)
+  }
+
+  def convertToDiscretizedTable(
+      qualifiedName: String,
+      rowId: String,
+      discreteThres: Int): String = {
+    assert(rowId.nonEmpty, s"$rowId should be a non-empty string.")
+    logBasedOnLevel(s"convertToDiscretizedTable called with: qualifiedName=$qualifiedName " +
+      s"rowId=$rowId discreteThres=$discreteThres")
+    val (discreteDf, statMap) = discretizeTable(qualifiedName, discreteThres, Set(rowId))
+    val distinctStats = statMap.mapValues(_.distinctCount.toString)
+    val discreteFeaturesView = createAndCacheTempView(discreteDf, "discretized_table")
+    Seq("discretized_table" -> discreteFeaturesView,
+      "distinct_stats" -> distinctStats
+    ).asJson
+  }
+
   def convertToHistogram(inputView: String, discreteThres: Int): String = {
     logBasedOnLevel(s"convertToHistogram called with: inputView=$inputView " +
       s"discreteThres=$discreteThres")
 
-    val (discreteDf, _) = doConvertToDiscreteFeatures(inputView, discreteThres)
+    val (discreteDf, _) = discretizeTable(inputView, discreteThres)
 
     val histogramDf = {
       withTempView(discreteDf, cache = true) { discreteView =>
@@ -249,21 +263,6 @@ object RepairApi extends RepairBase {
     }
     val histgramView = createAndCacheTempView(histogramDf, "histogram")
     Seq("histogram" -> histgramView).asJson
-  }
-
-  def convertToDiscreteFeatures(
-      qualifiedName: String,
-      rowId: String,
-      discreteThres: Int): String = {
-    assert(rowId.nonEmpty, s"$rowId should be a non-empty string.")
-    logBasedOnLevel(s"convertToDiscreteFeatures called with: qualifiedName=$qualifiedName " +
-      s"rowId=$rowId discreteThres=$discreteThres")
-    val (discreteDf, statMap) = doConvertToDiscreteFeatures(qualifiedName, discreteThres, Set(rowId))
-    val distinctStats = statMap.mapValues(_.distinctCount.toString)
-    val discreteFeaturesView = createAndCacheTempView(discreteDf, "discretized_table")
-    Seq("discretized_table" -> discreteFeaturesView,
-      "distinct_stats" -> distinctStats
-    ).asJson
   }
 
   def convertErrorCellsToNull(
@@ -456,6 +455,7 @@ object RepairApi extends RepairBase {
     }
   }
 
+  // TODO: Adds tests for this method
   def computeDomainInErrorCells(
       discreteAttrView: String,
       errCellView: String,

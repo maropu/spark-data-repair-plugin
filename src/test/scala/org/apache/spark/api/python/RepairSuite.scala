@@ -19,8 +19,7 @@ package org.apache.spark.api.python
 
 import org.json4s._
 import org.json4s.jackson.JsonMethods._
-
-import org.apache.spark.sql.{AnalysisException, QueryTest}
+import org.apache.spark.sql.{AnalysisException, QueryTest, Row}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 
@@ -35,7 +34,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
     Thread.currentThread().getContextClassLoader.getResource(f).getPath
   }
 
-  test("checkInputTable - unsupported types") {
+  test("checkInputTable - type check") {
     Seq("DATE", "TIMESTAMP", "ARRAY<INT>", "STRUCT<a: INT, b: DOUBLE>", "MAP<INT, INT>")
         .foreach { tpe =>
       withTable("t") {
@@ -45,6 +44,29 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         }.getMessage
         assert(errMsg.contains("unsupported ones found"))
       }
+    }
+  }
+
+  test("checkInputTable - #columns check") {
+    Seq("tid STRING", "tid STRING, c1 INT").foreach { schema =>
+      withTable("t") {
+        spark.sql(s"CREATE TABLE t($schema) USING parquet")
+        val errMsg = intercept[AnalysisException] {
+          RepairApi.checkInputTable("default", "t", "tid")
+        }.getMessage
+        assert(errMsg.contains("A least three columns"))
+      }
+    }
+  }
+
+  test("checkInputTable - uniqueness check") {
+    withTempView("t") {
+      spark.range(100).selectExpr("1 AS tid", "id % 2 AS c0", " id % 3 AS c0")
+        .createOrReplaceTempView("t")
+      val errMsg = intercept[AnalysisException] {
+        RepairApi.checkInputTable("", "t", "tid")
+      }.getMessage
+      assert(errMsg.contains("Uniqueness does not hold"))
     }
   }
 
@@ -59,6 +81,30 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       assert(data("num_input_rows") === "1")
       assert(data("num_attrs") === "2")
       assert(data("continous_attrs") === "v2")
+    }
+  }
+
+  test("withCurrentValues") {
+    import testImplicits._
+    withTempView("input", "err") {
+      Seq(
+        (1, 100, "abc", 1.2),
+        (2, 200, "def", 3.2),
+        (3, 300, "ghi", 2.1),
+        (4, 400, "jkl", 1.9),
+        (5, 500, "mno", 0.5)
+      ).toDF("tid", "c0", "c1", "c2").createOrReplaceTempView("input")
+
+      Seq((2, "c1"), (2, "c2"), (3, "c0"), (5, "c2"))
+        .toDF("tid", "attribute").createOrReplaceTempView("err")
+
+      val df = RepairApi.withCurrentValues("input", "err", "tid", "c0,c1,c2")
+      checkAnswer(df, Seq(
+        Row(2, "c1", "def"),
+        Row(2, "c2", "3.2"),
+        Row(3, "c0", "300"),
+        Row(5, "c2", "0.5")
+      ))
     }
   }
 
@@ -84,43 +130,6 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       val jsonObj = parse(jsonString)
       val data = jsonObj.asInstanceOf[JObject].values
       assert(data("distinct_stats") === Map("v0" -> 3, "v1" -> 8, "v2" -> 6, "v3" -> 9))
-    }
-  }
-
-  test("convertToDiscreteFeatures") {
-    withTable("adult") {
-      val hospitalFilePath = resourcePath("hospital.csv")
-      spark.read.option("header", true).format("csv").load(hospitalFilePath).write.saveAsTable("hospital")
-      val jsonString = RepairApi.convertToDiscreteFeatures("default.hospital", "tid", 20)
-      val jsonObj = parse(jsonString)
-      val data = jsonObj.asInstanceOf[JObject].values
-
-      val discretizedTable = data("discretized_table").toString
-      assert(discretizedTable.startsWith("discretized_table_"))
-      val discretizedCols = spark.table(discretizedTable).columns
-      assert(discretizedCols.toSet === Set("tid", "HospitalType", "EmergencyService", "State"))
-
-      assert(data("distinct_stats") === Map(
-        "HospitalOwner" -> 28,
-        "MeasureName" -> 63,
-        "Address2" -> 0,
-        "Condition" -> 28,
-        "Address3" -> 0,
-        "PhoneNumber" -> 72,
-        "CountyName" -> 65,
-        "ProviderNumber" -> 71,
-        "HospitalName" -> 68,
-        "Sample" -> 355,
-        "HospitalType" -> 13,
-        "EmergencyService" -> 6,
-        "City" -> 72,
-        "Score" -> 71,
-        "ZipCode" -> 67,
-        "Address1" -> 78,
-        "State" -> 4,
-        "tid" -> 1000,
-        "Stateavg" -> 74,
-        "MeasureCode" -> 56))
     }
   }
 
@@ -164,6 +173,43 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       val jsonObj = parse(jsonString)
       val data = jsonObj.asInstanceOf[JObject].values
       assert(data === Map("3" -> "test-3", "1" -> "test-1"))
+    }
+  }
+
+  test("convertToDiscretizedTable") {
+    withTable("adult") {
+      val hospitalFilePath = resourcePath("hospital.csv")
+      spark.read.option("header", true).format("csv").load(hospitalFilePath).write.saveAsTable("hospital")
+      val jsonString = RepairApi.convertToDiscretizedTable("default.hospital", "tid", 20)
+      val jsonObj = parse(jsonString)
+      val data = jsonObj.asInstanceOf[JObject].values
+
+      val discretizedTable = data("discretized_table").toString
+      assert(discretizedTable.startsWith("discretized_table_"))
+      val discretizedCols = spark.table(discretizedTable).columns
+      assert(discretizedCols.toSet === Set("tid", "HospitalType", "EmergencyService", "State"))
+
+      assert(data("distinct_stats") === Map(
+        "HospitalOwner" -> 28,
+        "MeasureName" -> 63,
+        "Address2" -> 0,
+        "Condition" -> 28,
+        "Address3" -> 0,
+        "PhoneNumber" -> 72,
+        "CountyName" -> 65,
+        "ProviderNumber" -> 71,
+        "HospitalName" -> 68,
+        "Sample" -> 355,
+        "HospitalType" -> 13,
+        "EmergencyService" -> 6,
+        "City" -> 72,
+        "Score" -> 71,
+        "ZipCode" -> 67,
+        "Address1" -> 78,
+        "State" -> 4,
+        "tid" -> 1000,
+        "Stateavg" -> 74,
+        "MeasureCode" -> 56))
     }
   }
 }
