@@ -954,22 +954,23 @@ class RepairModel():
 
         return ret_as_json["cell_domain"], ret_as_json["pairwise_attr_stats"]
 
-    def _extract_error_cells(self, cell_domain: str, repair_base_cells: str,
+    def _extract_error_cells(self, noisy_cells_df: DataFrame, cell_domain: str, repair_base_cells: str,
                              num_input_rows: int, num_attrs: int) -> Tuple[DataFrame, DataFrame]:
-        # Fixes cells if an inferred value is the same with an initial one
-        fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) value"
-        weak_df = self._spark.table(cell_domain).selectExpr(
-            str(self.row_id), "attribute", "current_value", fix_cells_expr).cache()
-        error_cells_df = weak_df.where("value IS NULL").drop("value").cache()
-        weak_df = weak_df.where("value IS NOT NULL") \
-            .selectExpr(str(self.row_id), "attribute", "value repaired")
-        weak = self._create_temp_view(weak_df.cache(), "weak")
-        repair_base_df = self._repair_attrs(weak, repair_base_cells)
+        # Fixes cells if a predicted value is the same with an initial one
+        fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) repaired"
+        weak_labeled_df = self._spark.table(cell_domain) \
+            .selectExpr(str(self.row_id), "attribute", fix_cells_expr) \
+            .where("repaired IS NOT NULL")
 
+        # Updates the base cells by using the predicted values
+        weak_labeled_cells = self._create_temp_view(weak_labeled_df.cache(), "weak_labeled_cells")
+        repair_base_df = self._repair_attrs(weak_labeled_cells, repair_base_cells)
+
+        # Removes weak labeled cells from the noisy cells
+        error_cells_df = noisy_cells_df.join(weak_labeled_df, str(self.row_id), "anti")
         logging.info('[Error Detection Phase] {} noisy cells fixed and '
                      '{} error cells ({}%) remaining...'.format(
-                         self._spark.table(weak).count(),
-                         error_cells_df.count(),
+                         weak_labeled_df.count(), error_cells_df.count(),
                          error_cells_df.count() * 100.0 / (num_attrs * num_input_rows)))
 
         return error_cells_df, repair_base_df
@@ -1531,7 +1532,6 @@ class RepairModel():
             else:
                 return input_df
 
-        # Defines true error cells based on the result of domain analysis
         discretized_table, discretized_columns, distinct_stats = \
             self._discretize_attrs(input_table, continous_attrs)
         if not len(discretized_columns) > 0:
@@ -1545,15 +1545,15 @@ class RepairModel():
         repair_base_cells = self._prepare_repair_base_cells(
             input_table, noisy_cells_df, num_input_rows, num_attrs)
 
-        # TODO: Needs to separate the domain analysis from the error detection
+        # Defines true error cells based on the result of domain analysis
         cell_domain, pairwise_stats = self._analyze_error_cell_domain(
             noisy_cells_df, discretized_table, continous_attrs)
         if self._spark.table(cell_domain).count() == 0:
             raise ValueError("Noisy cells have valid discrete properties for domain analysis")
 
         # If `detect_errors_only` is True, returns found error cells
-        error_cells_df, repair_base_df = \
-            self._extract_error_cells(cell_domain, repair_base_cells, num_input_rows, num_attrs)
+        error_cells_df, repair_base_df = self._extract_error_cells(
+            noisy_cells_df, cell_domain, repair_base_cells, num_input_rows, num_attrs)
         if detect_errors_only:
             return error_cells_df
 
@@ -1565,15 +1565,16 @@ class RepairModel():
             else:
                 return input_df
 
+        # Target repairable(discretizable) columns
+        target_columns = list(filter(lambda c: c in discretized_columns, noisy_columns))
+
+        # Filters out non-repairable columns from `error_cells_df`
+        error_cells_df = error_cells_df. \
+            where("attribute IN ({})".format(",".join(map(lambda x: f"'{x}'", target_columns))))
+
         #################################################################################
         # 2. Repair Model Training Phase
         #################################################################################
-
-        # Target columns to repair
-        target_columns = error_cells_df \
-            .selectExpr("collect_set(attribute) columns") \
-            .collect()[0] \
-            .columns
 
         # Selects rows for training, building models, and repairing cells
         clean_rows_df, dirty_rows_df = \
