@@ -86,19 +86,19 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
   test("withCurrentValues") {
     import testImplicits._
-    withTempView("input", "err") {
+    withTempView("inputView", "errCell") {
       Seq(
         (1, 100, "abc", 1.2),
         (2, 200, "def", 3.2),
         (3, 300, "ghi", 2.1),
         (4, 400, "jkl", 1.9),
         (5, 500, "mno", 0.5)
-      ).toDF("tid", "c0", "c1", "c2").createOrReplaceTempView("input")
+      ).toDF("tid", "c0", "c1", "c2").createOrReplaceTempView("inputView")
 
       Seq((2, "c1"), (2, "c2"), (3, "c0"), (5, "c2"))
-        .toDF("tid", "attribute").createOrReplaceTempView("err")
+        .toDF("tid", "attribute").createOrReplaceTempView("errCell")
 
-      val df = RepairApi.withCurrentValues("input", "err", "tid", "c0,c1,c2")
+      val df = RepairApi.withCurrentValues("inputView", "errCell", "tid", "c0,c1,c2")
       checkAnswer(df, Seq(
         Row(2, "c1", "def"),
         Row(2, "c2", "3.2"),
@@ -244,19 +244,19 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
   test("convertErrorCellsToNull") {
     import testImplicits._
-    withTempView("input", "err") {
+    withTempView("inputView", "errCell") {
       Seq(
         (1, 100, "abc", 1.2),
         (2, 200, "def", 3.2),
         (3, 300, "ghi", 2.1),
         (4, 400, "jkl", 1.9),
         (5, 500, "mno", 0.5)
-      ).toDF("tid", "c0", "c1", "c2").createOrReplaceTempView("input")
+      ).toDF("tid", "c0", "c1", "c2").createOrReplaceTempView("inputView")
 
       Seq((2, "c1", "def"), (2, "c2", "3.2"), (3, "c0", "300"), (5, "c2", "0.5"))
-        .toDF("tid", "attribute", "current_value").createOrReplaceTempView("err")
+        .toDF("tid", "attribute", "current_value").createOrReplaceTempView("errCell")
 
-      val jsonString = RepairApi.convertErrorCellsToNull("input", "err", "tid", "c0,c1,c2")
+      val jsonString = RepairApi.convertErrorCellsToNull("inputView", "errCell", "tid", "c0,c1,c2")
       val jsonObj = parse(jsonString)
       val data = jsonObj.asInstanceOf[JObject].values
 
@@ -344,7 +344,56 @@ class RepairSuite extends QueryTest with SharedSparkSession {
     assert(corrAttrs === Map("y" -> Seq(("x", 0.9)), "x" -> Seq(("y", 0.9))))
   }
 
-  ignore("computeDomainInErrorCells") {
-    // TODO: Adds tests here
+  test("computeDomainInErrorCells") {
+    withTempView("inputView", "errCell") {
+      spark.sql(
+        s"""
+           |CREATE TEMPORARY VIEW inputView(tid, x, y, z) AS SELECT * FROM VALUES
+           |  (1, "2", "test-1", 1.0),
+           |  (2, "2", "test-2", 1.0),
+           |  (3, "3", "test-1", 3.0),
+           |  (4, "2", "test-2", 2.0),
+           |  (5, "1", "test-1", 1.0),
+           |  (6, "2", "test-1", 1.0),
+           |  (7, "3", "test-3", 2.0),
+           |  (8, "3", "test-3", 3.0),
+           |  (9, "2", "test-2a", 2.0)
+         """.stripMargin)
+
+      spark.sql(
+        s"""
+           |CREATE TEMPORARY VIEW errCell(tid, attribute, current_value) AS SELECT * FROM VALUES
+           |  (1, "x", "2"),
+           |  (3, "y", "test-3"),
+           |  (6, "y", "test-2")
+         """.stripMargin)
+
+      def testComputeDomain(minCorrThres: Double, domain_threshold_beta: Double, expected: Seq[Row]): Unit = {
+        val jsonString = RepairApi.computeDomainInErrorCells(
+          "inputView", "errCell", "tid", "z", "x,y", "x,y", 9, 4, 1.0, 0.0, minCorrThres, 0.0, domain_threshold_beta)
+        val jsonObj = parse(jsonString)
+        val data = jsonObj.asInstanceOf[JObject].values
+
+        val viewName = data("cell_domain").toString
+        assert(viewName.startsWith("cell_domain_"))
+        val domainDf = spark.table(viewName)
+        assert(domainDf.columns.toSet === Set("tid", "attribute", "current_value", "domain"))
+        val df = spark.table(viewName)
+          .selectExpr("*", "inline(domain)")
+          .selectExpr("tid", "attribute", "current_value", "n")
+        checkAnswer(df, expected)
+      }
+
+      testComputeDomain(0.0, 0.0, Seq(
+        Row(1, "x", "2", "1"),
+        Row(1, "x", "2", "2"),
+        Row(1, "x", "2", "3"),
+        Row(3, "y", "test-3", "test-1"),
+        Row(3, "y", "test-3", "test-3"),
+        Row(6, "y", "test-2", "test-1"),
+        Row(6, "y", "test-2", "test-2"),
+        Row(6, "y", "test-2", "test-2a")
+      ))
+    }
   }
 }
