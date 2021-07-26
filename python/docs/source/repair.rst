@@ -43,8 +43,9 @@ model to repair them.
     RepairModel.setErrorDetectors
     RepairModel.setInput
     RepairModel.setMaximalLikelihoodRepairEnabled
-    RepairModel.setMaxTrainingColumnNum
+    RepairModel.setModelLoggingEnabled
     RepairModel.setMaxTrainingRowNum
+    RepairModel.setMaxTrainingColumnNum
     RepairModel.setTrainingDataRebalancingEnabled
     RepairModel.setMinCorrThreshold
     RepairModel.setRepairDelta

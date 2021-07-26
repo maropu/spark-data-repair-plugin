@@ -266,6 +266,11 @@ def _create_temp_name(prefix: str = "temp") -> str:
     return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
 
 
+def _compute_class_nrow_stdv(y: pd.Series, is_discrete: bool) -> Optional[float]:
+    from collections import Counter
+    return float(np.std(list(map(lambda x: x[1], Counter(y).items())))) if is_discrete else None
+
+
 def _rebalance_training_data(X: pd.DataFrame, y: pd.Series, target: str) -> Tuple[pd.DataFrame, pd.Series]:
     # Uses median as the number of training rows for each class
     from collections import Counter
@@ -346,6 +351,7 @@ class RepairModel():
         self.attr_stat_threshold: float = 0.0
 
         # Parameters for repair model training
+        self.model_logging_enabled: bool = False
         self.max_training_row_num: int = 10000
         self.max_training_column_num: Optional[int] = None
         self.training_data_rebalancing_enabled: bool = False
@@ -610,6 +616,20 @@ class RepairModel():
             threshold value (default: 0.0).
         """
         self.attr_stat_threshold = ratio
+        return self
+
+    @argtype_check  # type: ignore
+    def setModelLoggingEnabled(self, enabled: bool) -> "RepairModel":
+        """Specifies whether to enable model logging.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        enabled: bool
+            If set to ``True``, store the logs of built models  (default: ``False``).
+        """
+        self.model_logging_enabled = enabled
         return self
 
     @argtype_check  # type: ignore
@@ -972,7 +992,9 @@ class RepairModel():
             .where("repaired IS NOT NULL")
 
         # Removes weak labeled cells from the noisy cells
-        error_cells_df = noisy_cells_df.join(weak_labeled_cells_df, str(self.row_id), "anti")
+        error_cells_df = noisy_cells_df.join(weak_labeled_cells_df, [str(self.row_id), "attribute"], "left_anti")
+        assert noisy_cells_df.count() == error_cells_df.count() + weak_labeled_cells_df.count()
+
         logging.info('[Error Detection Phase] {} noisy cells fixed and '
                      '{} error cells ({}%) remaining...'.format(
                          weak_labeled_cells_df.count(), error_cells_df.count(),
@@ -1094,10 +1116,13 @@ class RepairModel():
             target_columns: List[str], continous_columns: List[str],
             num_class_map: Dict[str, int],
             feature_map: Dict[str, List[str]],
-            transformer_map: Dict[str, List[Any]]) -> Dict[str, Any]:
+            transformer_map: Dict[str, List[Any]]) -> List[Any]:
 
         if len(models) == len(target_columns):
-            return models
+            return []
+
+        # List to store the various logs of built stat models
+        logs: List[Tuple[str, str, float, float, int, int, Any]] = []
 
         for y in target_columns:
             if y in models:
@@ -1115,6 +1140,7 @@ class RepairModel():
 
             train_pdf = self._sample_training_data_from(df, training_data_num).toPandas()
             is_discrete = y not in continous_columns
+            model_type = "classfier" if is_discrete else "regressor"
 
             X = train_pdf[feature_map[y]]  # type: ignore
             for transformer in transformer_map[y]:
@@ -1123,34 +1149,36 @@ class RepairModel():
                 len(transformer_map[y]), ",".join(feature_map[y]), ",".join(X.columns)))
 
             # Re-balance target classes in training data
-            X, _y = _rebalance_training_data(X, train_pdf[y], y) \
+            X, y_ = _rebalance_training_data(X, train_pdf[y], y) \
                 if is_discrete and self.training_data_rebalancing_enabled \
                 else (X, train_pdf[y])
 
             logging.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
-                index, len(target_columns),
-                "classfier" if y not in continous_columns else "regressor",
+                index, len(target_columns), model_type,
                 y, ",".join(feature_map[y]),
                 len(train_pdf),
                 f" #class={num_class_map[y]}" if num_class_map[y] > 0 else ""))
             ((model, score), elapsed_time) = \
-                _build_lgb_model(X, _y, is_discrete, num_class_map[y], n_jobs=-1, opts=self.opts)
+                _build_lgb_model(X, y_, is_discrete, num_class_map[y], n_jobs=-1, opts=self.opts)
+
+            class_nrow_stdv = _compute_class_nrow_stdv(y_, is_discrete)
+            logs.append((y, model_type, score, elapsed_time, len(X), num_class_map[y], class_nrow_stdv))
             logging.info("Finishes building '{}' model...  score={} elapsed={}s".format(
                 y, score, elapsed_time))
 
             models[y] = (model, feature_map[y], transformer_map[y])
 
-        return models
+        return logs
 
     def _build_repair_stat_models_in_parallel(
             self, models: Dict[str, Any], train_df: DataFrame,
             target_columns: List[str], continous_columns: List[str],
             num_class_map: Dict[str, int],
             feature_map: Dict[str, List[str]],
-            transformer_map: Dict[str, List[Any]]) -> Dict[str, Any]:
+            transformer_map: Dict[str, List[Any]]) -> List[Any]:
 
         if len(models) == len(target_columns):
-            return models
+            return []
 
         # To build repair models in parallel, it assigns each model training into a single task
         train_dfs_per_target: List[DataFrame] = []
@@ -1191,7 +1219,7 @@ class RepairModel():
 
         num_tasks = len(train_dfs_per_target)
         if num_tasks == 0:
-            return models
+            return []
 
         # TODO: A larger `training_n_jobs` value can cause high pressure on executors
         training_n_jobs = max(1, int(self._num_cores_per_executor() / num_tasks))
@@ -1207,7 +1235,7 @@ class RepairModel():
         broadcasted_n_jobs = self._spark.sparkContext.broadcast(training_n_jobs)
         broadcasted_opts = self._spark.sparkContext.broadcast(self.opts)
 
-        @functions.pandas_udf("target: STRING, model: BINARY, score: DOUBLE, elapsed: DOUBLE",
+        @functions.pandas_udf("target: STRING, model: BINARY, score: DOUBLE, elapsed: DOUBLE, nrows: INT, stdv: DOUBLE",
                               functions.PandasUDFType.GROUPED_MAP)
         def train(pdf: pd.DataFrame) -> pd.DataFrame:
             target_column = broadcasted_target_column.value
@@ -1231,13 +1259,19 @@ class RepairModel():
 
             ((model, score), elapsed_time) = \
                 _build_lgb_model(X, y_, is_discrete, num_class, n_jobs, opts)
-            row = [y, pickle.dumps(model), score, elapsed_time]
+            class_nrow_stdv = _compute_class_nrow_stdv(y_, is_discrete)
+            row = [y, pickle.dumps(model), score, elapsed_time, len(X), class_nrow_stdv]
             return pd.DataFrame([row])
+
+        # List to store the various logs of built stat models
+        logs: List[Tuple[str, str, float, float, int, int, Any]] = []
 
         # TODO: Any smart way to distribute tasks in different physical machines?
         built_models = functools.reduce(lambda x, y: x.union(y), train_dfs_per_target) \
             .groupBy(target_column).apply(train).collect()
         for row in built_models:
+            tpe = "classfier" if row.target not in continous_columns else "regressor"
+            logs.append((row.target, tpe, row.score, row.elapsed, row.nrows, num_class_map[row.target], row.stdv))
             logging.info("Finishes building '{}' model... score={} elapsed={}s".format(
                 row.target, row.score, row.elapsed))
 
@@ -1246,7 +1280,7 @@ class RepairModel():
             transformers = transformer_map[row.target]
             models[row.target] = (model, features, transformers)
 
-        return models
+        return logs
 
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, train_df: DataFrame, target_columns: List[str], continous_columns: List[str],
@@ -1304,6 +1338,11 @@ class RepairModel():
         models: Dict[str, Any] = {}
         num_class_map: Dict[str, int] = {}
 
+        # List to store the various logs of built models. The list will be converted to a Spark temporary
+        # view named 'repair_model_xxx' and its schema is (attribute string, type string, score double,
+        # elapsed double, training_nrow int, nclass int, class_nrow_stdv double).
+        logs: List[Tuple[str, str, float, float, int, int, Any]] = []
+
         for y in target_columns:
             index = len(models) + 1
             is_discrete = y not in continous_columns
@@ -1312,6 +1351,7 @@ class RepairModel():
 
             # Skips building a model if num_class <= 1
             if is_discrete and num_class_map[y] <= 1:
+                logs.append((y, "rule", None, None, 0, num_class_map[y], None))  # type: ignore
                 logging.info("Skipping {}/{} model... type=rule y={} num_class={}".format(
                     index, len(target_columns), y, num_class_map[y]))
                 v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
@@ -1330,6 +1370,7 @@ class RepairModel():
 
                 fx = list(filter(lambda x: _qualified(x), functional_deps[y]))
                 if len(fx) > 0:
+                    logs.append((y, "rule", None, None, train_df.count(), num_class_map[y], None))  # type: ignore
                     logging.info("Building {}/{} model... type=rule(FD: X->y)  y={}(|y|={}) X={}(|X|={})".format(
                         index, len(target_columns), y, num_class_map[y], fx[0], distinct_stats[fx[0]]))
                     model = self._build_rule_model(train_df, target_columns, fx[0], y)
@@ -1337,11 +1378,18 @@ class RepairModel():
 
         build_stat_models = self._build_repair_stat_models_in_parallel \
             if self.parallel_stat_training_enabled else self._build_repair_stat_models_in_series
-        build_stat_models(
+        stat_model_logs = build_stat_models(
             models, train_df, target_columns, continous_columns,
             num_class_map, feature_map, transformer_map)
 
         assert len(models) == len(target_columns)
+
+        if self.model_logging_enabled:
+            schema = ["attributes", "type", "score", "elapsed", "training_nrow", "nclass", "class_nrow_stdv"]
+            df = self._spark.createDataFrame(data=[*logs, *stat_model_logs], schema=schema)
+            logViewName = _create_temp_name("repair_model")
+            df.createOrReplaceTempView(logViewName)
+            logging.info(f"Model training logs saved as a temporary view named '{logViewName}'")
 
         # Resolve the conflict dependencies of the predictions
         if self.rule_based_model_enabled:
