@@ -18,7 +18,7 @@ $ git clone https://github.com/maropu/spark-data-repair-plugin.git
 $ cd spark-data-repair-plugin
 
 # This repository includes a simple wrapper script `bin/python` to create
-# a virtual environment to resolve the required dependencies (e.g., Python 3.6 and PySpark 3.0),
+# a virtual environment to resolve the required dependencies (e.g., Python 3.6 and PySpark 3.1),
 # then launch a Python VM with this plugin.
 $ ./bin/python
 
@@ -31,7 +31,7 @@ Welcome to
 
 Using Python version 3.6.8 (default, Dec 29 2018 19:04:46)
 SparkSession available as 'spark'.
-Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
+Scavenger APIs (version 0.1.0-spark3.1-EXPERIMENTAL) available as 'scavenger'.
 
 # Loads CSV data having seven NULL cells
 >>> spark.read.option("header", True).csv("./testdata/adult.csv").createOrReplaceTempView("adult")
