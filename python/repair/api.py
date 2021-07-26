@@ -60,4 +60,4 @@ class Scavenger():
     @staticmethod
     def version() -> str:
         # TODO: Extracts a version string from the root pom.xml
-        return "0.1.0-spark3.0-EXPERIMENTAL"
+        return "0.1.0-spark3.1-EXPERIMENTAL"
