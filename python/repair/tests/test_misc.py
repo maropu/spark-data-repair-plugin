@@ -146,6 +146,18 @@ class RepairModelTests(ReusedSQLTestCase):
                     Row(attrName="v2", distinctCnt=17, min="0.0", max="16.0", nullCnt=0, avgLen=8,
                         maxLen=8, hist=[0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125])])
 
+    def test_toHistogram(self):
+        with self.tempView("tempView"):
+            data = [(1, "a", 1), (2, "a", 1), (3, "a", 1), (4, "a", 2)]
+            self.spark.createDataFrame(data, ["tid", "v1", "v2"]) \
+                .createOrReplaceTempView("tempView")
+
+            misc = RepairMisc().options({"table_name": "tempView", "targets": "v1,v2"})
+            self.assertEqual(
+                misc.toHistogram().orderBy("attribute").collect(), [
+                    Row(attribute="v1", histogram=[Row(value="a", cnt=4)]),
+                    Row(attribute="v2", histogram=[Row(value="2", cnt=1), Row(value="1", cnt=3)])])
+
     def test_toErrormap(self):
         with self.tempView("tempView", "errorCells"):
             data = [(1, "a", 1), (2, "b", 1), (3, "c", 1), (4, "d", 2)]

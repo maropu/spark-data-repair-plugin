@@ -1013,26 +1013,6 @@ class RepairModel():
         dirty_rows_df = repair_base_df.join(error_rows_df, str(self.row_id), "left_semi")
         return clean_rows_df, dirty_rows_df
 
-    def _convert_to_histogram(self, df: DataFrame) -> DataFrame:
-        input_table = self._create_temp_view(df)
-        ret_as_json = json.loads(self._repair_api.convertToHistogram(input_table, self.discrete_thres))
-        return self._spark.table(ret_as_json["histogram"])
-
-    def _show_histogram(self, df: DataFrame) -> None:
-        import matplotlib.pyplot as plt  # type: ignore[import]
-        fig = plt.figure()
-        num_targets = df.count()
-        for index, row in enumerate(df.collect()):
-            pdf = df.where(f'attribute = "{row.attribute}"') \
-                .selectExpr("inline(histogram)").toPandas()
-            f = fig.add_subplot(num_targets, 1, index + 1)
-            f.bar(pdf["value"], pdf["cnt"])
-            f.set_xlabel(row.attribute)
-            f.set_ylabel("cnt")
-
-        fig.tight_layout()
-        fig.show()
-
     # Selects relevant features if necessary. To reduce model training time,
     # it is important to drop non-relevant in advance.
     def _select_features(self, pairwise_stats: Dict[str, str], y: str, features: List[str]) -> List[str]:
@@ -1571,7 +1551,7 @@ class RepairModel():
     @elapsed_time  # type: ignore
     def _run(self, input_table: str, num_input_rows: int, num_attrs: int,
              continous_columns: List[str], detect_errors_only: bool,
-             compute_training_target_hist: bool, compute_repair_candidate_prob: bool,
+             compute_repair_candidate_prob: bool,
              compute_repair_prob: bool, compute_repair_score: bool,
              repair_data: bool) -> DataFrame:
 
@@ -1649,11 +1629,6 @@ class RepairModel():
         # Selects rows for training, building models, and repairing cells
         clean_rows_df, dirty_rows_df = \
             self._split_clean_and_dirty_rows(repair_base_df, error_cells_df)
-        if compute_training_target_hist:
-            df = clean_rows_df.selectExpr(target_columns)
-            hist_df = self._convert_to_histogram(df)
-            # self._show_histogram(hist_df)
-            return hist_df
 
         models = self._build_repair_models(
             repair_base_df, target_columns, continous_columns, distinct_stats, pairwise_stats)
@@ -1716,7 +1691,6 @@ class RepairModel():
 
     def run(self, detect_errors_only: bool = False, compute_repair_candidate_prob: bool = False,
             compute_repair_prob: bool = False, compute_repair_score: bool = False,
-            compute_training_target_hist: bool = False,
             repair_data: bool = False) -> DataFrame:
         """
         Starts processing to detect error cells in given input data and build a statistical
@@ -1733,8 +1707,6 @@ class RepairModel():
             repairs (default: ``False``).
         compute_repair_prob : bool
             If set to ``True``, returns probabiity of predicted repairs (default: ``False``).
-        compute_training_target_hist: bool
-            If set to ``True``, returns a histogram to analyze training data (default: ``False``).
         repair_data : bool
             If set to ``True``, returns repaired data (default: False).
 
@@ -1780,7 +1752,6 @@ class RepairModel():
             ("compute_repair_candidate_prob", compute_repair_candidate_prob),
             ("compute_repair_prob", compute_repair_prob),
             ("compute_repair_score", compute_repair_score),
-            ("compute_training_target_hist", compute_training_target_hist),
             ("repair_data", repair_data)
         ]
         selected_param = list(map(lambda x: x[0], filter(lambda x: x[1], exclusive_param_list)))
@@ -1807,7 +1778,7 @@ class RepairModel():
             df, elapsed_time = self._run(
                 input_table, num_input_rows, num_attrs,
                 continous_columns, detect_errors_only,
-                compute_training_target_hist, compute_repair_candidate_prob,
+                compute_repair_candidate_prob,
                 compute_repair_prob, compute_repair_score, repair_data)
             logging.info(f"!!!Total Processing time is {elapsed_time}(s)!!!")
             return df

@@ -20,7 +20,6 @@ package org.apache.spark.api.python
 import scala.collection.mutable
 import scala.util.Try
 import scala.collection.JavaConverters._
-
 import org.apache.spark.ml.clustering.{BisectingKMeans, KMeans}
 import org.apache.spark.ml.feature.CountVectorizer
 import org.apache.spark.sql.ExceptionUtils.AnalysisException
@@ -28,7 +27,7 @@ import org.apache.spark.sql.{DataFrame, Row, SparkCommandUtils}
 import org.apache.spark.sql.catalyst.plans.logical.Histogram
 import org.apache.spark.sql.functions.{lit, udf}
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.types.{StructField, StructType}
 import org.apache.spark.util.RepairUtils._
 import org.apache.spark.util.{Utils => SparkUtils}
 
@@ -269,6 +268,31 @@ object RepairMiscApi extends RepairBase {
       val statScehma = StructType.fromDDL("attrName STRING, distinctCnt LONG, min STRING, " +
         "max STRING, nullCnt LONG, avgLen LONG, maxLen LONG, hist ARRAY<DOUBLE>")
       spark.createDataFrame(statRows.toSeq.asJava, statScehma)
+    }
+  }
+
+  def convertToHistogram(targets: String, dbName: String, tableName: String): DataFrame = {
+    logBasedOnLevel(s"convertToHistogram called with: targets=$targets" +
+      s"dbName=$dbName tableName=$tableName")
+
+    val (inputDf, _) = checkAndGetQualifiedInputName(dbName, tableName)
+    val targetAttrSet = SparkUtils.stringToSeq(targets).toSet
+    def isTarget(f: StructField): Boolean = {
+      targetAttrSet.contains(f.name) && !continousTypes.contains(f.dataType)
+    }
+    withTempView(inputDf) { inputView =>
+      val sqls = inputDf.schema.filter(isTarget).map { f =>
+        s"""
+           |SELECT '${f.name}' attribute, collect_list(b) histogram
+           |FROM (
+           |  SELECT named_struct('value', ${f.name}, 'cnt', COUNT(1)) b
+           |  FROM $inputView
+           |  WHERE ${f.name} IS NOT NULL
+           |  GROUP BY ${f.name}
+           |)
+         """.stripMargin
+      }
+      spark.sql(sqls.mkString(" UNION ALL "))
     }
   }
 

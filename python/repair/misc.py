@@ -261,6 +261,46 @@ class RepairMisc():
             param_null_ratio, self._seed)
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
+    def _show_histogram(self, df: DataFrame) -> None:
+        import matplotlib.pyplot as plt  # type: ignore[import]
+        fig = plt.figure()
+        num_targets = df.count()
+        for index, row in enumerate(df.collect()):
+            pdf = df.where(f'attribute = "{row.attribute}"').selectExpr("inline(histogram)").toPandas()
+            print(pdf)
+            f = fig.add_subplot(num_targets, 1, index + 1)
+            f.bar(pdf["value"], pdf["cnt"])
+            f.set_xlabel(row.attribute)
+            f.set_ylabel("cnt")
+
+        fig.tight_layout()
+        fig.show()
+
+    def toHistogram(self) -> DataFrame:
+        """Computes the histogram of values in specified targets.
+
+        .. versionchanged:: 0.1.0
+
+        Examples
+        --------
+        >>> df = scavenger.misc.options({"table_name": "adult", "row_id": "tid",
+        ...    "targets": "Income,Age,Relationship,Sex"}).toHistogram()
+        >>> df.show()
+        +------------+------------------------------------------------------------------+
+        |attribute   |histogram                                                         |
+        +------------+------------------------------------------------------------------+
+        |Income      |[{MoreThan50K, 1}, {LessThan50K, 12}]                             |
+        |Age         |[{>50, 3}, {22-30, 2}, {31-50, 7}, {18-21, 1}]                    |
+        |Relationship|[{Not-in-family, 3}, {Unmarried, 1}, {Husband, 6}, {Own-child, 3}]|
+        |Sex         |[{Female, 4}, {Male, 9}]                                          |
+        +------------+------------------------------------------------------------------+
+        """
+        self._check_required_options(["table_name", "targets"])
+        jdf = self._misc_api_.convertToHistogram(self.opts["targets"], self._db_name, self.opts["table_name"])
+        hist_df = DataFrame(jdf, self._spark._wrapped)  # type: ignore
+        # self._show_histogram(hist_df)
+        return hist_df
+
     def toErrorMap(self) -> DataFrame:
         """Converts an input table into an error map.
 

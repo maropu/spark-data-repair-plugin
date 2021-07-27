@@ -239,30 +239,6 @@ object RepairApi extends RepairBase {
     ).asJson
   }
 
-  def convertToHistogram(inputView: String, discreteThres: Int): String = {
-    logBasedOnLevel(s"convertToHistogram called with: inputView=$inputView " +
-      s"discreteThres=$discreteThres")
-
-    val (df, _) = discretizeTable(inputView, discreteThres)
-    val histogramDf = {
-      withTempView(df, cache = true) { discretizedView =>
-        val sqls = df.columns.map { attr =>
-          s"""
-             |SELECT '$attr' attribute, collect_list(b) histogram
-             |FROM (
-             |  SELECT named_struct('value', $attr, 'cnt', COUNT(1)) b
-             |  FROM $discretizedView
-             |  GROUP BY $attr
-             |)
-           """.stripMargin
-        }
-        spark.sql(sqls.mkString(" UNION ALL "))
-      }
-    }
-    val histgramView = createAndCacheTempView(histogramDf, "histogram")
-    Seq("histogram" -> histgramView).asJson
-  }
-
   def convertErrorCellsToNull(
       discretizedInputView: String,
       errCellView: String,

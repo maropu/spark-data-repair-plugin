@@ -122,6 +122,27 @@ class RepairMiscSuite extends QueryTest with SharedSparkSession {
     assert(errMsg.contains("Columns 'non-existent' do not exist in 'default.t'"))
   }
 
+  test("convertToHistogram") {
+    withTempView("tempView") {
+      spark.sql(
+        s"""
+           |CREATE TEMPORARY VIEW tempView(tid, x, y, z) AS SELECT * FROM VALUES
+           |  (1, "1", "test-1", 1.0),
+           |  (2, null, "test-1", 2.0),
+           |  (3, "1", "test-2", 1.0)
+         """.stripMargin)
+
+      val df = RepairMiscApi.convertToHistogram("x,y,z", "", "tempView")
+      assert(df.columns.toSet === Set("attribute", "histogram"))
+      checkAnswer(df.selectExpr("attribute", "inline(histogram)"), Seq(
+        Row("x", "1", 2L),
+        Row("y", "test-1", 2L),
+        Row("y", "test-2", 1L),
+        Row("z", "1.0", 2L),
+        Row("z", "2.0", 1L)))
+    }
+  }
+
   test("toErrorMap") {
     withTempView("errCellView", "IllegalView") {
       import testImplicits._

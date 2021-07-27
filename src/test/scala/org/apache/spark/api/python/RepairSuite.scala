@@ -213,35 +213,6 @@ class RepairSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("convertToHistogram") {
-    withTempView("tempView") {
-      spark.sql(
-        s"""
-           |CREATE TEMPORARY VIEW tempView(tid, x, y, z) AS SELECT * FROM VALUES
-           |  (1, "1", "test-1", 1.0),
-           |  (2, "1", "test-1", 2.0),
-           |  (3, "1", "test-2", 1.0)
-         """.stripMargin)
-
-      val jsonString = RepairApi.convertToHistogram("tempView", discreteThres = 10)
-      val jsonObj = parse(jsonString)
-      val data = jsonObj.asInstanceOf[JObject].values
-
-      val histogram = data("histogram").toString
-      assert(histogram.startsWith("histogram_"))
-      val df = spark.table(histogram)
-      assert(df.columns.toSet === Set("attribute", "histogram"))
-      checkAnswer(df.selectExpr("attribute", "inline(histogram)"), Seq(
-        Row("tid", "1", 1L),
-        Row("tid", "2", 1L),
-        Row("tid", "3", 1L),
-        Row("y", "test-1", 2L),
-        Row("y", "test-2", 1L),
-        Row("z", "1.0", 2L),
-        Row("z", "2.0", 1L)))
-    }
-  }
-
   test("convertErrorCellsToNull") {
     import testImplicits._
     withTempView("inputView", "errCell") {

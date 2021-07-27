@@ -119,11 +119,7 @@ class RepairModelTests(ReusedSQLTestCase):
         _assert_exclusive_params(
             lambda: api.run(detect_errors_only=True, compute_repair_candidate_prob=True))
         _assert_exclusive_params(
-            lambda: api.run(detect_errors_only=True, compute_training_target_hist=True))
-        _assert_exclusive_params(
             lambda: api.run(detect_errors_only=True, repair_data=True))
-        _assert_exclusive_params(
-            lambda: api.run(compute_repair_candidate_prob=True, compute_training_target_hist=True))
         _assert_exclusive_params(
             lambda: api.run(compute_repair_candidate_prob=True, repair_data=True))
         _assert_exclusive_params(
@@ -300,8 +296,10 @@ class RepairModelTests(ReusedSQLTestCase):
             view_name = views[0].viewName
             logs_df = self.spark.table(view_name)
             self.assertEqual(logs_df.count(), expected_nlogs)
-            expected_cols = ["attributes", "type", "score", "elapsed", "training_nrow", "nclass", "class_nrow_stdv"]
-            self.assertEqual(logs_df.columns, expected_cols)
+            self.assertEqual(
+                logs_df.schema.simpleString(),
+                "struct<attributes:string,type:string,score:double,elapsed:double,"
+                "training_nrow:bigint,nclass:bigint,class_nrow_stdv:double>")
             self.spark.sql(f"DROP VIEW {view_name}")
 
         # Serial training case
