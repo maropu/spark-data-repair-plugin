@@ -64,15 +64,11 @@ class RepairModelTests(ReusedSQLTestCase):
         load_testdata(cls.spark, "adult_clean.csv").createOrReplaceTempView("adult_clean")
 
         # Define some expected results
-        cls.expected_adult_result_without_repaired = [
-            Row(tid="12", attribute="Age", current_value=None),
-            Row(tid="12", attribute="Sex", current_value=None),
-            Row(tid="16", attribute="Income", current_value=None),
-            Row(tid="3", attribute="Sex", current_value=None),
-            Row(tid="5", attribute="Age", current_value=None),
-            Row(tid="5", attribute="Income", current_value=None),
-            Row(tid="7", attribute="Sex", current_value=None)
-        ]
+        cls.expected_adult_result = cls.spark.table("adult_repair") \
+            .orderBy("tid", "attribute").collect()
+        cls.expected_adult_result_without_repaired = cls.spark.table("adult_repair") \
+            .selectExpr("tid", "attribute", "current_value") \
+            .orderBy("tid", "attribute").collect()
 
     @classmethod
     def tearDownClass(cls):
@@ -186,16 +182,13 @@ class RepairModelTests(ReusedSQLTestCase):
         # Checks if auto-generated views are dropped finally
         current_view_nums = self.spark.sql("SHOW VIEWS").count()
 
-        expected_result = self.spark.table("adult_repair") \
-            .orderBy("tid", "attribute").collect()
-
         def _test_basic():
             test_model = self._build_model() \
                 .setTableName("adult") \
                 .setRowId("tid")
             self.assertEqual(
                 test_model.run().orderBy("tid", "attribute").collect(),
-                expected_result)
+                self.expected_adult_result)
 
         _test_basic()  # first run
         _test_basic()  # second run
@@ -211,15 +204,11 @@ class RepairModelTests(ReusedSQLTestCase):
             .setParallelStatTrainingEnabled(True) \
             .run()
         self.assertEqual(
-            df.selectExpr("tid", "attribute", "current_value").orderBy("tid", "attribute").collect(),
-            self.expected_adult_result_without_repaired)
+            df.orderBy("tid", "attribute").collect(),
+            self.expected_adult_result)
 
     def test_table_input(self):
-        expected_result = self.spark.table("adult_repair") \
-            .orderBy("tid", "attribute").collect()
-
         with self.table("adult_table"):
-
             # Tests for `setDbName`
             self.spark.table("adult").write.mode("overwrite").saveAsTable("adult_table")
             test_model = self._build_model() \
@@ -229,12 +218,9 @@ class RepairModelTests(ReusedSQLTestCase):
 
             self.assertEqual(
                 test_model.run().orderBy("tid", "attribute").collect(),
-                expected_result)
+                self.expected_adult_result)
 
     def test_input_overwrite(self):
-        expected_result = self.spark.table("adult_repair") \
-            .orderBy("tid", "attribute").collect()
-
         with self.table("adult_table"):
             # Tests for input overwrite case ("default.adult_table" -> "adult")
             self.spark.table("adult").write.mode("overwrite").saveAsTable("adult_table")
@@ -245,17 +231,14 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setRowId("tid")
             self.assertEqual(
                 test_model.run().orderBy("tid", "attribute").collect(),
-                expected_result)
+                self.expected_adult_result)
 
     def test_setInput(self):
-        expected_result = self.spark.table("adult_repair") \
-            .orderBy("tid", "attribute").collect()
-
         def _test_setInput(input):
             test_model = self._build_model().setInput(input).setRowId("tid")
             self.assertEqual(
                 test_model.run().orderBy("tid", "attribute").collect(),
-                expected_result)
+                self.expected_adult_result)
 
         _test_setInput("adult")
         _test_setInput(self.spark.table("adult"))
@@ -287,9 +270,6 @@ class RepairModelTests(ReusedSQLTestCase):
         _test_setTargets(["Non-Existent"])
 
     def test_setErrorCells(self):
-        expected_result = self.spark.table("adult_repair") \
-            .orderBy("tid", "attribute").collect()
-
         def _test_setErrorCells(error_cells):
             test_model = self._build_model() \
                 .setTableName("adult") \
@@ -297,7 +277,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setErrorCells(error_cells)
             self.assertEqual(
                 test_model.run().orderBy("tid", "attribute").collect(),
-                expected_result)
+                self.expected_adult_result)
 
         _test_setErrorCells("adult_dirty")
         _test_setErrorCells(self.spark.table("adult_dirty"))
@@ -621,13 +601,12 @@ class RepairModelTests(ReusedSQLTestCase):
         self.assertEqual(
             df.schema.simpleString(),
             expected_schema)
-
         expected_result = self.spark.table("adult_repair") \
             .selectExpr("tid", "attribute") \
             .orderBy("tid")\
             .collect()
         self.assertEqual(
-            df.selectExpr("tid", "attribute").orderBy("tid").collect(),
+            df.selectExpr("tid", "attribute").orderBy("tid", "attribute").collect(),
             expected_result)
 
     def test_compute_repair_candidate_prob(self):
