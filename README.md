@@ -204,7 +204,7 @@ If you want to select some of repaired updates based on theier probabilities, yo
 
 ## Run a Repair Job via spark-submit
 
-You can run a repair job on your Spark cluster as followsing:
+You can run a repair job ([main.py](./python/main.py)) on your Spark cluster as following:
 
 ```
 $ echo $SPARK_HOME
