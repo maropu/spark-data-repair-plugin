@@ -304,24 +304,32 @@ class RepairModelTests(ReusedSQLTestCase):
 
     def test_setModelLoggingEnabled(self):
         current_view_nums = self.spark.sql("SHOW VIEWS").count()
-
-        expected_result = self.spark.table("adult_repair") \
-            .orderBy("tid", "attribute").collect()
-
         test_model = self._build_model() \
             .setTableName("adult") \
             .setRowId("tid") \
             .setModelLoggingEnabled(True)
-        self.assertEqual(
-            test_model.run().orderBy("tid", "attribute").collect(),
-            expected_result)
 
-        self.assertEqual(
-            self.spark.sql("SHOW VIEWS").count(),
-            current_view_nums + 1)
-        self.assertEqual(
-            self.spark.sql("SHOW VIEWS").where("viewName LIKE 'repair_model_%'").count(),
-            1)
+        def _assert_log_view(m, expected_nrepairs, expected_nlogs):
+            self.assertEqual(len(m.run().collect()), expected_nrepairs)
+            self.assertEqual(
+                self.spark.sql("SHOW VIEWS").count(),
+                current_view_nums + 1)
+
+            views = self.spark.sql("SHOW VIEWS").where("viewName LIKE 'repair_model_%'").collect()
+            self.assertEqual(len(views), 1)
+            view_name = views[0].viewName
+            logs_df = self.spark.table(view_name)
+            self.assertEqual(logs_df.count(), expected_nlogs)
+            expected_cols = ["attributes", "type", "score", "elapsed", "training_nrow", "nclass", "class_nrow_stdv"]
+            self.assertEqual(logs_df.columns, expected_cols)
+            self.spark.sql(f"DROP VIEW {view_name}")
+
+        # Serial training case
+        _assert_log_view(test_model, 7, 3)
+
+        # Parallel training case
+        test_model = test_model.setTargets(["Age", "Sex"]).setParallelStatTrainingEnabled(True)
+        _assert_log_view(test_model, 5, 2)
 
     def _assert_adult_without_repaired(self, test_model):
         def _test(df):
