@@ -601,13 +601,9 @@ class RepairModelTests(ReusedSQLTestCase):
         self.assertEqual(
             df.schema.simpleString(),
             expected_schema)
-        expected_result = self.spark.table("adult_repair") \
-            .selectExpr("tid", "attribute") \
-            .orderBy("tid")\
-            .collect()
         self.assertEqual(
-            df.selectExpr("tid", "attribute").orderBy("tid", "attribute").collect(),
-            expected_result)
+            df.selectExpr("tid", "attribute", "current_value").orderBy("tid", "attribute").collect(),
+            self.expected_adult_result_without_repaired)
 
     def test_compute_repair_candidate_prob(self):
         repaired_df = test_model = self._build_model() \
@@ -617,7 +613,7 @@ class RepairModelTests(ReusedSQLTestCase):
 
         self._check_repair_prob_and_score(
             repaired_df,
-            "struct<tid:string,attribute:string,current:struct<value:string,prob:double>,"
+            "struct<tid:string,attribute:string,current_value:string,"
             "pmf:array<struct<c:string,p:double>>>")
 
     def test_compute_repair_prob(self):
@@ -631,7 +627,7 @@ class RepairModelTests(ReusedSQLTestCase):
             "struct<tid:string,attribute:string,current_value:string,"
             "repaired:string,prob:double>")
 
-    def test_compute_repair_prob_and_score(self):
+    def test_compute_repair_score(self):
         repaired_df = test_model = self._build_model() \
             .setTableName("adult") \
             .setRowId("tid") \

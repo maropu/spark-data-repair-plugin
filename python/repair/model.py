@@ -1682,7 +1682,11 @@ class RepairModel():
             elif compute_repair_score:
                 return self._compute_score(repaired_df, error_cells_df)
             else:
-                return pmf_df
+                return pmf_df.selectExpr(
+                    str(self.row_id),
+                    "attribute",
+                    "current.value AS current_value",
+                    "pmf")
 
         # If any discrete target columns and its probability distribution given,
         # computes scores to decide which cells should be repaired to follow the
