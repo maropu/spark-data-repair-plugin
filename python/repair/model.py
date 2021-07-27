@@ -944,8 +944,7 @@ class RepairModel():
         return self._register_and_get_df(ret_as_json["repair_base_cells"])
 
     # Checks if attributes are discrete or not, and discretizes continous ones
-    def _discretize_attrs(self, input_table: str,
-                          continous_columns: List[str]) -> Tuple[str, List[str], Dict[str, str]]:
+    def _discretize_attrs(self, input_table: str) -> Tuple[str, List[str], Dict[str, str]]:
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
         ret_as_json = json.loads(self._repair_api.convertToDiscretizedTable(
@@ -1569,8 +1568,7 @@ class RepairModel():
             else:
                 return input_df
 
-        discretized_table, discretized_columns, distinct_stats = \
-            self._discretize_attrs(input_table, continous_columns)
+        discretized_table, discretized_columns, distinct_stats = self._discretize_attrs(input_table)
         if not len(discretized_columns) > 0:
             if not detect_errors_only:
                 raise ValueError("At least one valid discretizable feature is needed to repair error cells, "
