@@ -274,6 +274,8 @@ def _compute_class_nrow_stdv(y: pd.Series, is_discrete: bool) -> Optional[float]
 def _rebalance_training_data(X: pd.DataFrame, y: pd.Series, target: str) -> Tuple[pd.DataFrame, pd.Series]:
     # Uses median as the number of training rows for each class
     from collections import Counter
+    prev_nrows = len(X)
+    prev_stdv = _compute_class_nrow_stdv(y, is_discrete=True)
     hist = dict(Counter(y).items())  # type: ignore
     median = int(np.median([count for key, count in hist.items()]))
 
@@ -317,7 +319,9 @@ def _rebalance_training_data(X: pd.DataFrame, y: pd.Series, target: str) -> Tupl
         sampler = RandomUnderSampler(random_state=42, sampling_strategy=dict(rus_targets))
         X, y = sampler.fit_resample(X, y)
 
-    logging.debug("class hist(median={}): {} => {}".format(median, hist.items(), Counter(y).items()))
+    logging.info("Rebalanced training data (y={}, median={}): #rows={}(stdv={}) -> #rows={}(stdv={})".format(
+        target, median, prev_nrows, prev_stdv, len(X), _compute_class_nrow_stdv(y, is_discrete=True)))
+    logging.debug("class hist: {} => {}".format(hist.items(), Counter(y).items()))
     return X, y
 
 
