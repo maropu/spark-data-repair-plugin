@@ -1635,6 +1635,7 @@ class RepairModel():
         # 3. Repair Phase
         #################################################################################
 
+        # TODO: Could we refine repair candidates by considering given constraints?
         repaired_df = self._repair(
             models, continous_columns, dirty_rows_df, error_cells_df,
             compute_repair_candidate_prob)
@@ -1766,6 +1767,7 @@ class RepairModel():
             # Validates input data
             input_table, num_input_rows, num_attrs, continous_columns = self._check_input_table()
 
+            # TODO: Looses the limitations below
             if compute_repair_candidate_prob and len(continous_columns) != 0:
                 raise ValueError("Cannot compute probability mass function of repairs "
                                  "when continous attributes found")
