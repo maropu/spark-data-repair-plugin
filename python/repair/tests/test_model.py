@@ -370,9 +370,9 @@ class RepairModelTests(ReusedSQLTestCase):
 
     def test_error_cells_having_no_existent_attribute(self):
         error_cells = [
-            Row(tid="1", attribute="NoExistent"),
-            Row(tid="5", attribute="Income"),
-            Row(tid="16", attribute="Income")
+            Row(tid=1, attribute="NoExistent"),
+            Row(tid=5, attribute="Income"),
+            Row(tid=16, attribute="Income")
         ]
         error_cells_df = self.spark.createDataFrame(
             error_cells, schema="tid STRING, attribute STRING")
@@ -382,8 +382,8 @@ class RepairModelTests(ReusedSQLTestCase):
             .setErrorCells(error_cells_df)
         self.assertEqual(
             test_model.run().orderBy("tid", "attribute").collect(), [
-                Row(tid="16", attribute="Income", current_value=None, repaired="MoreThan50K"),
-                Row(tid="5", attribute="Income", current_value=None, repaired="MoreThan50K")])
+                Row(tid=5, attribute="Income", current_value=None, repaired="MoreThan50K"),
+                Row(tid=16, attribute="Income", current_value=None, repaired="MoreThan50K")])
 
     def test_detect_errors_only(self):
         # Tests for `NullErrorDetector`
@@ -408,11 +408,11 @@ class RepairModelTests(ReusedSQLTestCase):
             .run(detect_errors_only=True)
         self.assertEqual(
             regex_errors.subtract(null_errors).orderBy("tid", "attribute").collect(), [
-                Row(tid="1", attribute="Occupation", current_value="Exec-managerial"),
-                Row(tid="12", attribute="Occupation", current_value="Exec-managerial"),
-                Row(tid="14", attribute="Occupation", current_value="Exec-managerial"),
-                Row(tid="16", attribute="Occupation", current_value="Exec-managerial"),
-                Row(tid="7", attribute="Country", current_value="India")])
+                Row(tid=1, attribute="Occupation", current_value="Exec-managerial"),
+                Row(tid=7, attribute="Country", current_value="India"),
+                Row(tid=12, attribute="Occupation", current_value="Exec-managerial"),
+                Row(tid=14, attribute="Occupation", current_value="Exec-managerial"),
+                Row(tid=16, attribute="Occupation", current_value="Exec-managerial")])
 
         # Tests for `ConstraintErrorDetector`
         constraint_path = "{}/adult_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
@@ -427,10 +427,10 @@ class RepairModelTests(ReusedSQLTestCase):
             .run(detect_errors_only=True)
         self.assertEqual(
             constraint_errors.subtract(null_errors).orderBy("tid", "attribute").collect(), [
-                Row(tid="11", attribute="Relationship", current_value="Husband"),
-                Row(tid="11", attribute="Sex", current_value="Female"),
-                Row(tid="4", attribute="Relationship", current_value="Husband"),
-                Row(tid="4", attribute="Sex", current_value="Female")])
+                Row(tid=4, attribute="Relationship", current_value="Husband"),
+                Row(tid=4, attribute="Sex", current_value="Female"),
+                Row(tid=11, attribute="Relationship", current_value="Husband"),
+                Row(tid=11, attribute="Sex", current_value="Female")])
 
     def test_repair_data(self):
         test_model = self._build_model() \
@@ -647,7 +647,7 @@ class RepairModelTests(ReusedSQLTestCase):
 
         self._check_adult_repair_prob_and_score(
             repaired_df,
-            "struct<tid:string,attribute:string,current_value:string,"
+            "struct<tid:int,attribute:string,current_value:string,"
             "pmf:array<struct<c:string,p:double>>>")
 
     def test_compute_repair_prob(self):
@@ -658,7 +658,7 @@ class RepairModelTests(ReusedSQLTestCase):
 
         self._check_adult_repair_prob_and_score(
             repaired_df,
-            "struct<tid:string,attribute:string,current_value:string,"
+            "struct<tid:int,attribute:string,current_value:string,"
             "repaired:string,prob:double>")
 
     def test_compute_repair_score(self):
@@ -671,7 +671,7 @@ class RepairModelTests(ReusedSQLTestCase):
 
         self._check_adult_repair_prob_and_score(
             repaired_df,
-            "struct<tid:string,attribute:string,current_value:string,"
+            "struct<tid:int,attribute:string,current_value:string,"
             "repaired:string,score:double>")
 
     def test_maximal_likelihood_repair(self):
@@ -684,9 +684,9 @@ class RepairModelTests(ReusedSQLTestCase):
             .run()
         self.assertEqual(
             repaired_df.orderBy("tid", "attribute").collect(), [
-                Row(tid="12", attribute="Sex", current_value=None, repaired="Male"),
-                Row(tid="3", attribute="Sex", current_value=None, repaired="Male"),
-                Row(tid="7", attribute="Sex", current_value=None, repaired="Male")])
+                Row(tid=3, attribute="Sex", current_value=None, repaired="Male"),
+                Row(tid=7, attribute="Sex", current_value=None, repaired="Male"),
+                Row(tid=12, attribute="Sex", current_value=None, repaired="Male")])
 
     def test_compute_repair_prob_for_continouos_values(self):
         test_model = test_model = self._build_model() \

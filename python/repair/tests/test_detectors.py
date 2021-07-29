@@ -52,23 +52,23 @@ class ErrorDetectorTests(ReusedSQLTestCase):
         errors = NullErrorDetector().setUp("tid", "adult").detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
-                Row(tid="12", attribute="Age"),
-                Row(tid="12", attribute="Sex"),
-                Row(tid="16", attribute="Income"),
-                Row(tid="3", attribute="Sex"),
-                Row(tid="5", attribute="Age"),
-                Row(tid="5", attribute="Income"),
-                Row(tid="7", attribute="Sex")])
+                Row(tid=3, attribute="Sex"),
+                Row(tid=5, attribute="Age"),
+                Row(tid=5, attribute="Income"),
+                Row(tid=7, attribute="Sex"),
+                Row(tid=12, attribute="Age"),
+                Row(tid=12, attribute="Sex"),
+                Row(tid=16, attribute="Income")])
 
     def test_RegExErrorDetector(self):
         errors = RegExErrorDetector("Exec-managerial", error_cells_as_string=False) \
             .setUp("tid", "adult").detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
-                Row(tid="1", attribute="Occupation"),
-                Row(tid="12", attribute="Occupation"),
-                Row(tid="14", attribute="Occupation"),
-                Row(tid="16", attribute="Occupation")])
+                Row(tid=1, attribute="Occupation"),
+                Row(tid=12, attribute="Occupation"),
+                Row(tid=14, attribute="Occupation"),
+                Row(tid=16, attribute="Occupation")])
 
         with self.tempView("tempView"):
             self.spark.createDataFrame([(1, 12), (2, 123), (3, 1234), (4, 12345)], ["tid", "v"]) \
@@ -87,10 +87,10 @@ class ErrorDetectorTests(ReusedSQLTestCase):
             .setUp("tid", "adult").detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
-                Row(tid="11", attribute="Relationship"),
-                Row(tid="11", attribute="Sex"),
-                Row(tid="4", attribute="Relationship"),
-                Row(tid="4", attribute="Sex")])
+                Row(tid=4, attribute="Relationship"),
+                Row(tid=4, attribute="Sex"),
+                Row(tid=11, attribute="Relationship"),
+                Row(tid=11, attribute="Sex")])
 
     def test_OutlierErrorDetector(self):
         with self.tempView("tempView"):

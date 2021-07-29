@@ -57,7 +57,8 @@ object RepairApi extends RepairBase {
         s"of table '$qualifiedName' (# of distinct '$rowId': $distinctCount, # of rows: $rowCount)")
     }
 
-    val continousAttrs = inputDf.schema.filter(f => continousTypes.contains(f.dataType))
+    val continousAttrs = inputDf.schema
+      .filter(f => f.name != rowId && continousTypes.contains(f.dataType))
       .map(_.name).mkString(",")
 
     Seq("input_table" -> qualifiedName,

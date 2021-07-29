@@ -114,7 +114,7 @@ class RepairModelTests(ReusedSQLTestCase):
     def test_describe(self):
         misc = RepairMisc().options({"table_name": "adult"})
         self.assertEqual(
-            misc.describe().orderBy("attrName").collect(), [
+            misc.describe().where("attrName != 'tid'").orderBy("attrName").collect(), [
                 Row(attrName="Age", distinctCnt=4, min=None, max=None, nullCnt=2,
                     avgLen=5, maxLen=5, hist=None),
                 Row(attrName="Country", distinctCnt=3, min=None, max=None, nullCnt=0,
@@ -128,9 +128,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 Row(attrName="Relationship", distinctCnt=4, min=None, max=None, nullCnt=0,
                     avgLen=9, maxLen=13, hist=None),
                 Row(attrName="Sex", distinctCnt=2, min=None, max=None, nullCnt=3,
-                    avgLen=5, maxLen=6, hist=None),
-                Row(attrName="tid", distinctCnt=20, min=None, max=None, nullCnt=0,
-                    avgLen=2, maxLen=2, hist=None)])
+                    avgLen=5, maxLen=6, hist=None)])
 
         with self.tempView("tempView"):
             self.spark.range(100).selectExpr("STRING(id)", "id % 9 v1", "DOUBLE(id % 17) v2") \
@@ -155,8 +153,7 @@ class RepairModelTests(ReusedSQLTestCase):
             misc = RepairMisc().options({"table_name": "tempView", "targets": "v1,v2"})
             self.assertEqual(
                 misc.toHistogram().orderBy("attribute").collect(), [
-                    Row(attribute="v1", histogram=[Row(value="a", cnt=4)]),
-                    Row(attribute="v2", histogram=[Row(value="2", cnt=1), Row(value="1", cnt=3)])])
+                    Row(attribute="v1", histogram=[Row(value="a", cnt=4)])])
 
     def test_toErrormap(self):
         with self.tempView("tempView", "errorCells"):

@@ -73,7 +73,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
   test("checkInputTable") {
     withTempView("t") {
       val supportedTypes = Seq("BYTE", "SHORT", "INT", "LONG", "FLOAT", "DOUBLE", "STRING")
-      val exprs = "CAST(id AS STRING) tid" +:
+      val exprs = "CAST(id AS INT) tid" +:
         supportedTypes.zipWithIndex.map { case (t, i) => s"CAST(id AS $t) AS v$i" }
       spark.range(1).selectExpr(exprs: _*).createOrReplaceTempView("t")
       val jsonString = RepairApi.checkInputTable("", "t", "tid")
