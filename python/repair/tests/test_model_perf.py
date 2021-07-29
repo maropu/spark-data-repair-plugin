@@ -21,7 +21,6 @@ import unittest
 
 from pyspark import SparkConf
 
-from repair.misc import RepairMisc
 from repair.model import RepairModel
 from repair.tests.requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
@@ -55,13 +54,13 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
 
         # Loads test data
         load_testdata(cls.spark, "iris_clean.csv").createOrReplaceTempView("iris_clean")
-        load_testdata(cls.spark, "iris_orig.csv").createOrReplaceTempView("iris")
+        load_testdata(cls.spark, "iris.csv").createOrReplaceTempView("iris")
 
-        boston_schema = "tid string, CRIM double, ZN string, INDUS double, CHAS string, " \
-            "NOX double, RM double, AGE double, DIS double, RAD string, TAX double, " \
+        boston_schema = "tid int, CRIM double, ZN int, INDUS double, CHAS string, " \
+            "NOX double, RM double, AGE double, DIS double, RAD string, TAX int, " \
             "PTRATIO double, B double, LSTAT double"
         load_testdata(cls.spark, "boston_clean.csv").createOrReplaceTempView("boston_clean")
-        load_testdata(cls.spark, "boston_orig.csv", boston_schema) \
+        load_testdata(cls.spark, "boston.csv", boston_schema) \
             .createOrReplaceTempView("boston")
 
         load_testdata(cls.spark, "hospital_clean.csv").createOrReplaceTempView("hospital_clean")
@@ -72,14 +71,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
     @classmethod
     def tearDownClass(cls):
         super(ReusedSQLTestCase, cls).tearDownClass()
-
-    def _inject_null(self, table_name, target_attr_list):
-        return RepairMisc() \
-            .option("table_name", table_name) \
-            .option("target_attr_list", target_attr_list) \
-            .option("null_ratio", "0.10") \
-            .option("seed", "0") \
-            .injectNull()
 
     def _build_model(self, input):
         return RepairModel() \
@@ -95,66 +86,59 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .collect()[0] \
             .rmse
 
-    @unittest.skip(reason="Skip because this test is slow")
     def test_perf_iris_target_num_1(self):
         test_params = [
-            ("sepal_width", 0.3455068740271313),
-            ("sepal_length", 0.7022285952594068),
-            ("petal_width", 0.27838821814150105),
-            ("petal_length", 0.5623610939600994)
+            ("sepal_width", 0.23277956498564178),
+            ("sepal_length", 0.3980215999372857),
+            ("petal_width", 0.38259516929839044),
+            ("petal_length", 0.6050504516523031)
         ]
         for target, ulimit in test_params:
             with self.subTest(f"target:iris({target})"):
-                df = self._inject_null("iris", target)
-                repaired_df = self._build_model(df).run()
+                repaired_df = self._build_model("iris").setTargets([target]).run()
                 rmse = self._compute_rmse(repaired_df, "iris_clean")
                 logging.info(f"target:iris({target}) RMSE:{rmse}")
-                self.assertLess(rmse, ulimit + 0.01)
+                self.assertLess(rmse, ulimit + 0.05)
 
-    @unittest.skip(reason="Skip because this test is slow")
     def test_perf_iris_target_num_2(self):
         test_params = [
-            ("sepal_width", "sepal_length", 0.6595452979136459),
-            ("sepal_length", "petal_width", 0.43981530214397946),
-            ("petal_width", "petal_length", 0.771159840759359),
-            ("petal_length", "sepal_width", 0.7145802963978227)
+            ("sepal_width", "sepal_length", 0.3355876190363502),
+            ("sepal_length", "petal_width", 0.38612750734279966),
+            ("petal_width", "petal_length", 0.4408966888950713),
+            ("petal_length", "sepal_width", 0.3759958845158856)
         ]
         for target1, target2, ulimit in test_params:
             with self.subTest(f"target:iris({target1},{target2})"):
-                df = self._inject_null("iris", f"{target1},{target2}")
-                repaired_df = self._build_model(df).run()
+                repaired_df = self._build_model("iris").setTargets([target1, target2]).run()
                 rmse = self._compute_rmse(repaired_df, "iris_clean")
                 logging.info(f"target:iris({target1},{target2}) RMSE:{rmse}")
-                self.assertLess(rmse, ulimit + 0.01)
+                self.assertLess(rmse, ulimit + 0.05)
 
-    @unittest.skip(reason="Skip because this test is slow")
     def test_perf_boston_target_num_1(self):
         test_params = [
-            ("NOX", 0.03053089633885037),
-            ("PTRATIO", 0.601539549909125),
-            ("TAX", 26.792889334701275),
-            ("INDUS", 1.4018760668798051)
+            ("CRIM", 5.834869360505434),
+            ("RAD", 0.5547001962252291),
+            ("TAX", 33.8124730437354),
+            ("LSTAT", 3.056081971101299)
         ]
         for target, ulimit in test_params:
             with self.subTest(f"target:boston({target})"):
-                df = self._inject_null("boston", target)
-                repaired_df = self._build_model(df).run()
+                repaired_df = self._build_model("boston").setTargets([target]).run()
                 rmse = self._compute_rmse(repaired_df, "boston_clean")
                 logging.info(f"target:boston({target}) RMSE:{rmse}")
-                self.assertLess(rmse, ulimit + 0.01)
+                self.assertLess(rmse, ulimit + 0.05)
 
     @unittest.skip(reason="Skip because this test is slow")
     def test_perf_boston_target_num_2(self):
         test_params = [
-            ("NOX", "PTRATIO", 0.4691041696958255),
-            ("PTRATIO", "TAX", 56.96715426988806),
-            ("TAX", "INDUS", 21.80912628903229),
-            ("INDUS", "NOX", 1.270566665510965)
+            ("CRIM", "RAD", 0.4691041696958255),
+            ("RAD", "TAX", 56.96715426988806),
+            ("TAX", "LSTAT", 21.80912628903229),
+            ("LSTAT", "CRIM", 1.270566665510965)
         ]
         for target1, target2, ulimit in test_params:
             with self.subTest(f"target:boston({target1},{target2})"):
-                df = self._inject_null("boston", f"{target1},{target2}")
-                repaired_df = self._build_model(df).run()
+                repaired_df = self._build_model("boston").setTargets([target1, target2]).run()
                 rmse = self._compute_rmse(repaired_df, "boston_clean")
                 logging.info(f"target:boston({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.01)

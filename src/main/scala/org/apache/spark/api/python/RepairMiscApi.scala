@@ -156,8 +156,7 @@ object RepairMiscApi extends RepairBase {
       dbName: String,
       tableName: String,
       targetAttrList: String,
-      nullRatio: Double,
-      seed: Int): DataFrame = {
+      nullRatio: Double): DataFrame = {
 
     logBasedOnLevel(s"injectNullAt called with: dbName=$dbName tableName=$tableName " +
       s"targetAttrList=$targetAttrList, nullRatio=$nullRatio")
@@ -176,7 +175,7 @@ object RepairMiscApi extends RepairBase {
     }
     val exprs = inputDf.schema.map {
       case f if targetAttrSet.contains(f.name) =>
-        s"IF(rand($seed) > $nullRatio, ${f.name}, NULL) AS ${f.name}"
+        s"IF(rand() > $nullRatio, ${f.name}, NULL) AS ${f.name}"
       case f =>
         f.name
     }

@@ -14,7 +14,7 @@ Using Python version 3.6.8 (default, Dec 29 2018 19:04:46)
 SparkSession available as 'spark'.
 Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 >>> # Loads a target data then defines tables for it
-... boston_schema = "tid string, CRIM double, ZN string, INDUS string, CHAS string, NOX string, RM double, AGE string, DIS double, RAD string, TAX string, PTRATIO string, B double, LSTAT double"
+... boston_schema = "tid int, CRIM double, ZN int, INDUS string, CHAS string, NOX string, RM double, AGE string, DIS double, RAD string, TAX int, PTRATIO string, B double, LSTAT double"
 >>> spark.read \
 ...   .option("header", True) \
 ...   .schema(boston_schema) \
@@ -106,7 +106,7 @@ Detecting errors in a table `default.boston` (506 rows x 14 cols)...
 >>> f1 = (2.0 * precision * recall) / (precision + recall)
 >>> 
 >>> print("Precision={} Recall={} F1={}".format(precision, recall, f1))
-Precision=0.9666666666666667 Recall=0.9666666666666667 F1=0.9666666666666667
+Precision=0.6470588235294118 Recall=0.6470588235294118 F1=0.6470588235294118
 >>> 
 >>> # Computes performance numbers for continous attributes (RMSE)
 ... is_continous = f"NOT({is_discrete)"
@@ -126,5 +126,5 @@ Precision=0.9666666666666667 Recall=0.9666666666666667 F1=0.9666666666666667
 ...     .mae
 ...
 >>> print(f"RMSE={rmse} MAE={mae} RMSE/MAE={rmse/mae}")
-RMSE=4.464236826877203 MAE=2.3646451454614987 RMSE/MAE=1.8879098352010593
+RMSE=2.4058233737433725 MAE=1.8800883431373354 RMSE/MAE=1.2796331526255484
 

@@ -32,7 +32,8 @@ def load_testdata(spark: SparkSession, filename, schema=None):
     Load test data from a given file name and return it as 'DataFrame'
     """
     fmt = os.path.splitext(filename)[1][1:]
-    reader = spark.read.schema(schema) if schema is not None else spark.read
+    reader = spark.read.schema(schema) if schema is not None \
+        else spark.read.option("inferSchema", True)
     return reader.format(fmt) \
         .option("header", True) \
         .load("{}/{}".format(os.getenv("REPAIR_TESTDATA"), filename))

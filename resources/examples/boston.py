@@ -1,6 +1,6 @@
 # Loads a target data then defines tables for it
-boston_schema = "tid string, CRIM double, ZN string, INDUS string, CHAS string, " \
-    "NOX string, RM double, AGE string, DIS double, RAD string, TAX string, " \
+boston_schema = "tid int, CRIM double, ZN int, INDUS string, CHAS string, " \
+    "NOX string, RM double, AGE string, DIS double, RAD string, TAX int, " \
     "PTRATIO string, B double, LSTAT double"
 spark.read \
     .option("header", True) \

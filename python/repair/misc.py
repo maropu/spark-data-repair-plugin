@@ -72,14 +72,6 @@ class RepairMisc():
             return ""
 
     @property
-    def _seed(self) -> int:
-        if "seed" in self.opts.keys():
-            return int(self.opts["seed"])
-        else:
-            import random
-            return random.randint(0, 65536)
-
-    @property
     def _num_bins(self) -> int:
         if "num_bins" in self.opts.keys():
             return int(self.opts["num_bins"])
@@ -258,7 +250,7 @@ class RepairMisc():
 
         jdf = self._misc_api_.injectNullAt(
             self._db_name, self.opts["table_name"], self._target_attr_list,
-            param_null_ratio, self._seed)
+            param_null_ratio)
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
     def _show_histogram(self, df: DataFrame) -> None:
