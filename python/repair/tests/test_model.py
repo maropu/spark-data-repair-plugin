@@ -57,11 +57,33 @@ class RepairModelTests(ReusedSQLTestCase):
         num_parallelism = cls.spark.sparkContext.defaultParallelism
         cls.spark.sql(f"SET spark.sql.shuffle.partitions={num_parallelism}")
 
-        # Loads some test data
+        # Loads/Defines some test data
         load_testdata(cls.spark, "adult.csv").createOrReplaceTempView("adult")
         load_testdata(cls.spark, "adult_dirty.csv").createOrReplaceTempView("adult_dirty")
         load_testdata(cls.spark, "adult_repair.csv").createOrReplaceTempView("adult_repair")
         load_testdata(cls.spark, "adult_clean.csv").createOrReplaceTempView("adult_clean")
+
+        rows = [
+            (1, 0, 1.0, 1.0, 'a'),
+            (2, 1, 1.5, 1.5, 'b'),
+            (3, 0, 1.4, None, 'b'),
+            (4, 1, 1.3, 1.3, 'b'),
+            (5, 1, 1.2, 1.1, 'b'),
+            (6, 1, 1.1, 1.2, 'b'),
+            (7, 0, None, 1.4, 'b'),
+            (8, 1, 1.4, 1.0, 'b'),
+            (9, 0, 1.2, 1.1, 'b'),
+            (10, None, 1.3, 1.2, 'b'),
+            (11, 0, 1.0, 1.9, 'b'),
+            (12, 0, 1.9, 1.2, 'b'),
+            (13, 0, 1.2, 1.3, 'b'),
+            (14, 0, 1.8, 1.2, None),
+            (15, 0, 1.3, 1.1, 'b'),
+            (16, 1, 1.3, 1.0, 'b'),
+            (17, 0, 1.3, 1.0, 'b')
+        ]
+        cls.spark.createDataFrame(rows, ["tid", "v1", "v2", "v3", "v4"]) \
+            .createOrReplaceTempView("mixed_input")
 
         # Define some expected results
         cls.expected_adult_result = cls.spark.table("adult_repair") \
@@ -168,6 +190,19 @@ class RepairModelTests(ReusedSQLTestCase):
             TypeError,
             "`cf` should be provided as UpdateCostFunction, got int",
             lambda: RepairModel().setUpdateCostFunction([1]))
+
+    def test_invalid_running_modes(self):
+        test_model = RepairModel() \
+            .setTableName("mixed_input") \
+            .setRowId("tid")
+        self.assertRaisesRegexp(
+            ValueError,
+            "Cannot compute repair scores when continous attributes found",
+            lambda: test_model.run(compute_repair_score=True))
+        self.assertRaisesRegexp(
+            ValueError,
+            "Cannot enable maximal likelihood repair mode when continous attributes found",
+            lambda: test_model.setMaximalLikelihoodRepairEnabled(True).setRepairDelta(1).run())
 
     # TODO: We fix a seed for building a repair model, but inferred values fluctuate run-by-run.
     # So, to avoid it, we set 1 to `hp.max_evals` for now.
@@ -595,7 +630,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 df.orderBy("tid").collect(),
                 expected_result)
 
-    def _check_repair_prob_and_score(self, df, expected_schema):
+    def _check_adult_repair_prob_and_score(self, df, expected_schema):
         self.assertEqual(
             df.schema.simpleString(),
             expected_schema)
@@ -609,7 +644,7 @@ class RepairModelTests(ReusedSQLTestCase):
             .setRowId("tid") \
             .run(compute_repair_candidate_prob=True)
 
-        self._check_repair_prob_and_score(
+        self._check_adult_repair_prob_and_score(
             repaired_df,
             "struct<tid:string,attribute:string,current_value:string,"
             "pmf:array<struct<c:string,p:double>>>")
@@ -620,7 +655,7 @@ class RepairModelTests(ReusedSQLTestCase):
             .setRowId("tid") \
             .run(compute_repair_prob=True)
 
-        self._check_repair_prob_and_score(
+        self._check_adult_repair_prob_and_score(
             repaired_df,
             "struct<tid:string,attribute:string,current_value:string,"
             "repaired:string,prob:double>")
@@ -631,10 +666,60 @@ class RepairModelTests(ReusedSQLTestCase):
             .setRowId("tid") \
             .run(compute_repair_score=True)
 
-        self._check_repair_prob_and_score(
+        self._check_adult_repair_prob_and_score(
             repaired_df,
             "struct<tid:string,attribute:string,current_value:string,"
             "repaired:string,score:double>")
+
+    def test_compute_repair_prob_for_continouos_values(self):
+        test_model = test_model = self._build_model() \
+            .setTableName("mixed_input") \
+            .setRowId("tid")
+
+        def _test(df, expected_schema):
+            self.assertEqual(
+                df.schema.simpleString(),
+                expected_schema)
+            self.assertEqual(
+                df.selectExpr("tid", "attribute", "current_value").orderBy("tid", "attribute").collect(), [
+                    Row(tid=3, attribute="v3", current_value=None),
+                    Row(tid=7, attribute="v2", current_value=None),
+                    Row(tid=10, attribute="v1", current_value=None),
+                    Row(tid=14, attribute="v4", current_value=None)])
+
+        _test(test_model.run(compute_repair_candidate_prob=True),
+              "struct<tid:bigint,attribute:string,current_value:string,"
+              "pmf:array<struct<c:string,p:double>>>")
+        _test(test_model.run(compute_repair_prob=True),
+              "struct<tid:bigint,attribute:string,current_value:string,"
+              "repaired:string,prob:double>")
+
+    def test_integer_input(self):
+        with self.tempView("int_input"):
+            rows = [
+                (1, 1, 1, 3, 0),
+                (2, 2, None, 2, 1),
+                (3, 3, 2, 2, 0),
+                (4, 2, 2, 3, 1),
+                (5, None, 1, 3, 0),
+                (6, 2, 2, 3, 0),
+                (7, 3, 1, None, 0),
+                (8, 2, 1, 2, 1),
+                (9, 1, 1, 2, None)
+            ]
+            self.spark.createDataFrame(rows, "tid: int, v1: byte, v2: short, v3: int, v4: long") \
+                .createOrReplaceTempView("int_input")
+
+            df = test_model = self._build_model() \
+                .setTableName("int_input") \
+                .setRowId("tid") \
+                .run()
+            self.assertEqual(
+                df.orderBy("tid", "attribute").collect(), [
+                    Row(tid=2, attribute="v2", current_value=None, repaired="2"),
+                    Row(tid=5, attribute="v1", current_value=None, repaired="2"),
+                    Row(tid=7, attribute="v3", current_value=None, repaired="2"),
+                    Row(tid=9, attribute="v4", current_value=None, repaired="1")])
 
     def test_rule_based_model(self):
         model = FunctionalDepModel("x", {1: "test-1", 2: "test-2", 3: "test-3"})
@@ -686,46 +771,24 @@ class RepairModelTests(ReusedSQLTestCase):
             self.assertTrue(len(rows), 7)
 
     def test_training_data_rebalancing(self):
-        with self.tempView("inputView"):
-            rows = [
-                (1, 0, 1.0, 1.0, 'a'),
-                (2, 1, 1.5, 1.5, 'b'),
-                (3, 0, 1.4, None, 'b'),
-                (4, 1, 1.3, 1.3, 'b'),
-                (5, 1, 1.2, 1.1, 'b'),
-                (6, 1, 1.1, 1.2, 'b'),
-                (7, 0, None, 1.4, 'b'),
-                (8, 1, 1.4, 1.0, 'b'),
-                (9, 0, 1.2, 1.1, 'b'),
-                (10, None, 1.3, 1.2, 'b'),
-                (11, 0, 1.0, 1.9, 'b'),
-                (12, 0, 1.9, 1.2, 'b'),
-                (13, 0, 1.2, 1.3, 'b'),
-                (14, 0, 1.8, 1.2, None),
-                (15, 0, 1.3, 1.1, 'b'),
-                (16, 1, 1.3, 1.0, 'b'),
-                (17, 0, 1.3, 1.0, 'b')
-            ]
-            self.spark.createDataFrame(rows, ["tid", "v1", "v2", "v3", "v4"]) \
-                .createOrReplaceTempView("inputView")
-            test_model = self._build_model() \
-                .setTableName("inputView") \
-                .setRowId("tid") \
-                .setTrainingDataRebalancingEnabled(True)
+        test_model = self._build_model() \
+            .setTableName("mixed_input") \
+            .setRowId("tid") \
+            .setTrainingDataRebalancingEnabled(True)
 
-            df = test_model.run().orderBy("tid", "attribute")
-            self.assertEqual(
-                df.selectExpr("tid", "attribute", "current_value").collect(), [
-                    Row(tid=3, attribute="v3", current_value=None),
-                    Row(tid=7, attribute="v2", current_value=None),
-                    Row(tid=10, attribute="v1", current_value=None),
-                    Row(tid=14, attribute="v4", current_value=None)])
+        df = test_model.run().orderBy("tid", "attribute")
+        self.assertEqual(
+            df.selectExpr("tid", "attribute", "current_value").collect(), [
+                Row(tid=3, attribute="v3", current_value=None),
+                Row(tid=7, attribute="v2", current_value=None),
+                Row(tid=10, attribute="v1", current_value=None),
+                Row(tid=14, attribute="v4", current_value=None)])
 
-            rows = df.selectExpr("repaired").collect()
-            self.assertTrue(rows[0].repaired is not None)
-            self.assertTrue(rows[1].repaired is not None)
-            self.assertTrue(rows[2].repaired is not None)
-            self.assertTrue(rows[3].repaired is not None)
+        rows = df.selectExpr("repaired").collect()
+        self.assertTrue(rows[0].repaired is not None)
+        self.assertTrue(rows[1].repaired is not None)
+        self.assertTrue(rows[2].repaired is not None)
+        self.assertTrue(rows[3].repaired is not None)
 
 
 if __name__ == "__main__":

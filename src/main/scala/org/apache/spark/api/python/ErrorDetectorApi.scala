@@ -276,11 +276,12 @@ object GaussianOutlierErrorDetector extends ErrorDetector {
     } else {
       val percentileExprs = continousAttrs.map { attr =>
         val approxEnabled = getOptionValue[Boolean]("approxEnabled", options)
-        if (approxEnabled) {
+        val expr = if (approxEnabled) {
           s"percentile_approx($attr, array(0.25, 0.75), 1000)"
         } else {
           s"percentile($attr, array(0.25, 0.75))"
         }
+        s"CAST($expr AS ARRAY<DOUBLE>) $attr"
       }
 
       val percentileRow = spark.sql(

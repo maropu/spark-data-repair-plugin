@@ -35,10 +35,10 @@ class RepairSuite extends QueryTest with SharedSparkSession {
   }
 
   test("checkInputTable - type check") {
-    Seq("DATE", "TIMESTAMP", "ARRAY<INT>", "STRUCT<a: INT, b: DOUBLE>", "MAP<INT, INT>")
+    Seq("BOOLEAN", "DATE", "TIMESTAMP", "ARRAY<INT>", "STRUCT<a: INT, b: DOUBLE>", "MAP<INT, INT>")
         .foreach { tpe =>
       withTable("t") {
-        spark.sql(s"CREATE TABLE t(tid STRING, v $tpe) USING parquet")
+        spark.sql(s"CREATE TABLE t(tid STRING, v1 STRING, v2 $tpe) USING parquet")
         val errMsg = intercept[AnalysisException] {
           RepairApi.checkInputTable("default", "t", "tid")
         }.getMessage
@@ -72,15 +72,17 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
   test("checkInputTable") {
     withTempView("t") {
-      spark.range(1).selectExpr("CAST(id AS STRING) tid", "id AS v1", "CAST(id AS DOUBLE) v2")
-        .createOrReplaceTempView("t")
+      val supportedTypes = Seq("BYTE", "SHORT", "INT", "LONG", "FLOAT", "DOUBLE", "STRING")
+      val exprs = "CAST(id AS STRING) tid" +:
+        supportedTypes.zipWithIndex.map { case (t, i) => s"CAST(id AS $t) AS v$i" }
+      spark.range(1).selectExpr(exprs: _*).createOrReplaceTempView("t")
       val jsonString = RepairApi.checkInputTable("", "t", "tid")
       val jsonObj = parse(jsonString)
       val data = jsonObj.asInstanceOf[JObject].values
       assert(data("input_table") === "t")
       assert(data("num_input_rows") === "1")
-      assert(data("num_attrs") === "2")
-      assert(data("continous_attrs") === "v2")
+      assert(data("num_attrs") === "7")
+      assert(data("continous_attrs") === "v0,v1,v2,v3,v4,v5")
     }
   }
 

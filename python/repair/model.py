@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pyspark.sql import DataFrame, SparkSession, functions  # type: ignore[import]
 from pyspark.sql.functions import col, expr  # type: ignore[import]
+from pyspark.sql.types import ByteType, ShortType, IntegerType, LongType  # type: ignore[import]
 
 from repair.costs import UpdateCostFunction, NoCost
 from repair.detectors import ConstraintErrorDetector, ErrorDetector, NullErrorDetector
@@ -886,8 +887,9 @@ class RepairModel():
             input_table, noisy_cells, str(self.row_id), ",".join(targetAttrs))
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
-    def _filter_columns_from(self, df: DataFrame, targets: List[str]) -> DataFrame:
-        return df.where("attribute IN ({})".format(",".join(map(lambda x: f"'{x}'", targets))))
+    def _filter_columns_from(self, df: DataFrame, targets: List[str], negate: bool = False) -> DataFrame:
+        return df.where("attribute {} ({})".format(
+            "NOT IN" if negate else "IN", ",".join(map(lambda x: f"'{x}'", targets))))
 
     @_spark_job_group(name="error detection")
     def _detect_errors(self, input_table: str, num_attrs: int, num_input_rows: int) -> Tuple[DataFrame, List[str]]:
@@ -1405,6 +1407,21 @@ class RepairModel():
 
         return list(models.items())
 
+    def _create_integral_column_map(self, schema) -> Dict[str, Any]:  # type: ignore
+        def _to_np_types(dt):  # type: ignore
+            if dt == ByteType():
+                return np.int8
+            elif dt == ShortType():
+                return np.int16
+            elif dt == IntegerType():
+                return np.int32
+            elif dt == LongType():
+                return np.int64
+            return None
+
+        cols = map(lambda f: (f.name, _to_np_types(f.dataType)), schema.fields)
+        return dict(filter(lambda f: f[1] is not None, cols))
+
     @_spark_job_group(name="repairing")
     def _repair(self, models: List[Any], continous_columns: List[str],
                 dirty_rows_df: DataFrame, error_cells_df: DataFrame,
@@ -1417,6 +1434,10 @@ class RepairModel():
         broadcasted_maximal_likelihood_repair_enabled = \
             self._spark.sparkContext.broadcast(self.maximal_likelihood_repair_enabled)
 
+        # Creates a dict that checks if a column's type is integral or not
+        integral_column_map = self._create_integral_column_map(dirty_rows_df.schema)
+        broadcasted_integral_column_map = self._spark.sparkContext.broadcast(integral_column_map)
+
         # Sets a grouping key for inference
         num_parallelism = self._spark.sparkContext.defaultParallelism
         grouping_key = _create_temp_name("grouping_key")
@@ -1427,10 +1448,14 @@ class RepairModel():
         @functions.pandas_udf(dirty_rows_df.schema, functions.PandasUDFType.GROUPED_MAP)
         def repair(pdf: pd.DataFrame) -> pd.DataFrame:
             continous_columns = broadcasted_continous_columns.value
+            integral_column_map = broadcasted_integral_column_map.value
             models = broadcasted_models.value
             compute_repair_candidate_prob = broadcasted_compute_repair_candidate_prob.value
             maximal_likelihood_repair_enabled = \
                 broadcasted_maximal_likelihood_repair_enabled.value
+
+            # An internal PMF format is like '{"classes": ["dog", "cat"], "probs": [0.76, 0.24]}'
+            need_to_compute_pmf = compute_repair_candidate_prob or maximal_likelihood_repair_enabled
 
             for m in models:
                 (y, (model, features, transformers)) = m
@@ -1443,9 +1468,7 @@ class RepairModel():
                     for transformer in transformers:
                         X = transformer.transform(X)
 
-                need_to_compute_pmf = y not in continous_columns and \
-                    (compute_repair_candidate_prob or maximal_likelihood_repair_enabled)
-                if need_to_compute_pmf:
+                if need_to_compute_pmf and y not in continous_columns:
                     # TODO: Filters out top-k values to reduce the amount of data
                     predicted = model.predict_proba(X)
                     pmf = map(lambda p: {"classes": model.classes_.tolist(), "probs": p.tolist()}, predicted)
@@ -1453,6 +1476,8 @@ class RepairModel():
                     pdf[y] = pdf[y].where(pdf[y].notna(), list(pmf))
                 else:
                     predicted = model.predict(X)
+                    predicted = predicted if y not in integral_column_map \
+                        else np.round(predicted).astype(integral_column_map[y])
                     pdf[y] = pdf[y].where(pdf[y].notna(), predicted)
 
             return pdf
@@ -1466,7 +1491,11 @@ class RepairModel():
         repaired_df.write.format("noop").mode("overwrite").save()
         return repaired_df
 
-    def _compute_repair_pmf(self, repaired_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
+    def _compute_repair_pmf(self, repaired_df: DataFrame, error_cells_df: DataFrame,
+                            continous_columns: List[str]) -> DataFrame:
+        repaired_df = self._flatten(self._create_temp_view(repaired_df)) \
+            .join(error_cells_df, [str(self.row_id), "attribute"], "inner")
+
         broadcasted_cf = self._spark.sparkContext.broadcast(self.cf)
 
         @functions.udf("array<double>")
@@ -1489,8 +1518,9 @@ class RepairModel():
         to_current_expr = "named_struct('value', current_value, 'prob', " \
             "coalesce(p[array_position(c, current_value) - 1], 0.0)) current"
         sorted_pmf_expr = "array_sort(pmf, (left, right) -> if(left.p < right.p, 1, -1)) pmf"
-        pmf_df = self._flatten(self._create_temp_view(repaired_df)) \
-            .join(error_cells_df, [str(self.row_id), "attribute"], "inner") \
+        discrete_repaired_df = repaired_df if len(continous_columns) == 0 \
+            else self._filter_columns_from(repaired_df, continous_columns, negate=True)
+        pmf_df = discrete_repaired_df \
             .selectExpr(str(self.row_id), "attribute", "current_value", parse_pmf_json_expr) \
             .selectExpr(str(self.row_id), "attribute", "current_value", "pmf.classes classes", slice_probs) \
             .withColumn("costs", cost_func(col("current_value"), col("classes"))) \
@@ -1500,11 +1530,18 @@ class RepairModel():
             .selectExpr(str(self.row_id), "attribute", to_current_expr, to_pmf_expr) \
             .selectExpr(str(self.row_id), "attribute", "current", sorted_pmf_expr)
 
+        if len(continous_columns) > 0:
+            continous_repaired_df = self._filter_columns_from(repaired_df, continous_columns, negate=False)
+            continous_to_pmf_expr = "array(named_struct('c', value, 'p', 1.0D)) pmf"
+            to_current_expr = "named_struct('value', current_value, 'prob', 0.0D) current"
+            continous_pmf_df = continous_repaired_df \
+                .selectExpr(str(self.row_id), "attribute", to_current_expr, continous_to_pmf_expr)
+            pmf_df = pmf_df.union(continous_pmf_df)
+
+        assert pmf_df.count() == error_cells_df.count()
         return pmf_df
 
-    def _compute_score(self, repaired_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
-        pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df)
-
+    def _compute_score(self, pmf_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
         broadcasted_cf = self._spark.sparkContext.broadcast(self.cf)
 
         @functions.pandas_udf("double")  # type: ignore
@@ -1525,14 +1562,14 @@ class RepairModel():
 
         return score_df
 
-    def _maximal_likelihood_repair(self, repaired_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
+    def _maximal_likelihood_repair(self, pmf_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
         # A “Maximal Likelihood Repair” problem defined in the SCARE [2] paper is as follows;
         # Given a scalar \delta and a database D = D_{e} \cup D_{c}, the problem is to
         # find another database instance D' = D'_{e} \cup D_{c} such that L(D'_{e} \| D_{c})
         # is maximum subject to the constraint Cost(D, D') <= \delta.
         # L is a likelihood function and Cost is an arbitrary update cost function
         # (e.g., edit distances) between the two database instances D and D'.
-        score_df = self._compute_score(repaired_df, error_cells_df)
+        score_df = self._compute_score(pmf_df, error_cells_df)
 
         assert self.repair_delta is not None
         num_error_cells = error_cells_df.count()
@@ -1602,8 +1639,7 @@ class RepairModel():
             raise ValueError("To repair noisy cells, they should be discretizable")
 
         # Filters out non-repairable columns from `error_cells_df`
-        error_cells_df = error_cells_df. \
-            where("attribute IN ({})".format(",".join(map(lambda x: f"'{x}'", target_columns))))
+        error_cells_df = self._filter_columns_from(error_cells_df, target_columns)
 
         # If no error found, we don't need to do nothing
         if error_cells_df.count() == 0:
@@ -1643,18 +1679,19 @@ class RepairModel():
         # If `compute_repair_candidate_prob` is True, returns probability mass function
         # of repair candidates.
         if compute_repair_candidate_prob:
-            pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df)
+            pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df, continous_columns)
+            if compute_repair_score:
+                assert len(continous_columns) == 0
+                return self._compute_score(pmf_df, error_cells_df)
             # If `compute_repair_prob` is true, returns a predicted repair with
             # the highest probability only.
-            if compute_repair_prob:
+            elif compute_repair_prob:
                 return pmf_df.selectExpr(
                     str(self.row_id),
                     "attribute",
                     "current.value AS current_value",
                     "pmf[0].c AS repaired",
                     "pmf[0].p AS prob")
-            elif compute_repair_score:
-                return self._compute_score(repaired_df, error_cells_df)
             else:
                 return pmf_df.selectExpr(
                     str(self.row_id),
@@ -1666,7 +1703,9 @@ class RepairModel():
         # computes scores to decide which cells should be repaired to follow the
         # “Maximal Likelihood Repair” problem.
         if self.maximal_likelihood_repair_enabled:
-            top_delta_repairs_df = self._maximal_likelihood_repair(repaired_df, error_cells_df)
+            assert len(continous_columns) == 0
+            pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df, [])
+            top_delta_repairs_df = self._maximal_likelihood_repair(pmf_df, error_cells_df)
             if not repair_data:
                 return top_delta_repairs_df
 
@@ -1767,10 +1806,8 @@ class RepairModel():
             # Validates input data
             input_table, num_input_rows, num_attrs, continous_columns = self._check_input_table()
 
-            # TODO: Looses the limitations below
-            if compute_repair_candidate_prob and len(continous_columns) != 0:
-                raise ValueError("Cannot compute probability mass function of repairs "
-                                 "when continous attributes found")
+            if compute_repair_score and len(continous_columns) != 0:
+                raise ValueError("Cannot compute repair scores when continous attributes found")
             if self.maximal_likelihood_repair_enabled and len(continous_columns) != 0:
                 raise ValueError("Cannot enable maximal likelihood repair mode "
                                  "when continous attributes found")

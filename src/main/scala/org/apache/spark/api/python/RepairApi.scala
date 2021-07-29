@@ -635,8 +635,6 @@ object RepairApi extends RepairBase {
       val cellDomainView = withJobDescription("compute domain values with posteriori probability") {
         createAndCacheTempView(cellDomainDf, "cell_domain")
       }
-      // Checks if # of rows in `cellDomainView` is the same with # of error cells
-      assert(cellDomainDf.count == repairCellDf.count)
       Seq("cell_domain" -> cellDomainView,
         "pairwise_attr_stats" -> pairwiseStatMap.mapValues(seqToJson)
       ).asJson

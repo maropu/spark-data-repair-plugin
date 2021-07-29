@@ -220,19 +220,23 @@ object RepairMiscApi extends RepairBase {
 
     withTempView(inputDf) { inputView =>
       withTempView(repairDf) { repairView =>
-        val cleanAttrs = inputDf.columns.map {
-          case attr if attr == rowId =>
+        val cleanAttrs = inputDf.schema.map {
+          case f if f.name == rowId =>
             s"$inputView.$rowId"
-          case attr if attrsToRepair.contains(attr) =>
-            val repaired = if (continousAttrTypeMap.contains(attr)) {
-              val dataType = continousAttrTypeMap(attr)
-              s"CAST(repairs['$attr'] AS ${dataType.catalogString})"
+          case f if attrsToRepair.contains(f.name) =>
+            val repaired = if (continousAttrTypeMap.contains(f.name)) {
+              val dataType = continousAttrTypeMap(f.name)
+              if (integralTypes.contains(f.dataType)) {
+                s"CAST(round(repairs['${f.name}']) AS ${dataType.catalogString})"
+              } else {
+                s"CAST(repairs['${f.name}'] AS ${dataType.catalogString})"
+              }
             } else {
-              s"repairs['$attr']"
+              s"repairs['${f.name}']"
             }
-            s"if(array_contains(map_keys(repairs), '$attr'), $repaired, $attr) AS $attr"
-          case cleanAttr =>
-            cleanAttr
+            s"if(array_contains(map_keys(repairs), '${f.name}'), $repaired, ${f.name}) AS ${f.name}"
+          case f =>
+            f.name
         }
         spark.sql(
           s"""

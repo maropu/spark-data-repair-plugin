@@ -37,9 +37,11 @@ private[python] case class JsonEncoder(v: Seq[(String, AnyRef)]) {
 
 abstract class RepairBase extends LoggingBasedOnLevel {
 
-  protected val continousTypes: Set[DataType] = Set(FloatType, DoubleType)
-  protected val supportedType: Set[DataType] = Set(StringType, BooleanType, ByteType, ShortType,
-    IntegerType, LongType) ++ continousTypes
+  // TODO: Support boolean types
+  protected val integralTypes = Set[DataType](ByteType, ShortType, IntegerType, LongType)
+  protected val continousTypes = integralTypes ++ Set(FloatType, DoubleType)
+  protected val discreteTypes = Set[DataType](StringType)
+  protected val supportedType = continousTypes ++ discreteTypes
 
   protected def spark = {
     assert(SparkSession.getActiveSession.nonEmpty, "active Spark session not found")

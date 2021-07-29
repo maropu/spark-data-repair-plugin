@@ -122,6 +122,38 @@ class RepairMiscSuite extends QueryTest with SharedSparkSession {
     assert(errMsg.contains("Columns 'non-existent' do not exist in 'default.t'"))
   }
 
+  test("repairAttrsFrom") {
+    withTempView("inputView", "repairUpdates") {
+      spark.sql(
+        s"""
+           |CREATE TEMPORARY VIEW inputView(tid, x, y, z) AS SELECT * FROM VALUES
+           |  (1, null, "test-1", 1.0D),
+           |  (2, null, null, 2.0D),
+           |  (3, 1, "test-2", null)
+           """.stripMargin)
+
+      spark.sql(
+        s"""
+           |CREATE TEMPORARY VIEW repairUpdates(tid, attribute, repaired) AS SELECT * FROM VALUES
+           |  (1, "x", "2.4"),
+           |  (2, "x", "2.6"),
+           |  (2, "y", "test-3"),
+           |  (3, "z", "3.1D")
+           """.stripMargin)
+
+      val df = RepairMiscApi.repairAttrsFrom("repairUpdates", "", "inputView", "tid")
+      checkAnswer(df, Seq(
+        Row(1, 2, "test-1", 1.0D),
+        Row(2, 3, "test-3", 2.0D),
+        Row(3, 1, "test-2", 3.1D)))
+
+      val errMsg = intercept[AnalysisException] {
+        RepairMiscApi.repairAttrsFrom("inputView", "", "inputView", "tid")
+      }.getMessage()
+      assert(errMsg.contains("Table 'inputView' must have 'tid', 'attribute', and 'repaired' columns"))
+    }
+  }
+
   test("convertToHistogram") {
     withTempView("tempView") {
       spark.sql(
