@@ -1562,20 +1562,18 @@ class RepairModel():
 
         return score_df
 
-    def _maximal_likelihood_repair(self, pmf_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
+    def _maximal_likelihood_repair(self, score_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
         # A “Maximal Likelihood Repair” problem defined in the SCARE [2] paper is as follows;
         # Given a scalar \delta and a database D = D_{e} \cup D_{c}, the problem is to
         # find another database instance D' = D'_{e} \cup D_{c} such that L(D'_{e} \| D_{c})
         # is maximum subject to the constraint Cost(D, D') <= \delta.
         # L is a likelihood function and Cost is an arbitrary update cost function
         # (e.g., edit distances) between the two database instances D and D'.
-        score_df = self._compute_score(pmf_df, error_cells_df)
-
         assert self.repair_delta is not None
         num_error_cells = error_cells_df.count()
         percent = min(1.0, 1.0 - self.repair_delta / num_error_cells)
         percentile = score_df.selectExpr(f"percentile(score, {percent}) thres").collect()[0]
-        top_delta_repairs_df = score_df.where(f"score >= {percentile.thres}")
+        top_delta_repairs_df = score_df.where(f"score >= {percentile.thres}").drop("score")
         logging.info("[Repairing Phase] {} repair updates (delta={}) selected "
                      "among {} candidates".format(
                          top_delta_repairs_df.count(),
@@ -1678,34 +1676,32 @@ class RepairModel():
 
         # If `compute_repair_candidate_prob` is True, returns probability mass function
         # of repair candidates.
-        if compute_repair_candidate_prob:
+        if compute_repair_candidate_prob and not self.maximal_likelihood_repair_enabled:
             pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df, continous_columns)
-            if compute_repair_score:
-                assert len(continous_columns) == 0
-                return self._compute_score(pmf_df, error_cells_df)
+            pmf_df = pmf_df.selectExpr(str(self.row_id), "attribute", "current.value AS current_value", "pmf")
+
             # If `compute_repair_prob` is true, returns a predicted repair with
             # the highest probability only.
-            elif compute_repair_prob:
+            if compute_repair_prob:
                 return pmf_df.selectExpr(
-                    str(self.row_id),
-                    "attribute",
-                    "current.value AS current_value",
+                    str(self.row_id), "attribute", "current_value",
                     "pmf[0].c AS repaired",
                     "pmf[0].p AS prob")
-            else:
-                return pmf_df.selectExpr(
-                    str(self.row_id),
-                    "attribute",
-                    "current.value AS current_value",
-                    "pmf")
+
+            return pmf_df
 
         # If any discrete target columns and its probability distribution given,
         # computes scores to decide which cells should be repaired to follow the
         # “Maximal Likelihood Repair” problem.
         if self.maximal_likelihood_repair_enabled:
             assert len(continous_columns) == 0
+
             pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df, [])
-            top_delta_repairs_df = self._maximal_likelihood_repair(pmf_df, error_cells_df)
+            score_df = self._compute_score(pmf_df, error_cells_df)
+            if compute_repair_score:
+                return score_df
+
+            top_delta_repairs_df = self._maximal_likelihood_repair(score_df, error_cells_df)
             if not repair_data:
                 return top_delta_repairs_df
 
@@ -1806,10 +1802,10 @@ class RepairModel():
             # Validates input data
             input_table, num_input_rows, num_attrs, continous_columns = self._check_input_table()
 
-            if compute_repair_score and len(continous_columns) != 0:
-                raise ValueError("Cannot compute repair scores when continous attributes found")
+            if compute_repair_score and not self.maximal_likelihood_repair_enabled:
+                raise ValueError("Cannot compute repair scores when the maximal likelihood repair mode disabled")
             if self.maximal_likelihood_repair_enabled and len(continous_columns) != 0:
-                raise ValueError("Cannot enable maximal likelihood repair mode "
+                raise ValueError("Cannot enable the maximal likelihood repair mode "
                                  "when continous attributes found")
 
             df, elapsed_time = self._run(

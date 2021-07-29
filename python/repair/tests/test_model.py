@@ -24,6 +24,7 @@ from pyspark import SparkConf
 from pyspark.sql import Row
 from pyspark.sql.utils import AnalysisException
 
+from repair.costs import Levenshtein
 from repair.misc import RepairMisc
 from repair.model import FunctionalDepModel, RepairModel, PoorModel
 from repair.detectors import ConstraintErrorDetector, NullErrorDetector, RegExErrorDetector
@@ -197,11 +198,11 @@ class RepairModelTests(ReusedSQLTestCase):
             .setRowId("tid")
         self.assertRaisesRegexp(
             ValueError,
-            "Cannot compute repair scores when continous attributes found",
+            "Cannot compute repair scores when the maximal likelihood repair mode disabled",
             lambda: test_model.run(compute_repair_score=True))
         self.assertRaisesRegexp(
             ValueError,
-            "Cannot enable maximal likelihood repair mode when continous attributes found",
+            "Cannot enable the maximal likelihood repair mode when continous attributes found",
             lambda: test_model.setMaximalLikelihoodRepairEnabled(True).setRepairDelta(1).run())
 
     # TODO: We fix a seed for building a repair model, but inferred values fluctuate run-by-run.
@@ -664,12 +665,28 @@ class RepairModelTests(ReusedSQLTestCase):
         repaired_df = test_model = self._build_model() \
             .setTableName("adult") \
             .setRowId("tid") \
+            .setMaximalLikelihoodRepairEnabled(True) \
+            .setRepairDelta(1) \
             .run(compute_repair_score=True)
 
         self._check_adult_repair_prob_and_score(
             repaired_df,
             "struct<tid:string,attribute:string,current_value:string,"
             "repaired:string,score:double>")
+
+    def test_maximal_likelihood_repair(self):
+        repaired_df = test_model = self._build_model() \
+            .setTableName("adult") \
+            .setRowId("tid") \
+            .setMaximalLikelihoodRepairEnabled(True) \
+            .setRepairDelta(3) \
+            .setUpdateCostFunction(Levenshtein()) \
+            .run()
+        self.assertEqual(
+            repaired_df.orderBy("tid", "attribute").collect(), [
+                Row(tid="12", attribute="Sex", current_value=None, repaired="Male"),
+                Row(tid="3", attribute="Sex", current_value=None, repaired="Male"),
+                Row(tid="7", attribute="Sex", current_value=None, repaired="Male")])
 
     def test_compute_repair_prob_for_continouos_values(self):
         test_model = test_model = self._build_model() \
