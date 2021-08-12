@@ -252,6 +252,7 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
         logging.info("hyperopt: #eval={}/{}".format(len(trials.trials), _max_eval()))
 
         # Builds a model with `best_params`
+        # TODO: Could we extract constraint rules (e.g., FD and CFD) from built statistical models?
         model = _create_model(best_params)
         model.fit(X, y)
 

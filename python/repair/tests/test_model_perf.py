@@ -72,6 +72,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
     def tearDownClass(cls):
         super(ReusedSQLTestCase, cls).tearDownClass()
 
+    # TODO: Needs to make statical model behaviour deterministic
     def _build_model(self, input):
         return RepairModel() \
             .setInput(input) \
