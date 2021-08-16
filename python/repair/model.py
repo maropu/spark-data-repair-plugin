@@ -126,6 +126,9 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
     def _n_estimators() -> int:
         return int(_get_option("lgb.n_estimators", "300"))
 
+    def _importance_type() -> str:
+        return _get_option("lgb.importance_type", "gain")
+
     def _n_splits() -> int:
         return int(_get_option("cv.n_splits", "3"))
 
@@ -154,6 +157,7 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
         "reg_alpha": _reg_alpha(),
         "min_split_gain": _min_split_gain(),
         "n_estimators": _n_estimators(),
+        "importance_type": _importance_type(),
         "random_state": 42,
         "n_jobs": n_jobs
     }
@@ -255,6 +259,12 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
         # TODO: Could we extract constraint rules (e.g., FD and CFD) from built statistical models?
         model = _create_model(best_params)
         model.fit(X, y)
+
+        def _feature_importances() -> List[Any]:
+            f = filter(lambda x: x[1] > 0.0, zip(model.feature_name_, model.feature_importances_))
+            return list(sorted(f, key=lambda x: x[1], reverse=True))
+
+        logging.debug(f"lightgbm: feature_importances={_feature_importances()}")
 
         sorted_lst = sorted(trials.trials, key=lambda x: x['result']['loss'])
         min_loss = sorted_lst[0]['result']['loss']
