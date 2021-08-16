@@ -1680,7 +1680,7 @@ class RepairModel():
         # 3. Repair Phase
         #################################################################################
 
-        # TODO: Could we refine repair candidates by considering given constraints?
+        # TODO: Could we refine repair candidates by considering given integrity constraints? (See [15])
         repaired_df = self._repair(
             models, continous_columns, dirty_rows_df, error_cells_df,
             compute_repair_candidate_prob)
