@@ -28,6 +28,9 @@ import org.apache.spark.sql.types.StringType
 
 object DepGraphApi extends RepairBase {
 
+  // TODO: Add a method to build a dependency graph (e.g., based on FD)
+  // between highly-correlated attributes.
+
   def computeFunctionalDeps(inputView: String, constraintFilePath: String): String = {
     logBasedOnLevel(s"computeFunctionalDep called with: discretizedInputView=$inputView " +
       s"constraintFilePath=$constraintFilePath")
