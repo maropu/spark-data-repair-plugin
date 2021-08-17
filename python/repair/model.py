@@ -398,10 +398,11 @@ class RepairModel():
         # TODO: Move this variable into a runtime env
         self._intermediate_views_on_runtime: List[str] = []
 
-        # JVM interfaces for Data Repair APIs
+        # JVM interfaces for Data Repair/Graph APIs
         self._spark = SparkSession.builder.getOrCreate()
         self._jvm = self._spark.sparkContext._active_spark_context._jvm  # type: ignore
         self._repair_api = self._jvm.RepairApi
+        self._dep_graph_api = self._jvm.DepGraphApi
 
     @argtype_check  # type: ignore
     def setDbName(self, db_name: str) -> "RepairModel":
@@ -1081,7 +1082,7 @@ class RepairModel():
     def _build_rule_model(self, train_df: DataFrame, target_columns: List[str], x: str, y: str) -> Any:
         # TODO: For attributes having large domain size, we need to rewrite it as a join query to repair data
         input_view = self._create_temp_view(train_df)
-        func_deps = json.loads(self._repair_api.computeFunctionDepMap(input_view, x, y))
+        func_deps = json.loads(self._dep_graph_api.computeFunctionDepMap(input_view, x, y))
         return FunctionalDepModel(x, func_deps)
 
     def _get_functional_deps(self, train_df: DataFrame) -> Optional[Dict[str, List[str]]]:
@@ -1090,7 +1091,7 @@ class RepairModel():
         if len(constraint_detectors) == 1:
             input_view = self._create_temp_view(train_df)
             constraint_path = constraint_detectors[0].constraint_path  # type: ignore
-            func_deps = json.loads(self._repair_api.computeFunctionalDeps(input_view, constraint_path))
+            func_deps = json.loads(self._dep_graph_api.computeFunctionalDeps(input_view, constraint_path))
             return func_deps
         else:
             return None
