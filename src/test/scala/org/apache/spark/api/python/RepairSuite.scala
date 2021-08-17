@@ -252,7 +252,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("compuatePairwiseStats") {
+  test("computePairwiseStats") {
     withTempView("tempView", "attrStatView") {
       spark.sql(
         s"""
@@ -273,8 +273,9 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       val df = RepairApi.computeFreqStats("tempView", attrsToComputeFreqStats, 1.0, statThreshold)
       df.createOrReplaceTempView("attrStatView")
 
-      val (pairwiseStatMap, domainStatMap) = RepairApi.computePairwiseStats(
-        9, "attrStatView", "tempView", Seq("x", "y"), Seq(("x", "y"), ("y", "x")), 0.3)
+      val domainStatMap = RepairApi.computeAndGetTableStats("tempView").mapValues(_.distinctCount)
+      val pairwiseStatMap = RepairApi.computePairwiseStats(
+        "tempView", 9, "attrStatView", Seq("x", "y"), Seq(("x", "y"), ("y", "x")), domainStatMap)
       assert(pairwiseStatMap.keySet === Set("x", "y"))
       assert(pairwiseStatMap("x").map(_._1) === Seq("y"))
       assert(pairwiseStatMap("x").head._2 > statThreshold)
@@ -286,7 +287,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
   test("computeCorrAttrs") {
     val pairwiseStatMap = Map("y" -> Seq(("x", 0.9)), "x" -> Seq(("y", 0.9)))
-    val corrAttrs = RepairApi.computeCorrAttrs(pairwiseStatMap, 2, 0.80)
+    val corrAttrs = RepairApi.filterCorrAttrs(pairwiseStatMap, 2, 0.80)
     assert(corrAttrs === Map("y" -> Seq(("x", 0.9)), "x" -> Seq(("y", 0.9))))
   }
 
