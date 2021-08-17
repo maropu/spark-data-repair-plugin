@@ -448,7 +448,17 @@
         <artifactId>exec-maven-plugin</artifactId>
         <groupId>org.codehaus.mojo</groupId>
         <executions>
-          <execution><!-- Run our version calculation script -->
+          <execution>
+            <id>Scala Packaging</id>
+            <phase>package</phase>
+            <goals>
+              <goal>exec</goal>
+            </goals>
+            <configuration>
+              <executable>${basedir}/bin/package-scala.sh</executable>
+            </configuration>
+          </execution>
+          <execution>
             <id>Python Packaging</id>
             <phase>package</phase>
             <goals>
