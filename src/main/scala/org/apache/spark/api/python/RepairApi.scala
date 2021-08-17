@@ -201,18 +201,32 @@ object RepairApi extends RepairBase {
     Seq("repair_base_cells" -> repairBaseView).asJson
   }
 
-  private[python] def computeAttrStats(
-      discretizedInputView: String,
-      discretizedAttrs: Seq[String],
-      attrPairsToRepair: Seq[(String, String)],
+  private[python] def computeFreqStats(
+      inputView: String,
+      targetAttrSet: Seq[Seq[String]],
       statSampleRatio: Double,
       statThreshold: Double): DataFrame = {
-    assert(discretizedAttrs.nonEmpty && attrPairsToRepair.nonEmpty)
-    val pairSets = attrPairsToRepair.map(p => Set(p._1, p._2)).distinct
+    assert(targetAttrSet.nonEmpty)
+    assert(0.0 <= statSampleRatio && statSampleRatio <= 1.0)
+    assert(0.0 <= statThreshold && statThreshold <= 1.0)
+
+    val targetAttrs = targetAttrSet.flatten.distinct
+    val distinctTargetAttrSet = targetAttrSet.map(_.toSet).distinct.map(_.toSeq)
+    // TODO: Support larger target set cases
+    assert(distinctTargetAttrSet.length < 64,
+      "Cannot handle the target set whose size is more than 63")
+
+    val groupingSetSeq = distinctTargetAttrSet.map {
+      case Seq(a) => s"(`$a`)"
+      case Seq(a1, a2) => s"(`$a1`,`$a2`)"
+      case attrs =>
+        throw new IllegalStateException(
+          s"Cannot handle more than two entries: ${attrs.mkString(",")}")
+    }
     val inputDf = if (statSampleRatio < 1.0) {
-      spark.table(discretizedInputView).sample(statSampleRatio)
+      spark.table(inputView).sample(statSampleRatio)
     } else {
-      spark.table(discretizedInputView)
+      spark.table(inputView)
     }
     withTempView(inputDf) { inputView =>
       val filterClauseOption = if (statThreshold > 0.0) {
@@ -224,11 +238,10 @@ object RepairApi extends RepairBase {
       }
       spark.sql(
         s"""
-           |SELECT ${discretizedAttrs.mkString(", ")}, COUNT(1) cnt
+           |SELECT ${targetAttrs.mkString(", ")}, COUNT(1) cnt
            |FROM $inputView
            |GROUP BY GROUPING SETS (
-           |  ${discretizedAttrs.map(a => s"($a)").mkString(", ")},
-           |  ${pairSets.map(_.toSeq).map { case Seq(a1, a2) => s"($a1,$a2)" }.mkString(", ")}
+           |  ${groupingSetSeq.mkString(", ")}
            |)
            |$filterClauseOption
          """.stripMargin)
@@ -239,7 +252,7 @@ object RepairApi extends RepairBase {
     s"$a IS NOT NULL AND ${attrs.filter(_ != a).map(a => s"$a IS NULL").mkString(" AND ")}"
   }
 
-  private[python] def compuatePairwiseAttrStats(
+  private[python] def computePairwiseStats(
       rowCount: Long,
       attrStatView: String,
       discretizedInputView: String,
@@ -388,11 +401,14 @@ object RepairApi extends RepairBase {
     val attrPairsToRepair = attrsToRepair.flatMap { attrToRepair =>
       discretizedAttrs.filter(attrToRepair != _).map(a => (attrToRepair, a))
     }
-    val attrStatDf = computeAttrStats(
-      discretizedInputView, discretizedAttrs, attrPairsToRepair, statSampleRatio, statThreshold)
+
+    val attrsToComputeFreqStats = discretizedAttrs.map(a => Seq(a)) ++
+      attrPairsToRepair.map { case (a1, a2) => Seq(a1, a2) }
+    val attrStatDf = computeFreqStats(
+      discretizedInputView, attrsToComputeFreqStats, statSampleRatio, statThreshold)
 
     withTempView(attrStatDf, cache = true) { attrStatView =>
-      val (pairwiseStatMap, domainStatMap) = compuatePairwiseAttrStats(
+      val (pairwiseStatMap, domainStatMap) = computePairwiseStats(
         rowCount, attrStatView, discretizedInputView, discretizedAttrs,
         attrPairsToRepair, minCorrThres)
       val corrAttrMap = computeCorrAttrs(pairwiseStatMap, maxAttrsToComputeDomains, minCorrThres)

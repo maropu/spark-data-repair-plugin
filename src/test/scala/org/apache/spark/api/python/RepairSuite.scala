@@ -203,7 +203,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
     }
   }
 
-  test("computeAttrStats") {
+  test("computeFreqStats") {
     withTempView("tempView") {
       spark.sql(
         s"""
@@ -219,9 +219,9 @@ class RepairSuite extends QueryTest with SharedSparkSession {
            |  (9, "2", "test-2a")
          """.stripMargin)
 
-      val df = RepairApi.computeAttrStats(
-        "tempView", Seq("x", "y"), Seq(("x", "y"), ("y", "x")), 1.0, 0.0)
-      checkAnswer(df, Seq(
+      val attrsToComputeFreqStats = Seq(Seq("x"), Seq("y"), Seq("x", "y"), Seq("y", "x"))
+      val df1 = RepairApi.computeFreqStats("tempView", attrsToComputeFreqStats, 1.0, 0.0)
+      checkAnswer(df1, Seq(
         Row("1", "test-1", 3),
         Row("2", "test-2a", 1),
         Row(null, "test-2a", 1),
@@ -234,10 +234,25 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         Row(null, "test-3", 3),
         Row("1", null, 3)
       ))
+      val df2 = RepairApi.computeFreqStats("tempView", attrsToComputeFreqStats, 1.0, 0.3)
+      checkAnswer(df2, Seq(
+        Row("1", "test-1", 3),
+        Row("3", null, 3),
+        Row("3", "test-3", 3),
+        Row(null, "test-1", 3),
+        Row("2", null, 3),
+        Row(null, "test-3", 3),
+        Row("1", null, 3)
+      ))
+
+      val errMsg = intercept[IllegalStateException] {
+        RepairApi.computeFreqStats("tempView", Seq(Seq("tid", "x", "y")), 1.0, 0.0)
+      }.getMessage
+      assert(errMsg.contains("Cannot handle more than two entries: tid,x,y"))
     }
   }
 
-  test("compuatePairwiseAttrStats") {
+  test("compuatePairwiseStats") {
     withTempView("tempView", "attrStatView") {
       spark.sql(
         s"""
@@ -254,11 +269,11 @@ class RepairSuite extends QueryTest with SharedSparkSession {
          """.stripMargin)
 
       val statThreshold = 0.80
-      val df = RepairApi.computeAttrStats(
-        "tempView", Seq("x", "y"), Seq(("x", "y"), ("y", "x")), 1.0, statThreshold)
+      val attrsToComputeFreqStats = Seq(Seq("x"), Seq("y"), Seq("x", "y"))
+      val df = RepairApi.computeFreqStats("tempView", attrsToComputeFreqStats, 1.0, statThreshold)
       df.createOrReplaceTempView("attrStatView")
 
-      val (pairwiseStatMap, domainStatMap) = RepairApi.compuatePairwiseAttrStats(
+      val (pairwiseStatMap, domainStatMap) = RepairApi.computePairwiseStats(
         9, "attrStatView", "tempView", Seq("x", "y"), Seq(("x", "y"), ("y", "x")), 0.3)
       assert(pairwiseStatMap.keySet === Set("x", "y"))
       assert(pairwiseStatMap("x").map(_._1) === Seq("y"))
