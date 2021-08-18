@@ -261,7 +261,7 @@ object RepairApi extends RepairBase {
        domainStatMap: Map[String, Long]): Map[String, Seq[(String, Double)]] = {
     assert(rowCount > 0)
     assert(targetAttrs.nonEmpty && targetAttrPairsToComputeStats.nonEmpty)
-    assert(domainStatMap.nonEmpty)
+    assert(targetAttrs.forall(domainStatMap.contains))
 
     // Computes the conditional entropy: H(x|y) = H(x,y) - H(y).
     // H(x,y) denotes H(x U y). If H(x|y) = 0, then y determines x, i.e., y -> x.

@@ -1082,7 +1082,7 @@ class RepairModel():
     def _build_rule_model(self, train_df: DataFrame, target_columns: List[str], x: str, y: str) -> Any:
         # TODO: For attributes having large domain size, we need to rewrite it as a join query to repair data
         input_view = self._create_temp_view(train_df)
-        func_deps = json.loads(self._dep_graph_api.computeFunctionDepMap(input_view, x, y))
+        func_deps = json.loads(self._dep_graph_api.computeFunctionalDepMap(input_view, x, y))
         return FunctionalDepModel(x, func_deps)
 
     def _get_functional_deps(self, train_df: DataFrame) -> Optional[Dict[str, List[str]]]:

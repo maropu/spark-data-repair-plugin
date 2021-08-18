@@ -20,6 +20,7 @@ package org.apache.spark.api.python
 import scala.collection.mutable
 import scala.util.Try
 import scala.collection.JavaConverters._
+
 import org.apache.spark.ml.clustering.{BisectingKMeans, KMeans}
 import org.apache.spark.ml.feature.CountVectorizer
 import org.apache.spark.sql.ExceptionUtils.AnalysisException
@@ -81,7 +82,6 @@ object RepairMiscApi extends RepairBase {
       rowId: String,
       targetAttrList: String,
       options: String): DataFrame = {
-
     logBasedOnLevel(s"splitInputTableInto called with: k=$k dbName=$dbName tableName=$tableName rowId=$rowId " +
       s"targetAttrList=$targetAttrList options=${if (options.nonEmpty) s"{$options}" else ""}")
 
@@ -157,7 +157,6 @@ object RepairMiscApi extends RepairBase {
       tableName: String,
       targetAttrList: String,
       nullRatio: Double): DataFrame = {
-
     logBasedOnLevel(s"injectNullAt called with: dbName=$dbName tableName=$tableName " +
       s"targetAttrList=$targetAttrList, nullRatio=$nullRatio")
 
@@ -187,7 +186,6 @@ object RepairMiscApi extends RepairBase {
       dbName: String,
       tableName: String,
       rowId: String): DataFrame = {
-
     logBasedOnLevel(s"repairAttrsFrom called with: repairUpdates=$repairUpdates " +
       s"dbName=$dbName tableName=$tableName rowId=$rowId")
 
@@ -261,6 +259,7 @@ object RepairMiscApi extends RepairBase {
           dist.map(_ / dist.sum)
         }
       }
+
       val (_, columnStats) = SparkCommandUtils.computeColumnStats(spark, relation, relation.output)
       val statRows = columnStats.map { case (attr, stat) =>
         Row.fromSeq(Seq(attr.name, stat.distinctCount.map(_.toLong), stat.min.map(_.toString),
@@ -280,9 +279,11 @@ object RepairMiscApi extends RepairBase {
 
     val (inputDf, _) = checkAndGetQualifiedInputName(dbName, tableName)
     val targetAttrSet = SparkUtils.stringToSeq(targets).toSet
+
     def isTarget(f: StructField): Boolean = {
       targetAttrSet.contains(f.name) && !continousTypes.contains(f.dataType)
     }
+
     withTempView(inputDf) { inputView =>
       val sqls = inputDf.schema.filter(isTarget).map { f =>
         s"""
@@ -343,5 +344,32 @@ object RepairMiscApi extends RepairBase {
            """.stripMargin)
       }
     }
+  }
+
+  def generateDepGraph(
+      path: String,
+      dbName: String,
+      tableName: String,
+      format: String,
+      targetAttrList: String,
+      maxDomainSize: Int,
+      maxAttrValueNum: Int,
+      samplingRatio: Double,
+      minCorrThres: Double,
+      edgeLabel: Boolean): Unit = {
+    logBasedOnLevel(s"generateDepGraph called with: path=$path dbName=$dbName tableName=$tableName " +
+      s"format=$format targetAttrList=${if (targetAttrList.nonEmpty) targetAttrList else "<none>"} " +
+      s"maxDomainSize=$maxDomainSize maxAttrValueNum=$maxAttrValueNum " +
+      s"samplingRatio=$samplingRatio minCorrThres=$minCorrThres edgeLabel=$edgeLabel")
+
+    val (inputDf, inputTable) = checkAndGetQualifiedInputName(dbName, tableName)
+    val targetAttrs = if (targetAttrList.nonEmpty) {
+      SparkUtils.stringToSeq(targetAttrList)
+    } else {
+      inputDf.columns.toSeq
+    }
+    DepGraphApi.generateDepGraph(
+      path, inputTable, format, targetAttrs, maxDomainSize, maxAttrValueNum,
+      samplingRatio, minCorrThres, edgeLabel)
   }
 }

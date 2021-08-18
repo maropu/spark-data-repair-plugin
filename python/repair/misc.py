@@ -78,6 +78,12 @@ class RepairMisc():
         else:
             return 8
 
+    def _parse_option(self, key: str, default: str) -> str:
+        if key in self.opts.keys():
+            return self.opts[key]
+        else:
+            return default
+
     def _check_required_options(self, required: List[str]) -> None:
         if not all(opt in self.opts.keys() for opt in required):
             raise ValueError("Required options not found: {}".format(", ".join(required)))
@@ -197,9 +203,8 @@ class RepairMisc():
         if not self.opts["k"].isdigit():
             raise ValueError(f"Option 'k' must be an integer, but '{self.opts['k']}' found")
 
-        param_q = self.opts["q"] if "q" in self.opts.keys() else "2"
-        param_alg = self.opts["clustering_alg"] if "clustering_alg" in self.opts.keys() \
-            else "bisect-kmeans"
+        param_q = self._parse_option("q", "2")
+        param_alg = self._parse_option("clustering_alg", "bisect-kmeans")
         param_options = f"q={param_q},clusteringAlg={param_alg}"
 
         jdf = self._misc_api_.splitInputTableInto(
@@ -327,10 +332,29 @@ class RepairMisc():
         | 18|  -------|
         | 19|  -------|
         +---+---------+
-
         """
         self._check_required_options(["table_name", "row_id", "error_cells"])
         jdf = self._misc_api_.toErrorMap(
             self.opts["error_cells"], self._db_name, self.opts["table_name"],
             self.opts["row_id"])
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
+
+    def generateDepGraph(self) -> None:
+        """Generates a dependency graph for a specified input table.
+
+        .. versionchanged:: 0.1.0
+
+        Examples
+        --------
+        >>> scavenger.misc.options({"table_name": "adult", "path": "/tmp/adult",
+        ...    "min_corr_thres": "0.60"}).generateDepGraph()
+        """
+        self._check_required_options(["path", "table_name"])
+        param_max_domain_size = self._parse_option("max_domain_size", "100")
+        param_max_attr_value_num = self._parse_option("max_attr_value_num", "30")
+        param_min_corr_thres = self._parse_option("min_corr_thres", "0.7")
+        param_edge_label = len(self._parse_option("edge_label", "")) > 0
+        jdf = self._misc_api_.generateDepGraph(
+            self.opts["path"], self._db_name, self.opts["table_name"],
+            "svg", self._target_attr_list, int(param_max_domain_size), int(param_max_attr_value_num),
+            1.0, float(param_min_corr_thres), param_edge_label)

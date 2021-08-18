@@ -17,19 +17,212 @@
 
 package org.apache.spark.api.python
 
+import java.io.File
 import java.net.URI
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 
 import scala.collection.mutable
 import scala.io.Source
+import scala.sys.process.{Process, ProcessLogger}
+import scala.util.Try
 
 import org.apache.spark.python.DenialConstraints
+import org.apache.spark.sql.ExceptionUtils.AnalysisException
 import org.apache.spark.sql._
+import org.apache.spark.sql.catalyst.util.stringToFile
 import org.apache.spark.sql.types.StringType
+import org.apache.spark.util.BlockingLineStream
+import org.apache.spark.util.RepairUtils.withTempView
 
 object DepGraphApi extends RepairBase {
 
-  // TODO: Add a method to build a dependency graph (e.g., based on FD)
-  // between highly-correlated attributes.
+  private def generateGraphString(nodes: Seq[String], edges: Seq[String]) = {
+    if (nodes.nonEmpty) {
+      s"""
+         |digraph {
+         |  graph [pad="0.5", nodesep="0.5", ranksep="2", fontname="Helvetica"];
+         |  node [shape=plain]
+         |  rankdir=LR;
+         |
+         |  ${nodes.sorted.mkString("\n")}
+         |  ${edges.sorted.mkString("\n")}
+         |}
+       """.stripMargin
+    } else {
+      ""
+    }
+  }
+
+  private def normalizeForHtml(str: String) = {
+    str.replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+  }
+
+  private def generateNodeString(nodeName: String, valuesWithIndex: Seq[(String, Int)]) = {
+    val entries = valuesWithIndex.map { case (v, i) =>
+      s"""<tr><td port="$i">${normalizeForHtml(v)}</td></tr>"""
+    }
+    s"""
+       |"$nodeName" [label=<
+       |<table border="1" cellborder="0" cellspacing="0">
+       |  <tr><td bgcolor="lightgray" port="nodeName"><i>$nodeName</i></td></tr>
+       |  ${entries.mkString("\n")}
+       |</table>>];
+     """.stripMargin
+  }
+
+  private val nextNodeId = new AtomicInteger(0)
+
+  private[python] def computeDepGraph(
+      inputView: String,
+      targetAttrs: Seq[String],
+      maxDomainSize: Int,
+      maxAttrValueNum: Int,
+      samplingRatio: Double,
+      minCorrThres: Double,
+      edgeLabel: Boolean): String = {
+    assert(targetAttrs.nonEmpty)
+
+    val domainStatMap = {
+      val statMap = RepairApi.computeAndGetTableStats(inputView).mapValues(_.distinctCount)
+      val targetAttrSet = targetAttrs.toSet
+      statMap.filter { case (attr, stat) =>
+        targetAttrSet.contains(attr) && stat <= maxDomainSize
+      }
+    }
+    if (domainStatMap.size < 2) {
+      throw AnalysisException("At least two candidate attributes to build a dependency graph")
+    }
+
+    val attrPairsToComputeDeps = domainStatMap.keys.toSeq.combinations(2).map {
+      case p @ Seq(x, y) if domainStatMap(x) < domainStatMap(y) => p.reverse
+      case p => p
+    }.toSeq
+
+    val rowCount = spark.table(inputView).count()
+    val attrFreqStatDf = RepairApi.computeFreqStats(
+      inputView, attrPairsToComputeDeps, samplingRatio, 0.0)
+
+    val hubNodes = mutable.ArrayBuffer[(String, String)]()
+    val nodeDefs = mutable.ArrayBuffer[String]()
+    val edgeDefs = mutable.ArrayBuffer[String]()
+
+    withTempView(attrFreqStatDf, cache = true) { attrStatView =>
+      val targetAttrs = domainStatMap.keys.toSeq
+      val targetAttrPairs = attrPairsToComputeDeps.map { case Seq(x, y) => (x, y) }
+      val pairwiseStatMap = RepairApi.computePairwiseStats(
+        inputView, rowCount, attrStatView, targetAttrs, targetAttrPairs, domainStatMap)
+
+      val attrPairs = attrPairsToComputeDeps.filter { case Seq(x, y) =>
+        pairwiseStatMap(x).exists { case (attr, h) =>
+          y == attr && Math.max(h, 0.0) >= minCorrThres
+        }
+      }
+      attrPairs.foreach { case Seq(x, y) =>
+        val df = spark.sql(
+          s"""
+             |SELECT CAST($x AS STRING) x, collect_set(named_struct('y', CAST($y AS STRING), 'cnt', cnt)) ys
+             |FROM $attrStatView
+             |WHERE $x IS NOT NULL AND $y IS NOT NULL
+             |GROUP BY $x
+           """.stripMargin)
+
+        val rows = df.collect()
+        val truncate = maxAttrValueNum < rows.length
+        val edgeCands = rows.take(maxAttrValueNum).map { case Row(xv: String, ys: Seq[Row]) =>
+          val yvs = ys.map { case Row(y: String, cnt: Long) => (y, cnt) }
+          (xv, yvs)
+        }
+
+        def genNode(nodeName: String, values: Seq[String]): (String, Map[String, Int]) = {
+          val nn = s"${nodeName}_${nextNodeId.getAndIncrement()}"
+          val valuesWithIndex = values.zipWithIndex
+          hubNodes += ((nn, nodeName))
+          nodeDefs += generateNodeString(nn, if (truncate) valuesWithIndex :+ ("...", -1) else valuesWithIndex)
+          (nn, valuesWithIndex.toMap)
+        }
+        if (edgeCands.nonEmpty) {
+          val (xNodeName, valueToIndexMapX) = genNode(x, edgeCands.map(_._1))
+          val (yNodeName, valueToIndexMapY) = genNode(y, edgeCands.flatMap(_._2.map(_._1)).distinct)
+
+          def genEdge(from: String, to: String, cnt: Long, totalCnt: Long, label: Boolean): String = {
+            val p = (cnt + 0.0) / totalCnt
+            val w = 0.1 + Math.log(cnt) / Math.log((rowCount + 0.0) / valueToIndexMapX.size)
+            val c = s"gray${(100.0 * (1.0 - p)).toInt}"
+            val labelOpt = if (label) s"""label="$cnt/$totalCnt"""" else ""
+            s""""$xNodeName":${valueToIndexMapX(from)} -> "$yNodeName":${valueToIndexMapY(to)} """ +
+              s"""[ color="$c" penwidth="$w" $labelOpt ];"""
+          }
+
+          edgeCands.foreach { case (xv: String, yvs: Seq[(String, Long)]) =>
+            val totalCnt = yvs.map(_._2).sum
+            yvs.foreach { case (yv, cnt) =>
+              edgeDefs += genEdge(xv, yv, cnt, totalCnt, label = edgeLabel)
+            }
+          }
+        }
+      }
+    }
+
+    // Add entries for hub nodes
+    hubNodes.foreach { case (n, h) =>
+      nodeDefs += s""""$h" [ shape="box" ];"""
+      edgeDefs += s""""$n":nodeName -> "$h" [ arrowhead="none" penwidth="2.0" ];"""
+    }
+
+    generateGraphString(nodeDefs, edgeDefs)
+  }
+
+  private[python] val validImageFormatSet = Set("png", "svg")
+
+  private def isCommandAvailable(command: String): Boolean = {
+    val attempt = {
+      Try(Process(Seq("sh", "-c", s"command -v $command")).run(ProcessLogger(_ => ())).exitValue())
+    }
+    attempt.isSuccess && attempt.get == 0
+  }
+
+  // If the Graphviz dot command installed, converts the generated dot file
+  // into a specified-formatted image.
+  private def tryGenerateImageFile(format: String, src: String, dst: String): Unit = {
+    if (isCommandAvailable("dot")) {
+      try {
+        val commands = Seq("bash", "-c", s"dot -T$format $src > $dst")
+        BlockingLineStream(commands)
+      } catch {
+        case _ => // Do nothing
+      }
+    }
+  }
+
+  private[python] def generateDepGraph(
+      path: String,
+      inputView: String,
+      format: String,
+      targetAttrs: Seq[String],
+      maxDomainSize: Int,
+      maxAttrValueNum: Int,
+      samplingRatio: Double,
+      minCorrThres: Double,
+      edgeLabel: Boolean): Unit = {
+    val graphString = computeDepGraph(
+      inputView, targetAttrs, maxDomainSize, maxAttrValueNum,
+      samplingRatio, minCorrThres, edgeLabel)
+    if (!validImageFormatSet.contains(format.toLowerCase(Locale.ROOT))) {
+      throw AnalysisException(s"Invalid image format: $format")
+    }
+    val outputDir = new File(path)
+    if (!outputDir.mkdir()) {
+      throw AnalysisException(s"path file:$path already exists")
+    }
+    val filePrefix = "depgraph"
+    val dotFile = stringToFile(new File(outputDir, s"$filePrefix.dot"), graphString)
+    val srcFile = dotFile.getAbsolutePath
+    val dstFile = new File(outputDir, s"$filePrefix.$format").getAbsolutePath
+    tryGenerateImageFile(format, srcFile, dstFile)
+  }
 
   def computeFunctionalDeps(inputView: String, constraintFilePath: String): String = {
     logBasedOnLevel(s"computeFunctionalDep called with: discretizedInputView=$inputView " +
@@ -88,7 +281,7 @@ object DepGraphApi extends RepairBase {
     }.mkString("{", ",", "}")
   }
 
-  def computeFunctionDepMap(inputView: String, X: String, Y: String): String = {
+  def computeFunctionalDepMap(inputView: String, X: String, Y: String): String = {
     val df = spark.sql(
       s"""
          |SELECT CAST($X AS STRING) x, CAST(y[0] AS STRING) y FROM (
