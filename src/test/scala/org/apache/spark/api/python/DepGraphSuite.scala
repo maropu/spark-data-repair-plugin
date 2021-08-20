@@ -100,8 +100,8 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
              |  <table border="1" cellborder="0" cellspacing="0">
              |    <tr><td bgcolor="lightgray" port="nodeName"><i>y_4</i></td></tr>
              |    <tr><td port="0">test-2</td></tr>
-             |  <tr><td port="1">test-1</td></tr>
-             |  <tr><td port="2">test-3</td></tr>
+             |  <tr><td port="1">test-3</td></tr>
+             |  <tr><td port="2">test-1</td></tr>
              |  <tr><td port="3">test-2a</td></tr>
              |  </table>>];
              |
@@ -129,6 +129,7 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
              |  "y" [ shape="box" ];
              |  "z" [ shape="box" ];
              |  "z" [ shape="box" ];
+             |
              |  "x_1":nodeName -> "x" [ arrowhead="none" penwidth="2.0" ];
              |  "x_2":0 -> "z_3":0 [ color="gray33" penwidth="0.7309297535714574"  ];
              |  "x_2":0 -> "z_3":1 [ color="gray66" penwidth="0.1"  ];
@@ -145,10 +146,10 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
              |  "y_0":nodeName -> "y" [ arrowhead="none" penwidth="2.0" ];
              |  "y_4":0 -> "z_5":0 [ color="gray50" penwidth="0.1"  ];
              |  "y_4":0 -> "z_5":1 [ color="gray50" penwidth="0.1"  ];
-             |  "y_4":1 -> "z_5":1 [ color="gray25" penwidth="1.4547556456757276"  ];
-             |  "y_4":1 -> "z_5":2 [ color="gray75" penwidth="0.1"  ];
-             |  "y_4":2 -> "z_5":0 [ color="gray50" penwidth="0.1"  ];
-             |  "y_4":2 -> "z_5":2 [ color="gray50" penwidth="0.1"  ];
+             |  "y_4":1 -> "z_5":0 [ color="gray50" penwidth="0.1"  ];
+             |  "y_4":1 -> "z_5":2 [ color="gray50" penwidth="0.1"  ];
+             |  "y_4":2 -> "z_5":1 [ color="gray25" penwidth="1.4547556456757276"  ];
+             |  "y_4":2 -> "z_5":2 [ color="gray75" penwidth="0.1"  ];
              |  "y_4":3 -> "z_5":0 [ color="gray0" penwidth="0.1"  ];
              |  "y_4":nodeName -> "y" [ arrowhead="none" penwidth="2.0" ];
              |  "z_3":nodeName -> "z" [ arrowhead="none" penwidth="2.0" ];

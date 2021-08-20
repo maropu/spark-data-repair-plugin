@@ -92,8 +92,10 @@ object DepGraphApi extends RepairBase {
         targetAttrSet.contains(attr) && stat <= maxDomainSize
       }
     }
+
     if (domainStatMap.size < 2) {
-      throw AnalysisException("At least two candidate attributes to build a dependency graph")
+      throw AnalysisException("At least two candidate attributes needed to " +
+        "build a dependency graph")
     }
 
     val attrPairsToComputeDeps = domainStatMap.keys.toSeq.combinations(2).map {
@@ -102,8 +104,9 @@ object DepGraphApi extends RepairBase {
     }.toSeq
 
     val rowCount = spark.table(inputView).count()
+    val attrSetToComputeFreqStats = domainStatMap.keys.map(k => Seq(k)).toSeq ++ attrPairsToComputeDeps
     val attrFreqStatDf = RepairApi.computeFreqStats(
-      inputView, attrPairsToComputeDeps, samplingRatio, 0.0)
+      inputView, attrSetToComputeFreqStats, samplingRatio, 0.0)
 
     val hubNodes = mutable.ArrayBuffer[(String, String)]()
     val nodeDefs = mutable.ArrayBuffer[String]()
@@ -120,6 +123,12 @@ object DepGraphApi extends RepairBase {
           y == attr && Math.max(h, 0.0) >= minCorrThres
         }
       }
+
+      if (attrPairs.isEmpty) {
+        throw AnalysisException("No highly-correlated attribute pair " +
+          s"(threshold: $minCorrThres) found")
+      }
+
       attrPairs.foreach { case Seq(x, y) =>
         val df = spark.sql(
           s"""

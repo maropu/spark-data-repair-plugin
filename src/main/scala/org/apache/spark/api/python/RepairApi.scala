@@ -305,7 +305,12 @@ object RepairApi extends RepairBase {
              """.stripMargin)
 
           df.collect().map { row =>
-            if (!row.isNullAt(0)) row.getDouble(0) else 0.0
+            if (!row.isNullAt(0)) {
+              row.getDouble(0)
+            } else {
+              logWarning(s"No frequency stat found for $attrKey")
+              0.0
+            }
           }.head
         }
       }.toMap
