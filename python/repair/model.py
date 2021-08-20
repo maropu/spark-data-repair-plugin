@@ -1434,6 +1434,8 @@ class RepairModel():
         cols = map(lambda f: (f.name, _to_np_types(f.dataType)), schema.fields)
         return dict(filter(lambda f: f[1] is not None, cols))
 
+    # TODO: What is the best way to repair appended new data if we have already
+    # clean (or repaired) data?
     @_spark_job_group(name="repairing")
     def _repair(self, models: List[Any], continous_columns: List[str],
                 dirty_rows_df: DataFrame, error_cells_df: DataFrame,
