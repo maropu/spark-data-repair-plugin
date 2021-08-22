@@ -1,0 +1,156 @@
+Python 3.6.8 |Anaconda, Inc.| (default, Dec 29 2018, 19:04:46) 
+
+Using Spark's default log4j profile: org/apache/spark/log4j-defaults.properties
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /__ / .__/\_,_/_/ /_/\_\   version 3.1.2
+      /_/
+
+Using Python version 3.6.8 (default, Dec 29 2018 19:04:46)
+SparkSession available as 'spark'.
+Scavenger APIs (version 0.1.0-spark3.1-EXPERIMENTAL) available as 'scavenger'.
+>>> # Loads a target data then defines tables for it
+... spark.read \
+...     .option("header", True) \
+...     .csv("./testdata/raha/flights.csv") \
+...     .write \
+...     .saveAsTable("flights")
+>>>                                                                             
+>>> scavenger.misc \
+...     .options({"db_name": "default", "table_name": "flights", "row_id": "tuple_id"}) \
+...     .flatten() \
+...     .write \
+...     .saveAsTable("flights_flatten")
+>>> 
+>>> spark.table("flights").show(1)
++--------+---+---------------+--------------+------------+--------------+------------+
+|tuple_id|src|         flight|sched_dep_time|act_dep_time|sched_arr_time|act_arr_time|
++--------+---+---------------+--------------+------------+--------------+------------+
+|       1| aa|AA-3859-IAH-ORD|     7:10 a.m.|   7:16 a.m.|     9:40 a.m.|   9:32 a.m.|
++--------+---+---------------+--------------+------------+--------------+------------+
+only showing top 1 row
+
+>>> spark.table("flights_flatten").show(1)
++--------+---------+-----+
+|tuple_id|attribute|value|
++--------+---------+-----+
+|       1|      src|   aa|
++--------+---------+-----+
+only showing top 1 row
+
+>>> 
+>>> # Loads a ground truth data then defines tables for it
+... spark.read \
+...     .option("header", True) \
+...     .csv("./testdata/raha/flights_clean.csv") \
+...     .write \
+...     .saveAsTable("flights_clean")
+>>> 
+>>> spark.table("flights_flatten") \
+...     .join(spark.table("flights_clean"), ["tuple_id", "attribute"], "inner") \
+...     .where("not(value <=> correct_val)") \
+...     .write \
+...     .saveAsTable("error_cells_ground_truth")
+>>> 
+>>> spark.table("flights_clean").show(1)
++--------+---------+-----------+
+|tuple_id|attribute|correct_val|
++--------+---------+-----------+
+|       1|      src|         aa|
++--------+---------+-----------+
+only showing top 1 row
+
+>>> spark.table("error_cells_ground_truth").show(1)
++--------+------------+-----+-----------+
+|tuple_id|   attribute|value|correct_val|
++--------+------------+-----+-----------+
+|       2|act_arr_time| null| 10:30 p.m.|
++--------+------------+-----+-----------+
+only showing top 1 row
+
+>>> # Detects error cells then repairs them
+... repaired_df = scavenger.repair \
+...     .setDbName("default") \
+...     .setTableName("flights") \
+...     .setRowId("tuple_id") \
+...     .setErrorCells("error_cells_ground_truth") \
+...     .setDiscreteThreshold(400) \
+...     .option("hp.no_progress_loss", "10") \
+...     .run()
+2021-08-20 15:14:24.274:[Error Detection Phase] Error cells provided by `error_cells_20210820151424`
+2021-08-20 15:14:25.237:[Error Detection Phase] 4920 noisy cells found (34.51178451178451%)
+2021-08-20 15:14:25.237:Elapsed time (name: error detection) is 1.092818021774292(s)
+2021-08-20 15:14:26.732:Target repairable columns are act_dep_time,act_arr_time,sched_arr_time,sched_dep_time in noisy columns (act_dep_time,act_arr_time,sched_arr_time,sched_dep_time)
+2021-08-20 15:14:26.733:[Error Detection Phase] Analyzing cell domains to fix error cells...
+2021-08-20 15:14:30.609:Elapsed time (name: cell domain analysis) is 3.876224994659424(s)
+2021-08-20 15:14:31.305:[Error Detection Phase] 0 noisy cells fixed and 4920 error cells (34.51178451178451%) remaining...
+2021-08-20 15:14:33.776:[Repair Model Training Phase] Building 4 models to repair the cells in act_dep_time,act_arr_time,sched_arr_time,sched_dep_time
+2021-08-20 15:14:34.517:Building 1/4 model... type=classfier y=act_dep_time features=src,flight,sched_dep_time,sched_arr_time,act_arr_time #rows=818 #class=85
+2021-08-20 15:15:32.735:hyperopt: #eval=26/100000000
+2021-08-20 15:15:34.844:Finishes building 'act_dep_time' model...  score=0.947371816123698 elapsed=60.325664043426514s
+2021-08-20 15:15:35.004:Building 2/4 model... type=classfier y=act_arr_time features=src,flight,sched_dep_time,act_dep_time,sched_arr_time #rows=1025 #class=89
+2021-08-20 15:16:22.557:hyperopt: #eval=19/100000000
+2021-08-20 15:16:24.720:Finishes building 'act_arr_time' model...  score=0.972248352798867 elapsed=49.715529918670654s
+2021-08-20 15:16:24.869:Building 3/4 model... type=classfier y=sched_arr_time features=src,flight,sched_dep_time,act_dep_time,act_arr_time #rows=1276 #class=94
+2021-08-20 15:17:20.996:hyperopt: #eval=19/100000000
+2021-08-20 15:17:23.413:Finishes building 'sched_arr_time' model...  score=0.946360663890875 elapsed=58.54324007034302s
+2021-08-20 15:17:23.624:Building 4/4 model... type=classfier y=sched_dep_time features=src,flight,act_dep_time,sched_arr_time,act_arr_time #rows=1465 #class=79
+2021-08-20 15:18:21.269:hyperopt: #eval=19/100000000
+2021-08-20 15:18:23.706:Finishes building 'sched_dep_time' model...  score=0.9426474203923378 elapsed=60.08193802833557s
+2021-08-20 15:18:23.707:Elapsed time (name: repair model training) is 230.8121039867401(s)
+2021-08-20 15:18:25.834:[Repairing Phase] Computing 4920 repair updates in 1904 rows...
+2021-08-20 15:18:31.526:Elapsed time (name: repairing) is 7.817564964294434(s)
+2021-08-20 15:18:31.803:!!!Total Processing time is 247.69667196273804(s)!!!
+>>>
+>>> 
+>>> # Computes performance numbers (precision & recall)
+... #  - Precision: the fraction of correct repairs, i.e., repairs that match
+... #    the ground truth, over the total number of repairs performed
+... #  - Recall: correct repairs over the total number of errors
+... pdf = repaired_df.join(
+...     spark.table("flights_clean").where("attribute != 'Score'"),
+...     ["tuple_id", "attribute"], "inner")
+>>> rdf = repaired_df.join(
+...     spark.table("error_cells_ground_truth").where("attribute != 'Score'"),
+...     ["tuple_id", "attribute"], "right_outer")
+>>> 
+>>> # Compares predicted values with the correct ones
+... pdf.orderBy("attribute").show()
++--------+------------+-------------+----------+-----------+                    
+|tuple_id|   attribute|current_value|  repaired|correct_val|
++--------+------------+-------------+----------+-----------+
+|    1209|act_arr_time|   12:10 p.m.| 3:30 p.m.| 11:56 a.m.|
+|     142|act_arr_time|    2:21 p.m.| 7:25 p.m.|  2:27 p.m.|
+|    1215|act_arr_time|         null|12:09 p.m.| 12:09 p.m.|
+|    1044|act_arr_time|Not Available| 4:09 p.m.|  3:50 p.m.|
+|    1243|act_arr_time|    7:37 p.m.| 7:25 p.m.|  7:39 p.m.|
+|    1197|act_arr_time|         null| 6:34 p.m.|  6:34 p.m.|
+|    1259|act_arr_time|    5:22 p.m.| 5:42 p.m.|  5:42 p.m.|
+|    1142|act_arr_time|         null| 6:40 p.m.|  6:40 p.m.|
+|    1263|act_arr_time|    2:39 p.m.| 7:25 p.m.|  2:46 p.m.|
+|    1150|act_arr_time|    5:34 p.m.| 5:43 p.m.|  5:43 p.m.|
+|    1265|act_arr_time|         null| 3:33 p.m.|  3:33 p.m.|
+|     116|act_arr_time|   11:35 p.m.| 7:25 p.m.| 11:50 p.m.|
+|    1269|act_arr_time|    3:04 p.m.| 7:25 p.m.|  3:16 p.m.|
+|    1171|act_arr_time|         null| 9:32 a.m.|  9:32 a.m.|
+|    1270|act_arr_time|         null| 9:14 a.m.| 12:21 a.m.|
+|    1190|act_arr_time|         null| 5:34 p.m.|  5:34 p.m.|
+|    1285|act_arr_time|         null| 4:17 p.m.|  4:17 p.m.|
+|    1311|act_arr_time|   10:12 a.m.|10:16 a.m.| 10:16 a.m.|
+|    1315|act_arr_time|    2:21 p.m.| 7:25 p.m.|  2:27 p.m.|
+|     103|act_arr_time|   10:43 a.m.| 7:25 p.m.| 11:06 a.m.|
++--------+------------+-------------+----------+-----------+
+only showing top 20 rows
+
+>>> 
+>>> precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
+>>> recall = rdf.where("repaired <=> correct_val").count() / rdf.count()        
+>>> f1 = (2.0 * precision * recall) / (precision + recall)                      
+>>> 
+>>> print("Precision={} Recall={} F1={}".format(precision, recall, f1))
+Precision=0.749339296605001 Recall=0.7491869918699187 F1=0.7492631364976116
+

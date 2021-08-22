@@ -1,0 +1,164 @@
+Python 3.6.8 |Anaconda, Inc.| (default, Dec 29 2018, 19:04:46) 
+
+Using Spark's default log4j profile: org/apache/spark/log4j-defaults.properties
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /__ / .__/\_,_/_/ /_/\_\   version 3.1.2
+      /_/
+
+Using Python version 3.6.8 (default, Dec 29 2018 19:04:46)
+SparkSession available as 'spark'.
+Scavenger APIs (version 0.1.0-spark3.1-EXPERIMENTAL) available as 'scavenger'.
+>>> # Loads a target data then defines tables for it
+... spark.read \
+...     .option("header", True) \
+...     .csv("./testdata/raha/beers.csv") \
+...     .write \
+...     .saveAsTable("beers")
+>>>                                                                             
+>>> scavenger.misc \
+...     .options({"db_name": "default", "table_name": "beers", "row_id": "index"}) \
+...     .flatten() \
+...     .write \
+...     .saveAsTable("beers_flatten")
+>>> 
+>>> spark.table("beers").show(1)
++-----+----+---------+-------------------+-------+----+---+----------+--------------------+----+-----+
+|index|  id|beer_name|              style| ounces| abv|ibu|brewery_id|        brewery_name|city|state|
++-----+----+---------+-------------------+-------+----+---+----------+--------------------+----+-----+
+|    1|1436| Pub Beer|American Pale Lager|12.0 oz|0.05|N/A|       408|10 Barrel Brewing...|Bend|   OR|
++-----+----+---------+-------------------+-------+----+---+----------+--------------------+----+-----+
+only showing top 1 row
+
+>>> spark.table("beers_flatten").show(1)
++-----+---------+-----+
+|index|attribute|value|
++-----+---------+-----+
+|    1|       id| 1436|
++-----+---------+-----+
+only showing top 1 row
+
+>>> 
+>>> # Loads a ground truth data then defines tables for it
+... spark.read \
+...     .option("header", True) \
+...     .csv("./testdata/raha/beers_clean.csv") \
+...     .write \
+...     .saveAsTable("beers_clean")
+>>> 
+>>> spark.table("beers_flatten") \
+...     .join(spark.table("beers_clean"), ["index", "attribute"], "inner") \
+...     .where("not(value <=> correct_val)") \
+...     .write \
+...     .saveAsTable("error_cells_ground_truth")
+>>> 
+>>> spark.table("beers_clean").show(1)
++-----+---------+-----------+
+|index|attribute|correct_val|
++-----+---------+-----------+
+|    1|       id|       1436|
++-----+---------+-----------+
+only showing top 1 row
+
+>>> spark.table("error_cells_ground_truth").show(1)
++-----+---------+-------+-----------+
+|index|attribute|  value|correct_val|
++-----+---------+-------+-----------+
+|    1|   ounces|12.0 oz|         12|
++-----+---------+-------+-----------+
+only showing top 1 row
+
+>>> df1 = scavenger.misc.options({"table_name": "beers"}).describe()
+>>> df1.show()
++------------+-----------+----+----+-------+------+------+----+
+|    attrName|distinctCnt| min| max|nullCnt|avgLen|maxLen|hist|
++------------+-----------+----+----+-------+------+------+----+
+|   beer_name|       2151|null|null|      0|    18|    52|null|
+|       index|       2355|null|null|      0|     4|     4|null|
+|brewery_name|        580|null|null|      0|    23|    35|null|
+|        city|        486|null|null|      0|     9|    21|null|
+|      ounces|         25|null|null|      0|     9|    18|null|
+|          id|       2394|null|null|      0|     4|     4|null|
+|       state|         54|null|null|    127|     2|     2|null|
+|       style|        104|null|null|      5|    18|    35|null|
+|  brewery_id|        544|null|null|      0|     3|     3|null|
+|         abv|        126|null|null|     62|     6|    21|null|
+|         ibu|        114|null|null|      0|     3|     3|null|
++------------+-----------+----+----+-------+------+------+----+
+
+>>> # Detects error cells then repairs them
+... repaired_df = scavenger.repair \
+...     .setDbName("default") \
+...     .setTableName("beers") \
+...     .setRowId("index") \
+...     .setErrorCells("error_cells_ground_truth") \
+...     .setTargets(["state"]) \
+...     .setDiscreteThreshold(600) \
+...     .option("hp.no_progress_loss", "100") \
+...     .run()
+2021-08-22 21:50:04.428:[Error Detection Phase] Error cells provided by `error_cells_20210822215004`
+2021-08-22 21:50:04.839:[Error Detection Phase] 127 noisy cells found (0.5269709543568465%)
+2021-08-22 21:50:04.840:Elapsed time (name: error detection) is 0.47814321517944336(s)
+2021-08-22 21:50:06.207:Target repairable columns are state in noisy columns (state)
+2021-08-22 21:50:06.208:[Error Detection Phase] Analyzing cell domains to fix error cells...
+2021-08-22 21:50:09.586:Elapsed time (name: cell domain analysis) is 3.3781659603118896(s)
+2021-08-22 21:50:10.203:[Error Detection Phase] 0 noisy cells fixed and 127 error cells (0.5269709543568465%) remaining...
+2021-08-22 21:50:11.826:[Repair Model Training Phase] Building 1 models to repair the cells in state
+2021-08-22 21:50:12.444:Building 1/1 model... type=classfier y=state features=id,beer_name,style,ounces,abv,ibu,brewery_id,brewery_name,city #rows=2283 #class=51
+
+^[2021-08-22 22:13:15.385:hyperopt: #eval=249/100000000
+2021-08-22 22:13:19.370:Finishes building 'state' model...  score=0.7021083157928395 elapsed=1386.9254999160767s
+2021-08-22 22:13:19.372:Elapsed time (name: repair model training) is 1388.0131032466888(s)
+2021-08-22 22:13:22.315:[Repairing Phase] Computing 127 repair updates in 127 rows...
+2021-08-22 22:13:25.144:Elapsed time (name: repairing) is 5.770725965499878(s)
+2021-08-22 22:13:25.247:!!!Total Processing time is 1400.9072451591492(s)!!!
+>>>
+>>> # Computes performance numbers (precision & recall)
+... #  - Precision: the fraction of correct repairs, i.e., repairs that match
+... #    the ground truth, over the total number of repairs performed
+... #  - Recall: correct repairs over the total number of errors
+... pdf = repaired_df.join(spark.table("beers_clean"), ["index", "attribute"], "inner")
+>>> rdf = repaired_df.join(
+...     spark.table("error_cells_ground_truth").where("attribute = 'state'"),
+...     ["index", "attribute"], "right_outer")
+>>> 
+>>> # Compares predicted values with the correct ones
+... pdf.orderBy("attribute").show()
++-----+---------+-------------+--------+-----------+
+|index|attribute|current_value|repaired|correct_val|
++-----+---------+-------------+--------+-----------+
+| 1343|    state|         null|      OR|         IL|
+| 1933|    state|         null|      OR|         ID|
+| 1980|    state|         null|      OR|         IL|
+| 2045|    state|         null|      OR|         IN|
+| 2218|    state|         null|      OR|         PA|
+|  231|    state|         null|      OR|         MN|
+|  353|    state|         null|      OR|         CO|
+|  585|    state|         null|      OR|         VA|
+|  780|    state|         null|      OR|         CO|
+|  919|    state|         null|      OR|         IL|
+|  941|    state|         null|      OR|         IN|
+|  953|    state|         null|      OR|         CO|
+| 1188|    state|         null|      OR|         NM|
+| 1247|    state|         null|      OR|         OH|
+| 1285|    state|         null|      OR|         TX|
+|  140|    state|         null|      OR|         NC|
+| 1560|    state|         null|      OR|         CO|
+| 1642|    state|         null|      OR|         MI|
+| 1801|    state|         null|      OR|         AZ|
+| 1884|    state|         null|      OR|         CO|
++-----+---------+-------------+--------+-----------+
+only showing top 20 rows
+
+>>> 
+>>> precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
+>>> recall = rdf.where("repaired <=> correct_val").count() / rdf.count()
+>>> f1 = (2.0 * precision * recall) / (precision + recall)
+>>> 
+>>> print("Precision={} Recall={} F1={}".format(precision, recall, f1))
+Precision=0.05511811023622047 Recall=0.05511811023622047 F1=0.05511811023622047
+

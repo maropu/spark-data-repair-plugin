@@ -43,7 +43,7 @@ object RepairMiscApi extends RepairBase {
 
     val (inputDf, _) = checkAndGetQualifiedInputName(dbName, tableName, rowId)
     val expr = inputDf.schema.filter(_.name != rowId)
-      .map { f => s"STRUCT($rowId, '${f.name}', CAST(${f.name} AS STRING))" }
+      .map { f => s"STRUCT($rowId, '${f.name}', CAST(`${f.name}` AS STRING))" }
       .mkString("ARRAY(", ", ", ")")
     inputDf.selectExpr(s"INLINE($expr) AS ($rowId, attribute, value)")
   }

@@ -1,0 +1,163 @@
+Python 3.6.8 |Anaconda, Inc.| (default, Dec 29 2018, 19:04:46) 
+
+Using Spark's default log4j profile: org/apache/spark/log4j-defaults.properties
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /__ / .__/\_,_/_/ /_/\_\   version 3.1.2
+      /_/
+
+Using Python version 3.6.8 (default, Dec 29 2018 19:04:46)
+SparkSession available as 'spark'.
+Scavenger APIs (version 0.1.0-spark3.1-EXPERIMENTAL) available as 'scavenger'.
+>>> # Loads a target data then defines tables for it
+... spark.read \
+...     .option("header", True) \
+...     .csv("./testdata/raha/movies.csv") \
+...     .write \
+...     .saveAsTable("movies")
+>>>                                                                             
+>>> scavenger.misc \
+...     .options({"db_name": "default", "table_name": "movies", "row_id": "id"}) \
+...     .flatten() \
+...     .write \
+...     .saveAsTable("movies_flatten")
+>>> 
+>>> spark.table("movies").show(1)
++---------+------+----+--------------------+----------------+--------------------+--------------------+--------------------+--------+-------+--------+------------+------------+-------------------+--------------------+--------------------+--------------------+
+|       id|  name|year|        release_date|        director|             creator|              actors|           full_cast|language|country|duration|rating_value|rating_count|       review_count|               genre|   filming_locations|         description|
++---------+------+----+--------------------+----------------+--------------------+--------------------+--------------------+--------+-------+--------+------------+------------+-------------------+--------------------+--------------------+--------------------+
+|tt0054215|Psycho|1960|8 September 1960 ...|Alfred Hitchcock|Joseph Stefano,Ro...|Anthony Perkins,J...|Anthony Perkins,V...| English|    USA| 109 min|         8.6|     379,998|976 user,290 critic|Horror,Mystery,Th...|Title and Trust B...|A Phoenix secreta...|
++---------+------+----+--------------------+----------------+--------------------+--------------------+--------------------+--------+-------+--------+------------+------------+-------------------+--------------------+--------------------+--------------------+
+only showing top 1 row
+
+>>> spark.table("movies_flatten").show(1)
++---------+---------+------+
+|       id|attribute| value|
++---------+---------+------+
+|tt0054215|     name|Psycho|
++---------+---------+------+
+only showing top 1 row
+
+>>> 
+>>> # Loads a ground truth data then defines tables for it
+... spark.read \
+...     .option("header", True) \
+...     .csv("./testdata/raha/movies_clean.csv") \
+...     .write \
+...     .saveAsTable("movies_clean")
+>>> 
+>>> spark.table("movies_flatten") \
+...     .join(spark.table("movies_clean"), ["id", "attribute"], "inner") \
+...     .where("not(value <=> correct_val)") \
+...     .write \
+...     .saveAsTable("error_cells_ground_truth")
+>>> 
+>>> spark.table("movies_clean").show(1)
++---------+---------+-----------+
+|       id|attribute|correct_val|
++---------+---------+-----------+
+|tt0054215|     name|     Psycho|
++---------+---------+-----------+
+only showing top 1 row
+
+>>> spark.table("error_cells_ground_truth").show(1)
++---------+------------+-------+-----------+
+|       id|   attribute|  value|correct_val|
++---------+------------+-------+-----------+
+|tt0054215|rating_count|379,998|     379998|
++---------+------------+-------+-----------+
+only showing top 1 row
+
+>>> # Detects error cells then repairs them
+... repaired_df = scavenger.repair \
+...     .setDbName("default") \
+...     .setTableName("movies") \
+...     .setRowId("id") \
+...     .setErrorCells("error_cells_ground_truth") \
+...     .setDiscreteThreshold(600) \
+...     .option("hp.no_progress_loss", "100") \
+...     .run()
+
+# Computes performance numbers (precision & recall)
+#  - Precision: the fraction of correct repairs, i.e., repairs that match
+#    the ground truth, over the total number of repairs performed
+#  - Recall: correct repairs over the total number of errors
+pdf = repaired_df.join(spark.table("movies_clean"), ["id", "attribute"], "inner")
+rdf = repaired_df.join(
+    spark.table("error_cells_ground_truth"),
+    ["id", "attribute"], "right_outer")
+
+# Compares predicted values with the correct ones
+pdf.orderBy("attribute").show()
+
+precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
+recall = rdf.where("repaired <=> correct_val").count() / rdf.count()
+f1 = (2.0 * precision * recall) / (precision + recall)
+
+print("Precision={} Recall={} F1={}".format(precision, recall, f1))2021-08-20 23:23:56.903:[Error Detection Phase] Error cells provided by `error_cells_20210820232356`
+2021-08-20 23:23:57.601:[Error Detection Phase] 6007 noisy cells found (5.080345060893099%)
+2021-08-20 23:23:57.601:Elapsed time (name: error detection) is 0.8064980506896973(s)
+2021-08-20 23:23:59.053:Target repairable columns are rating_value in noisy columns (rating_count,rating_value)
+2021-08-20 23:23:59.054:[Error Detection Phase] Analyzing cell domains to fix error cells...
+2021-08-20 23:24:01.823:Elapsed time (name: cell domain analysis) is 2.7695717811584473(s)
+2021-08-20 23:24:02.691:[Error Detection Phase] 0 noisy cells fixed and 6007 error cells (5.080345060893099%) remaining...
+2021-08-20 23:24:04.832:[Repair Model Training Phase] Building 1 models to repair the cells in rating_value
+2021-08-20 23:24:06.076:Building 1/1 model... type=classfier y=rating_value features=name,year,release_date,director,creator,actors,full_cast,language,country,duration,rating_count,review_count,genre,filming_locations,description #rows=6467 #class=219
+2021-08-21 01:12:43.607:hyperopt: #eval=200/100000000
+2021-08-21 01:13:08.965:Finishes building 'rating_value' model...  score=0.012455490764400258 elapsed=6542.886827945709s
+2021-08-21 01:13:08.975:Elapsed time (name: repair model training) is 6544.613106966019(s)
+2021-08-21 01:13:12.298:[Repairing Phase] Computing 669 repair updates in 669 rows...
+2021-08-21 01:13:18.307:Elapsed time (name: repairing) is 9.329898834228516(s)
+2021-08-21 01:13:18.519:!!!Total Processing time is 6561.761432170868(s)!!!
+>>>
+>>> # Computes performance numbers (precision & recall)
+... #  - Precision: the fraction of correct repairs, i.e., repairs that match
+... #    the ground truth, over the total number of repairs performed
+... #  - Recall: correct repairs over the total number of errors
+... pdf = repaired_df.join(
+...     spark.table("movies_clean").where("attribute != 'Score'"),
+...     ["id", "attribute"], "inner")
+>>> rdf = repaired_df.join(
+...     spark.table("error_cells_ground_truth").where("attribute != 'Score'"),
+...     ["id", "attribute"], "right_outer")
+>>>
+>>> # Compares predicted values with the correct ones
+... pdf.orderBy("attribute").show()
++---------+------------+-------------+-------------+-----------+
+|       id|   attribute|current_value|     repaired|correct_val|
++---------+------------+-------------+-------------+-----------+
+|tt0014945|rating_value|          8.0|  6.8/10,7/10|          8|
+|tt0019421|rating_value|          8.0|          9.3|          8|
+|tt0021884|rating_value|          8.0|          9.3|          8|
+|tt0022208|rating_value|          7.0|          9.3|          7|
+|tt0024239|rating_value|          7.0|          7.1|          7|
+|tt0029870|rating_value|          8.0|          9.3|          8|
+|tt0041373|rating_value|          7.0|          9.3|          7|
+|tt0043812|rating_value|          7.0|          9.3|          7|
+|tt0045053|rating_value|          7.0|8.5/10,8.6/10|          7|
+|tt0049314|rating_value|          7.0|          9.3|          7|
+|tt0052325|rating_value|          6.0|          9.3|          6|
+|tt0052837|rating_value|          7.0|          9.3|          7|
+|tt0054127|rating_value|          7.0|          8.3|          7|
+|tt0054331|rating_value|          8.0|          9.3|          8|
+|tt0055256|rating_value|          8.0|          9.3|          8|
+|tt0057163|rating_value|          8.0|          9.3|          8|
+|tt0061722|rating_value|          8.0|          9.3|          8|
+|tt0063350|rating_value|          8.0|          9.3|          8|
+|tt0064651|rating_value|          7.0|          8.1|          7|
+|tt0065134|rating_value|          7.0|          8.5|          7|
++---------+------------+-------------+-------------+-----------+
+only showing top 20 rows
+
+>>>  
+>>> precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
+>>> recall = rdf.where("repaired <=> correct_val").count() / rdf.count()
+>>> f1 = (2.0 * precision * recall) / (precision + recall + 0.0001)
+>>>
+>>> print("Precision={} Recall={} F1={}".format(precision, recall, f1))
+Precision=0.0 Recall=0.0 F1=0.0
+

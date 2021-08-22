@@ -1729,7 +1729,7 @@ class RepairModel():
         if not repair_data:
             repair_candidates_df = self._flatten(self._create_temp_view(repaired_df)) \
                 .join(error_cells_df, [str(self.row_id), "attribute"], "inner") \
-                .selectExpr("tid", "attribute", "current_value", "value repaired") \
+                .selectExpr(self.row_id, "attribute", "current_value", "value repaired") \
                 .where("repaired IS NULL OR not(current_value <=> repaired)")
             return repair_candidates_df
         else:

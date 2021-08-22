@@ -1,0 +1,196 @@
+Python 3.6.8 |Anaconda, Inc.| (default, Dec 29 2018, 19:04:46)
+
+Using Spark's default log4j profile: org/apache/spark/log4j-defaults.properties
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /__ / .__/\_,_/_/ /_/\_\   version 3.1.2
+      /_/
+
+Using Python version 3.6.8 (default, Dec 29 2018 19:04:46)
+Spark context Web UI available at http://192.168.3.2:4040
+Spark context available as 'sc' (master = local[*], app id = local-1629595991507).
+SparkSession available as 'spark'.
+Scavenger APIs (version 0.1.0-spark3.1-EXPERIMENTAL) available as 'scavenger'.
+>>> # Loads a target data then defines tables for it
+... spark.read \
+...     .option("header", True) \
+...     .csv("./testdata/raha/tax.csv") \
+...     .write \
+...     .saveAsTable("tax")
+>>>                                                                             
+>>> scavenger.misc \
+...     .options({"db_name": "default", "table_name": "tax", "row_id": "tid"}) \
+...     .flatten() \
+...     .write \
+...     .saveAsTable("tax_flatten")
+>>>                                                                             
+>>> spark.table("tax").show(1)
++---+--------+-------+------+---------+--------+----------+-----+-----+--------------+---------+------+----+------------+-------------+-----------+
+|tid|  f_name| l_name|gender|area_code|   phone|      city|state|  zip|marital_status|has_child|salary|rate|single_exemp|married_exemp|child_exemp|
++---+--------+-------+------+---------+--------+----------+-----+-----+--------------+---------+------+----+------------+-------------+-----------+
+|  1|Pengyuan|Zendler|     F|      508|744-9007|SWAMPSCOTT|   MA|01907|             M|        N| 90000| 5.3|           0|         7150|          0|
++---+--------+-------+------+---------+--------+----------+-----+-----+--------------+---------+------+----+------------+-------------+-----------+
+only showing top 1 row
+
+>>> spark.table("tax_flatten").show(1)
++---+---------+--------+
+|tid|attribute|   value|
++---+---------+--------+
+|  1|   f_name|Pengyuan|
++---+---------+--------+
+only showing top 1 row
+
+>>> 
+>>> # Loads a ground truth data then defines tables for it
+... spark.read \
+...     .option("header", True) \
+...     .csv("./testdata/raha/tax_clean.csv") \
+...     .write \
+...     .saveAsTable("tax_clean")
+>>>                                                                             
+>>> spark.table("tax_flatten") \
+...     .join(spark.table("tax_clean"), ["tid", "attribute"], "inner") \
+...     .where("not(value <=> correct_val)") \
+...     .write \
+...     .saveAsTable("error_cells_ground_truth")
+>>>                                                                             
+>>> spark.table("tax_clean").show(1)
++---+---------+-----------+
+|tid|attribute|correct_val|
++---+---------+-----------+
+|  1|   f_name|   Pengyuan|
++---+---------+-----------+
+only showing top 1 row
+
+>>> spark.table("error_cells_ground_truth").show(1)
++------+---------+-----+-----------+
+|   tid|attribute|value|correct_val|
++------+---------+-----+-----------+
+|100055|     rate|  0.0|          0|
++------+---------+-----+-----------+
+only showing top 1 row
+
+>>> # Shows column stats
+... scavenger.misc.options({"table_name": "tax"}).describe().show()
++--------------+-----------+----+----+-------+------+------+----+               
+|      attrName|distinctCnt| min| max|nullCnt|avgLen|maxLen|hist|
++--------------+-----------+----+----+-------+------+------+----+
+| married_exemp|         29|null|null|      0|     3|     5|null|
+|        gender|          2|null|null|      0|     1|     1|null|
+|     has_child|          2|null|null|      0|     1|     1|null|
+|           tid|     197931|null|null|      0|     6|     6|null|
+|         state|         56|null|null|      0|     3|     4|null|
+|          rate|        286|null|null|      0|     5|     9|null|
+|        l_name|       9821|null|null|      0|     8|    18|null|
+|  single_exemp|         29|null|null|      0|     2|     5|null|
+|     area_code|        296|null|null|      0|     3|     3|null|
+|        salary|         20|null|null|      0|     5|     6|null|
+|          city|      18005|null|null|      0|     9|    27|null|
+|         phone|     196498|null|null|      0|     8|     8|null|
+|           zip|      38009|null|null|      0|     5|     5|null|
+|   child_exemp|         27|null|null|      0|     2|     4|null|
+|marital_status|          2|null|null|      0|     1|     1|null|
+|        f_name|      10233|null|null|      0|     7|    17|null|
++--------------+-----------+----+----+-------+------+------+----+
+
+>>> # Detects error cells then repairs them
+... repaired_df = scavenger.repair \
+...     .setDbName("default") \
+...     .setTableName("tax") \
+...     .setRowId("tid") \
+...     .setErrorCells("error_cells_ground_truth") \
+...     .setTargets(["state", "marital_status", "has_child"]) \
+...     .setDiscreteThreshold(300) \
+...     .option("hp.no_progress_loss", "100") \
+...     .run()
+
+# Computes performance numbers (precision & recall)
+#  - Precision: the fraction of correct repairs, i.e., repairs that match
+#    the ground truth, over the total number of repairs performed
+#  - Recall: correct repairs over the total number of errors
+pdf = repaired_df.join(spark.table("tax_clean"), ["tid", "attribute"], "inner")
+rdf = repaired_df.join(
+    spark.table("error_cells_ground_truth").where("attribute IN ('state', 'marital_status', 'has_child')"),
+    ["tid", "attribute"], "right_outer")
+
+# Compares predicted values with the correct ones
+pdf.orderBy("attribute").show()
+
+precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
+recall = rdf.where("repaired <=> correct_val").count() / rdf.count()
+f1 = (2.0 * precision * recall) / (precision + recall)
+
+print("Precision={} Recall={} F1={}".format(precision, recall, f1))2021-08-22 22:50:23.203:[Error Detection Phase] Error cells provided by `error_cells_20210822225023`
+2021-08-22 22:50:23.693:[Error Detection Phase] 1000 noisy cells found (0.03333333333333333%)
+2021-08-22 22:50:23.693:Elapsed time (name: error detection) is 0.5920810699462891(s)
+2021-08-22 22:50:25.815:Target repairable columns are has_child,marital_status,state in noisy columns (has_child,marital_status,state)
+2021-08-22 22:50:25.815:[Error Detection Phase] Analyzing cell domains to fix error cells...
+2021-08-22 22:50:31.504:Elapsed time (name: cell domain analysis) is 5.688451766967773(s)
+2021-08-22 22:50:32.525:[Error Detection Phase] 0 noisy cells fixed and 1000 error cells (0.03333333333333333%) remaining...
+2021-08-22 22:50:35.432:[Repair Model Training Phase] Building 3 models to repair the cells in has_child,marital_status,state
+2021-08-22 22:50:37.402:To reduce training data, extracts 5.005005005005005% samples from 199800 rows
+2021-08-22 22:50:37.950:Building 1/3 model... type=classfier y=has_child features=f_name,l_name,gender,area_code,phone,city,state,zip,marital_status,salary,rate,single_exemp,married_exemp,child_exemp #rows=9938 #class=2
+2021-08-22 22:52:01.400:hyperopt: #eval=157/100000000
+2021-08-22 22:52:01.998:Finishes building 'has_child' model...  score=0.8723901979410079 elapsed=84.04516506195068s
+2021-08-22 22:52:02.084:To reduce training data, extracts 5.005005005005005% samples from 199800 rows
+2021-08-22 22:52:02.614:Building 2/3 model... type=classfier y=marital_status features=f_name,l_name,gender,area_code,phone,city,state,zip,has_child,salary,rate,single_exemp,married_exemp,child_exemp #rows=9995 #class=2
+2021-08-22 22:52:49.790:hyperopt: #eval=111/100000000
+2021-08-22 22:52:50.021:Finishes building 'marital_status' model...  score=0.873174709594737 elapsed=47.40479803085327s
+2021-08-22 22:52:50.082:To reduce training data, extracts 5.015045135406218% samples from 199400 rows
+2021-08-22 22:52:50.551:Building 3/3 model... type=classfier y=state features=f_name,l_name,gender,area_code,phone,city,zip,marital_status,has_child,salary,rate,single_exemp,married_exemp,child_exemp #rows=9899 #class=52
+2021-08-22 23:19:35.767:hyperopt: #eval=100/100000000
+2021-08-22 23:19:43.100:Finishes building 'state' model...  score=0.9971537873731525 elapsed=1612.5462419986725s
+2021-08-22 23:19:43.104:Elapsed time (name: repair model training) is 1748.361918926239(s)
+2021-08-22 23:19:44.769:[Repairing Phase] Computing 1000 repair updates in 980 rows...
+2021-08-22 23:19:49.541:Elapsed time (name: repairing) is 6.436002969741821(s)  
+2021-08-22 23:19:49.658:!!!Total Processing time is 1766.574478149414(s)!!!
+>>> 
+>>> # Computes performance numbers (precision & recall)
+... #  - Precision: the fraction of correct repairs, i.e., repairs that match
+... #    the ground truth, over the total number of repairs performed
+... #  - Recall: correct repairs over the total number of errors
+... pdf = repaired_df.join(spark.table("tax_clean"), ["tid", "attribute"], "inner")
+>>> rdf = repaired_df.join(
+...     spark.table("error_cells_ground_truth").where("attribute IN ('state', 'marital_status', 'has_child')"),
+...     ["tid", "attribute"], "right_outer")
+>>> 
+>>> # Compares predicted values with the correct ones
+... pdf.orderBy("attribute").show()
++-----+---------+-------------+--------+-----------+                            
+|  tid|attribute|current_value|repaired|correct_val|
++-----+---------+-------------+--------+-----------+
+|10910|has_child|            N|       Y|          Y|
+|10085|has_child|            N|       Y|          Y|
+|11280|has_child|            N|       Y|          Y|
+|11490|has_child|            N|       Y|          Y|
+|12038|has_child|            N|       Y|          Y|
+|14329|has_child|            N|       Y|          Y|
+|14592|has_child|            N|       Y|          Y|
+|15299|has_child|            N|       Y|          Y|
+|16093|has_child|            N|       Y|          Y|
+|16799|has_child|            N|       Y|          Y|
+|17287|has_child|            N|       Y|          Y|
+|17339|has_child|            N|       Y|          Y|
+|17387|has_child|            N|       Y|          Y|
+|17401|has_child|            N|       Y|          Y|
+|17731|has_child|            N|       Y|          Y|
+|17785|has_child|            N|       Y|          Y|
+|18460|has_child|            N|       Y|          Y|
+|18725|has_child|            N|       Y|          Y|
+|21881|has_child|            N|       Y|          Y|
+| 2735|has_child|            N|       Y|          Y|
++-----+---------+-------------+--------+-----------+
+only showing top 20 rows
+
+>>> 
+>>> precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
+>>> recall = rdf.where("repaired <=> correct_val").count() / rdf.count()        
+>>> f1 = (2.0 * precision * recall) / (precision + recall)                      
+>>> 
+>>> print("Precision={} Recall={} F1={}".format(precision, recall, f1))
+Precision=0.999 Recall=0.999 F1=0.999
+
