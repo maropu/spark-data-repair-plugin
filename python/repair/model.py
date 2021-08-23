@@ -378,6 +378,7 @@ class RepairModel():
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
         self.repair_delta: Optional[int] = None
+        self.repair_validation_enabled: bool = False
 
         # Defines a class to compute cost of updates.
         #
@@ -1596,6 +1597,14 @@ class RepairModel():
 
         return top_delta_repairs_df
 
+    # Since statistical models notoriously ignore specified integrity constraints,
+    # this methods checks if constraints hold in the repair candidates.
+    @_spark_job_group(name="validating")
+    def _validate_repairs(self, repair_candidates: DataFrame, clean_rows: DataFrame) -> DataFrame:
+        logging.info("[Validation Phase] Validating {} repair candidates...".format(repair_candidates.count()))
+        # TODO: Implements a logic to check if constraints hold on the repair candidates
+        return repair_candidates
+
     @elapsed_time  # type: ignore
     def _run(self, input_table: str, num_input_rows: int, num_attrs: int,
              continous_columns: List[str], detect_errors_only: bool,
@@ -1732,7 +1741,11 @@ class RepairModel():
             repair_candidates_df = self._flatten(self._create_temp_view(repaired_df)) \
                 .join(error_cells_df, [str(self.row_id), "attribute"], "inner") \
                 .selectExpr(str(self.row_id), "attribute", "current_value", "value repaired") \
-                .where("repaired IS NULL OR not(current_value <=> repaired)")
+                .where("repaired IS NULL")
+
+            if self.repair_validation_enabled:
+                return self._validate_repairs(repair_candidates_df, clean_rows_df)
+
             return repair_candidates_df
         else:
             clean_df = clean_rows_df.union(repaired_df)
