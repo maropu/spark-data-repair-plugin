@@ -4,12 +4,23 @@
 [![Coverage Status](https://coveralls.io/repos/github/maropu/spark-data-repair-plugin/badge.svg?branch=master)](https://coveralls.io/github/maropu/spark-data-repair-plugin?branch=master)
 -->
 
-This is an experimental prototype to provide statistical data repair functinalites on Spark, a distributed computing framework.
+This is an experimental prototype to provide a statistical model to repair data errors on a distributed computing framework, Spark.
 Clean and consistent data can have a positive impact on downstream processing;
 clean data make reporting and machine learning more accurate and
 consistent data with constraints (e.g., functional dependency) are important for efficient query plans.
 Therefore, data repairing to make data clean and consistent is a first step for an reliable anaysis pipeline and
-this plugin intends to implement a scalable repair algorithm on Spark.
+the prototype intends to implement a scalable repair algorithm on Spark.
+
+NOTE: Dirty data can have the various types of data errors, but the prototype aims to correct data errors
+only if an attributes having data errors is correlated to the other attributes in an input relation and
+the domain of the attribute has correct values against their errors.
+A statistical model in the prototype captures data dependencies between attributes and uses them to repair data.
+To correct the data errors that the prototype cannot handle,
+existing data cleaning tools might be suitable; for instance, a programming-by-examples technique is a good fit to fix
+format errors like '2021.8.23' -> '2021/8/23' and [Trifacta](https://www.trifacta.com/) has a functionality,
+named [Transformation by Example](https://docs.trifacta.com/display/SS/Transformation+by+Example+Page),
+to implement the technique. Therefore, to handle all error types in an input dirty relation,
+the prototype must be complementary to other tools.
 
 ## How to Repair Error Cells
 
