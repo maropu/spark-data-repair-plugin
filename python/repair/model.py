@@ -1740,7 +1740,7 @@ class RepairModel():
             repair_candidates_df = self._flatten(self._create_temp_view(repaired_df)) \
                 .join(error_cells_df, [str(self.row_id), "attribute"], "inner") \
                 .selectExpr(str(self.row_id), "attribute", "current_value", "value repaired") \
-                .where("repaired IS NULL")
+                .where("repaired IS NULL OR not(current_value <=> repaired)")
 
             if self.repair_validation_enabled:
                 return self._validate_repairs(repair_candidates_df, clean_rows_df)
