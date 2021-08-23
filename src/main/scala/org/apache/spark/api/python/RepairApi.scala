@@ -201,6 +201,17 @@ object RepairApi extends RepairBase {
     Seq("repair_base_cells" -> repairBaseView).asJson
   }
 
+  def computeFunctionalDeps(inputView: String, constraintFilePath: String): String = {
+    logBasedOnLevel(s"computeFunctionalDep called with: discretizedInputView=$inputView " +
+      s"constraintFilePath=$constraintFilePath")
+    DepGraph.computeFunctionalDeps(inputView, constraintFilePath)
+  }
+
+  def computeFunctionalDepMap(inputView: String, X: String, Y: String): String = {
+    logBasedOnLevel(s"computeFunctionalDepMap called with: inputView=$inputView X=$X Y=$Y")
+    DepGraph.computeFunctionalDepMap(inputView, X, Y)
+  }
+
   private[python] def computeFreqStats(
       inputView: String,
       targetAttrSets: Seq[Seq[String]],

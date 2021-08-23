@@ -35,7 +35,7 @@ import org.apache.spark.sql.types.StringType
 import org.apache.spark.util.BlockingLineStream
 import org.apache.spark.util.RepairUtils.withTempView
 
-object DepGraphApi extends RepairBase {
+private[python] object DepGraph extends RepairBase {
 
   private def generateGraphString(nodes: Seq[String], edges: Seq[String]) = {
     if (nodes.nonEmpty) {
@@ -75,7 +75,7 @@ object DepGraphApi extends RepairBase {
 
   private val nextNodeId = new AtomicInteger(0)
 
-  private[python] def computeDepGraph(
+  def computeDepGraph(
       inputView: String,
       targetAttrs: Seq[String],
       maxDomainSize: Int,
@@ -184,7 +184,7 @@ object DepGraphApi extends RepairBase {
     generateGraphString(nodeDefs, edgeDefs)
   }
 
-  private[python] val validImageFormatSet = Set("png", "svg")
+  val validImageFormatSet = Set("png", "svg")
 
   private def isCommandAvailable(command: String): Boolean = {
     val attempt = {
@@ -206,7 +206,7 @@ object DepGraphApi extends RepairBase {
     }
   }
 
-  private[python] def generateDepGraph(
+  def generateDepGraph(
       path: String,
       inputView: String,
       format: String,
@@ -234,11 +234,7 @@ object DepGraphApi extends RepairBase {
   }
 
   def computeFunctionalDeps(inputView: String, constraintFilePath: String): String = {
-    logBasedOnLevel(s"computeFunctionalDep called with: discretizedInputView=$inputView " +
-      s"constraintFilePath=$constraintFilePath")
-
     val (inputDf, qualifiedName) = checkAndGetQualifiedInputName("", inputView)
-
     var file: Source = null
     val constraints = try {
       file = Source.fromFile(new URI(constraintFilePath).getPath)

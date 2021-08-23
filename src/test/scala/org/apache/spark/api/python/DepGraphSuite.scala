@@ -57,7 +57,7 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
 
         val path = s"${dirPath.getAbsolutePath}/d"
         val targetAttrs = Seq("tid", "x", "y", "z")
-        DepGraphApi.generateDepGraph(path, "inputView", "svg", targetAttrs, 8, 100, 1.0, 0.0, false)
+        DepGraph.generateDepGraph(path, "inputView", "svg", targetAttrs, 8, 100, 1.0, 0.0, false)
 
         val graphString = fileToString(new File(s"${dirPath.getAbsolutePath}/d/depgraph.dot"))
         checkOutputString(graphString,
@@ -182,9 +182,9 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
         val path = s"${dirPath.getAbsolutePath}/d"
         val targetAttrs = Seq("tid", "x", "y", "z")
 
-        DepGraphApi.validImageFormatSet.foreach { format =>
+        DepGraph.validImageFormatSet.foreach { format =>
           val outputPath = s"${dirPath.getAbsolutePath}/$format"
-          DepGraphApi.generateDepGraph(outputPath, "inputView", format, targetAttrs, 8, 100, 1.0, 0.0, false)
+          DepGraph.generateDepGraph(outputPath, "inputView", format, targetAttrs, 8, 100, 1.0, 0.0, false)
           val imgFile = new File(s"$outputPath/depgraph.$format")
           assert(imgFile.exists())
         }
@@ -197,7 +197,7 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
       val hospitalFilePath = resourcePath("hospital.csv")
       spark.read.option("header", true).format("csv").load(hospitalFilePath).createOrReplaceTempView("hospital")
       val constraintFilePath = resourcePath("hospital_constraints.txt")
-      val jsonString = DepGraphApi.computeFunctionalDeps("hospital", constraintFilePath)
+      val jsonString = DepGraph.computeFunctionalDeps("hospital", constraintFilePath)
       val jsonObj = parse(jsonString)
       val data = jsonObj.asInstanceOf[JObject].values
 
@@ -228,7 +228,7 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
            |  (9, "2", "test-2a")
          """.stripMargin)
 
-      val jsonString = DepGraphApi.computeFunctionalDepMap("tempView", "x", "y")
+      val jsonString = DepGraph.computeFunctionalDepMap("tempView", "x", "y")
       val jsonObj = parse(jsonString)
       val data = jsonObj.asInstanceOf[JObject].values
       assert(data === Map("3" -> "test-3", "1" -> "test-1"))

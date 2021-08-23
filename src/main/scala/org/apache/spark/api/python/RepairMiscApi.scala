@@ -368,7 +368,7 @@ object RepairMiscApi extends RepairBase {
     } else {
       inputDf.columns.toSeq
     }
-    DepGraphApi.generateDepGraph(
+    DepGraph.generateDepGraph(
       path, inputTable, format, targetAttrs, maxDomainSize, maxAttrValueNum,
       samplingRatio, minCorrThres, edgeLabel)
   }
