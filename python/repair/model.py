@@ -22,7 +22,6 @@ import datetime
 import functools
 import heapq
 import json
-import logging
 import pickle
 import numpy as np   # type: ignore[import]
 import pandas as pd  # type: ignore[import]
@@ -36,6 +35,17 @@ from pyspark.sql.types import ByteType, ShortType, IntegerType, LongType  # type
 from repair.costs import UpdateCostFunction, NoCost
 from repair.detectors import ConstraintErrorDetector, ErrorDetector, NullErrorDetector
 from repair.utils import argtype_check, elapsed_time
+
+
+def _setup_logger() -> Any:
+    from logging import getLogger, NullHandler, DEBUG
+    logger = getLogger(__name__)
+    logger.setLevel(DEBUG)
+    logger.addHandler(NullHandler())
+    return logger
+
+
+_logger = _setup_logger()
 
 
 class FunctionalDepModel():
@@ -190,7 +200,8 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
     warnings.simplefilter("ignore", UserWarning)
 
     # Forcibly disable INFO-level logging in the `hyperopt` module
-    logging.getLogger("hyperopt").setLevel(logging.WARN)
+    from logging import getLogger, WARN
+    getLogger("hyperopt").setLevel(WARN)
 
     param_space = {
         "num_leaves": hp.quniform("num_leaves", 2, 100, 1),
@@ -222,7 +233,7 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
         # it might throw an exception because `y` contains
         # previously unseen labels.
         except Exception as e:
-            logging.warning(f"{e.__class__}: {e}")
+            _logger.warning(f"{e.__class__}: {e}")
             return 0.0
 
     def _early_stop_fn() -> Any:
@@ -253,7 +264,7 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
             show_progressbar=False,
             verbose=False)
 
-        logging.info("hyperopt: #eval={}/{}".format(len(trials.trials), _max_eval()))
+        _logger.info("hyperopt: #eval={}/{}".format(len(trials.trials), _max_eval()))
 
         # Builds a model with `best_params`
         # TODO: Could we extract constraint rules (e.g., FD and CFD) from built statistical models?
@@ -264,13 +275,13 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
             f = filter(lambda x: x[1] > 0.0, zip(model.feature_name_, model.feature_importances_))
             return list(sorted(f, key=lambda x: x[1], reverse=True))
 
-        logging.debug(f"lightgbm: feature_importances={_feature_importances()}")
+        _logger.debug(f"lightgbm: feature_importances={_feature_importances()}")
 
         sorted_lst = sorted(trials.trials, key=lambda x: x['result']['loss'])
         min_loss = sorted_lst[0]['result']['loss']
         return model, -min_loss
     except Exception as e:
-        logging.warning(f"Failed to build a stat model because: ${e}")
+        _logger.warning(f"Failed to build a stat model because: ${e}")
         return PoorModel(None), 0.0
 
 
@@ -311,7 +322,7 @@ def _rebalance_training_data(X: pd.DataFrame, y: pd.Series, target: str) -> Tupl
             if count - nna > kn:
                 smote_targets.append((key, median - nna))
             else:
-                logging.warning(f"Over-sampling of '{key}' in y='{target}' failed because the number of the clean rows "
+                _logger.warning(f"Over-sampling of '{key}' in y='{target}' failed because the number of the clean rows "
                                 f"is too small: {count - nna}")
 
     if len(smote_targets) > 0:
@@ -331,9 +342,9 @@ def _rebalance_training_data(X: pd.DataFrame, y: pd.Series, target: str) -> Tupl
         sampler = RandomUnderSampler(random_state=42, sampling_strategy=dict(rus_targets))
         X, y = sampler.fit_resample(X, y)
 
-    logging.info("Rebalanced training data (y={}, median={}): #rows={}(stdv={}) -> #rows={}(stdv={})".format(
+    _logger.info("Rebalanced training data (y={}, median={}): #rows={}(stdv={}) -> #rows={}(stdv={})".format(
         target, median, prev_nrows, prev_stdv, len(X), _compute_class_nrow_stdv(y, is_discrete=True)))
-    logging.debug("class hist: {} => {}".format(hist.items(), Counter(y).items()))
+    _logger.debug("class hist: {} => {}".format(hist.items(), Counter(y).items()))
     return X, y
 
 
@@ -831,7 +842,7 @@ class RepairModel():
                 self._spark.sparkContext.setJobGroup(name, name)  # type: ignore
                 start_time = time.time()
                 ret = f(self, *args, **kwargs)
-                logging.info(f"Elapsed time (name: {name}) is {time.time() - start_time}(s)")
+                _logger.info(f"Elapsed time (name: {name}) is {time.time() - start_time}(s)")
                 self._clear_job_group()
 
                 return ret
@@ -869,7 +880,7 @@ class RepairModel():
     def _release_resources(self) -> None:
         while self._intermediate_views_on_runtime:
             v = self._intermediate_views_on_runtime.pop()
-            logging.debug(f"Dropping an auto-generated view: {v}")
+            _logger.debug(f"Dropping an auto-generated view: {v}")
             self._spark.sql(f"DROP VIEW IF EXISTS {v}")
 
     def _check_input_table(self) -> Tuple[str, int, int, List[str]]:
@@ -910,7 +921,7 @@ class RepairModel():
             # TODO: Even in this case, we need to use a NULL detector because
             # `_build_stat_model` will fail if `y` has NULL.
             noisy_cells_df = self._spark.table(self._error_cells)
-            logging.info(f'[Error Detection Phase] Error cells provided by `{self._error_cells}`')
+            _logger.info(f'[Error Detection Phase] Error cells provided by `{self._error_cells}`')
 
             # Filters out non-existent columns in `input_table`
             noisy_cells_df = self._filter_columns_from(
@@ -922,7 +933,7 @@ class RepairModel():
         else:
             # Applies error detectors to get noisy cells
             noisy_cells_df = self._detect_error_cells(input_table)
-            logging.info(f'[Error Detection Phase] Detecting errors '
+            _logger.info(f'[Error Detection Phase] Detecting errors '
                          f'in a table `{input_table}` '
                          f'({num_attrs} cols x {num_input_rows} rows)...')
 
@@ -940,7 +951,7 @@ class RepairModel():
             noisy_cells_df = self._with_current_values(
                 input_table, noisy_cells_df, noisy_columns)
 
-        logging.info('[Error Detection Phase] {} noisy cells found ({}%)'.format(
+        _logger.info('[Error Detection Phase] {} noisy cells found ({}%)'.format(
             num_noisy_cells, (num_noisy_cells * 100.0) / (num_attrs * num_input_rows)))
 
         return noisy_cells_df, noisy_columns
@@ -949,7 +960,7 @@ class RepairModel():
             self, input_table: str, noisy_cells_df: DataFrame, target_columns: List[str],
             num_input_rows: int, num_attrs: int) -> DataFrame:
         # Sets NULL at the detected noisy cells
-        logging.debug("{}/{} noisy cells found, then converts them into NULL cells...".format(
+        _logger.debug("{}/{} noisy cells found, then converts them into NULL cells...".format(
             noisy_cells_df.count(), num_input_rows * num_attrs))
         noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells")
         ret_as_json = json.loads(self._repair_api.convertErrorCellsToNull(
@@ -976,12 +987,12 @@ class RepairModel():
 
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
-        logging.debug("Collecting and sampling attribute stats (ratio={} threshold={}) "
+        _logger.debug("Collecting and sampling attribute stats (ratio={} threshold={}) "
                       "before computing error domains...".format(
                           self.attr_stat_sample_ratio,
                           self.attr_stat_threshold))
 
-        logging.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
+        _logger.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
         noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells")
         ret_as_json = json.loads(self._repair_api.computeDomainInErrorCells(
             discretized_table, noisy_cells, str(self.row_id),
@@ -1012,7 +1023,7 @@ class RepairModel():
         error_cells_df = noisy_cells_df.join(weak_labeled_cells_df, [str(self.row_id), "attribute"], "left_anti")
         assert noisy_cells_df.count() == error_cells_df.count() + weak_labeled_cells_df.count()
 
-        logging.info('[Error Detection Phase] {} noisy cells fixed and '
+        _logger.info('[Error Detection Phase] {} noisy cells fixed and '
                      '{} error cells ({}%) remaining...'.format(
                          weak_labeled_cells_df.count(), error_cells_df.count(),
                          error_cells_df.count() * 100.0 / (num_attrs * num_input_rows)))
@@ -1045,7 +1056,7 @@ class RepairModel():
                 if len(top_k_fts) <= 1 or (-float(corr) >= 0.0 and len(top_k_fts) < int(self.max_training_column_num)):
                     top_k_fts.append((float(corr), f))
 
-            logging.info("[Repair Model Training Phase] {} features ({}) selected from {} features".format(
+            _logger.info("[Repair Model Training Phase] {} features ({}) selected from {} features".format(
                 len(top_k_fts), ",".join(map(lambda f: f"{f[1]}:{-f[0]}", top_k_fts)), len(features)))
 
             features = list(map(lambda f: f[1], top_k_fts))
@@ -1102,7 +1113,7 @@ class RepairModel():
         sampling_ratio = 1.0
         if training_data_num > self.max_training_row_num:
             sampling_ratio = float(self.max_training_row_num) / training_data_num
-            logging.info(f'To reduce training data, extracts {sampling_ratio * 100.0}% samples '
+            _logger.info(f'To reduce training data, extracts {sampling_ratio * 100.0}% samples '
                          f'from {training_data_num} rows')
 
         # TODO: Needs more smart sampling, e.g., stratified sampling
@@ -1130,7 +1141,7 @@ class RepairModel():
             training_data_num = df.count()
             # Number of training data must be positive
             if training_data_num == 0:
-                logging.info("Skipping {}/{} model... type=classfier y={} num_class={}".format(
+                _logger.info("Skipping {}/{} model... type=classfier y={} num_class={}".format(
                     index, len(target_columns), y, num_class_map[y]))
                 models[y] = (PoorModel(None), feature_map[y], None)
                 continue
@@ -1142,7 +1153,7 @@ class RepairModel():
             X = train_pdf[feature_map[y]]  # type: ignore
             for transformer in transformer_map[y]:
                 X = transformer.fit_transform(X)
-            logging.debug("{} encoders transform ({})=>({})".format(
+            _logger.debug("{} encoders transform ({})=>({})".format(
                 len(transformer_map[y]), ",".join(feature_map[y]), ",".join(X.columns)))
 
             # Re-balance target classes in training data
@@ -1150,7 +1161,7 @@ class RepairModel():
                 if is_discrete and self.training_data_rebalancing_enabled \
                 else (X, train_pdf[y])
 
-            logging.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
+            _logger.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
                 index, len(target_columns), model_type,
                 y, ",".join(feature_map[y]),
                 len(train_pdf),
@@ -1160,7 +1171,7 @@ class RepairModel():
 
             class_nrow_stdv = _compute_class_nrow_stdv(y_, is_discrete)
             logs.append((y, model_type, score, elapsed_time, len(X), num_class_map[y], class_nrow_stdv))
-            logging.info("Finishes building '{}' model...  score={} elapsed={}s".format(
+            _logger.info("Finishes building '{}' model...  score={} elapsed={}s".format(
                 y, score, elapsed_time))
 
             models[y] = (model, feature_map[y], transformer_map[y])
@@ -1190,7 +1201,7 @@ class RepairModel():
             training_data_num = df.count()
             # Number of training data must be positive
             if training_data_num == 0:
-                logging.info("Skipping {}/{} model... type=classfier y={} num_class={}".format(
+                _logger.info("Skipping {}/{} model... type=classfier y={} num_class={}".format(
                     index, len(target_columns), y, num_class_map[y]))
                 models[y] = (PoorModel(None), feature_map[y], None)
                 continue
@@ -1204,10 +1215,10 @@ class RepairModel():
             transformers = transformer_map[y]
             for transformer in transformers:
                 X = transformer.fit_transform(X)
-            logging.debug("{} encoders transform ({})=>({})".format(
+            _logger.debug("{} encoders transform ({})=>({})".format(
                 len(transformers), ",".join(feature_map[y]), ",".join(X.columns)))
 
-            logging.info("Start building {}/{} model in parallel... type={} y={} features={} #rows={}{}".format(
+            _logger.info("Start building {}/{} model in parallel... type={} y={} features={} #rows={}{}".format(
                 index, len(target_columns),
                 "classfier" if y not in continous_columns else "regressor",
                 y, ",".join(feature_map[y]),
@@ -1220,7 +1231,7 @@ class RepairModel():
 
         # TODO: A larger `training_n_jobs` value can cause high pressure on executors
         training_n_jobs = max(1, int(self._num_cores_per_executor() / num_tasks))
-        logging.debug(f"Setting {training_n_jobs} to `n_jobs` for training in parallel")
+        _logger.debug(f"Setting {training_n_jobs} to `n_jobs` for training in parallel")
 
         broadcasted_target_column = self._spark.sparkContext.broadcast(target_column)
         broadcasted_continous_columns = self._spark.sparkContext.broadcast(continous_columns)
@@ -1269,7 +1280,7 @@ class RepairModel():
         for row in built_models:
             tpe = "classfier" if row.target not in continous_columns else "regressor"
             logs.append((row.target, tpe, row.score, row.elapsed, row.nrows, num_class_map[row.target], row.stdv))
-            logging.info("Finishes building '{}' model... score={} elapsed={}s".format(
+            _logger.info("Finishes building '{}' model... score={} elapsed={}s".format(
                 row.target, row.score, row.elapsed))
 
             model = pickle.loads(row.model)
@@ -1325,10 +1336,10 @@ class RepairModel():
         functional_deps = self._get_functional_deps(train_df) \
             if self.rule_based_model_enabled else None
         if functional_deps is not None:
-            logging.debug(f"Functional deps found: {functional_deps}")
+            _logger.debug(f"Functional deps found: {functional_deps}")
 
         # Builds multiple repair models to repair error cells
-        logging.info("[Repair Model Training Phase] Building {} models "
+        _logger.info("[Repair Model Training Phase] Building {} models "
                      "to repair the cells in {}"
                      .format(len(target_columns), ",".join(target_columns)))
 
@@ -1349,7 +1360,7 @@ class RepairModel():
             # Skips building a model if num_class <= 1
             if is_discrete and num_class_map[y] <= 1:
                 logs.append((y, "rule", None, None, 0, num_class_map[y], None))  # type: ignore
-                logging.info("Skipping {}/{} model... type=rule y={} num_class={}".format(
+                _logger.info("Skipping {}/{} model... type=rule y={} num_class={}".format(
                     index, len(target_columns), y, num_class_map[y]))
                 v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
                     if num_class_map[y] == 1 else None
@@ -1368,7 +1379,7 @@ class RepairModel():
                 fx = list(filter(lambda x: _qualified(x), functional_deps[y]))
                 if len(fx) > 0:
                     logs.append((y, "rule", None, None, train_df.count(), num_class_map[y], None))  # type: ignore
-                    logging.info("Building {}/{} model... type=rule(FD: X->y)  y={}(|y|={}) X={}(|X|={})".format(
+                    _logger.info("Building {}/{} model... type=rule(FD: X->y)  y={}(|y|={}) X={}(|X|={})".format(
                         index, len(target_columns), y, num_class_map[y], fx[0], distinct_stats[fx[0]]))
                     model = self._build_rule_model(train_df, target_columns, fx[0], y)
                     models[y] = (model, [fx[0]], None)
@@ -1386,7 +1397,7 @@ class RepairModel():
             df = self._spark.createDataFrame(data=[*logs, *stat_model_logs], schema=schema)
             logViewName = _create_temp_name("repair_model")
             df.createOrReplaceTempView(logViewName)
-            logging.info(f"Model training logs saved as a temporary view named '{logViewName}'")
+            _logger.info(f"Model training logs saved as a temporary view named '{logViewName}'")
 
         # Resolve the conflict dependencies of the predictions
         if self.rule_based_model_enabled:
@@ -1412,7 +1423,7 @@ class RepairModel():
 
                 assert len(error_columns) < len(columns)
 
-            logging.info("Resolved prediction order dependencies: {}".format(
+            _logger.info("Resolved prediction order dependencies: {}".format(
                 ",".join(map(lambda x: x[0], pred_ordered_models))))
             assert len(pred_ordered_models) == len(target_columns)
             return pred_ordered_models
@@ -1499,7 +1510,7 @@ class RepairModel():
         # Predicts the remaining error cells based on the trained models.
         # TODO: Might need to compare repair costs (cost of an update, c) to
         # the likelihood benefits of the updates (likelihood benefit of an update, l).
-        logging.info(f"[Repairing Phase] Computing {error_cells_df.count()} repair updates in "
+        _logger.info(f"[Repairing Phase] Computing {error_cells_df.count()} repair updates in "
                      f"{dirty_rows_df.count()} rows...")
         repaired_df = dirty_rows_df.groupBy(grouping_key).apply(repair).drop(grouping_key).cache()
         repaired_df.write.format("noop").mode("overwrite").save()
@@ -1588,7 +1599,7 @@ class RepairModel():
         percent = min(1.0, 1.0 - self.repair_delta / num_error_cells)
         percentile = score_df.selectExpr(f"percentile(score, {percent}) thres").collect()[0]
         top_delta_repairs_df = score_df.where(f"score >= {percentile.thres}").drop("score")
-        logging.info("[Repairing Phase] {} repair updates (delta={}) selected "
+        _logger.info("[Repairing Phase] {} repair updates (delta={}) selected "
                      "among {} candidates".format(
                          top_delta_repairs_df.count(),
                          self.repair_delta,
@@ -1600,7 +1611,7 @@ class RepairModel():
     # this methods checks if constraints hold in the repair candidates.
     @_spark_job_group(name="validating")
     def _validate_repairs(self, repair_candidates: DataFrame, clean_rows: DataFrame) -> DataFrame:
-        logging.info("[Validation Phase] Validating {} repair candidates...".format(repair_candidates.count()))
+        _logger.info("[Validation Phase] Validating {} repair candidates...".format(repair_candidates.count()))
         # TODO: Implements a logic to check if constraints hold on the repair candidates
         return repair_candidates
 
@@ -1611,7 +1622,7 @@ class RepairModel():
              compute_repair_prob: bool, compute_repair_score: bool,
              repair_data: bool) -> DataFrame:
 
-        logging.info(f"input_table: {input_table} ({num_input_rows}rows x {num_attrs}cols)")
+        _logger.info(f"input_table: {input_table} ({num_input_rows}rows x {num_attrs}cols)")
 
         #################################################################################
         # 1. Error Detection Phase
@@ -1621,7 +1632,7 @@ class RepairModel():
         input_df = self._spark.table(input_table)
         noisy_cells_df, noisy_columns = self._detect_errors(input_table, num_attrs, num_input_rows)
         if noisy_cells_df.count() == 0:  # type: ignore
-            logging.info("Any error cell not found, so the input data is already clean")
+            _logger.info("Any error cell not found, so the input data is already clean")
             if not repair_data:
                 return noisy_cells_df
             else:
@@ -1637,7 +1648,7 @@ class RepairModel():
 
         # Target repairable(discretizable) columns
         target_columns = list(filter(lambda c: c in discretized_columns, noisy_columns))
-        logging.info(f"Target repairable columns are {','.join(target_columns)} "
+        _logger.info(f"Target repairable columns are {','.join(target_columns)} "
                      f"in noisy columns ({','.join(noisy_columns)})")
 
         # Defines true error cells based on the result of domain analysis
@@ -1665,7 +1676,7 @@ class RepairModel():
 
         # If no error found, we don't need to do nothing
         if error_cells_df.count() == 0:
-            logging.info("Any error cells not found, so the input data is already clean")
+            _logger.info("Any error cells not found, so the input data is already clean")
             if not repair_data:
                 return error_cells_df
             else:
@@ -1841,7 +1852,7 @@ class RepairModel():
                 continous_columns, detect_errors_only,
                 compute_repair_candidate_prob,
                 compute_repair_prob, compute_repair_score, repair_data)
-            logging.info(f"!!!Total Processing time is {elapsed_time}(s)!!!")
+            _logger.info(f"!!!Total Processing time is {elapsed_time}(s)!!!")
             return df
         finally:
             self._release_resources()
