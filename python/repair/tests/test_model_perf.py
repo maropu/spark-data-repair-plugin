@@ -16,7 +16,6 @@
 #
 
 import os
-import logging
 import unittest
 
 from pyspark import SparkConf
@@ -25,6 +24,23 @@ from repair.model import RepairModel
 from repair.tests.requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
 from repair.tests.testutils import ReusedSQLTestCase, load_testdata
+
+
+def _setup_logger(logfile: str) -> Any:
+    from _perf_logger import getLogger, FileHandler, Formatter, DEBUG, INFO
+    logger = getLogger(__name__)
+    logger.setLevel(DEBUG)
+
+    formatter = Formatter('%(asctime)s.%(msecs)03d: %(message)s', '%Y-%m-%d %H:%M:%S')
+    fh = FileHandler(logfile)
+    fh.setLevel(INFO)
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+    return logger
+
+
+# Logger to dump evaluation metrics
+_perf_logger = _setup_logger(f"{os.getenv('REPAIR_TESTDATA')}/test-model-perf.log")
 
 
 @unittest.skipIf(
@@ -98,7 +114,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             with self.subTest(f"target:iris({target})"):
                 repaired_df = self._build_model("iris").setTargets([target]).run()
                 rmse = self._compute_rmse(repaired_df, "iris_clean")
-                logging.info(f"target:iris({target}) RMSE:{rmse}")
+                _perf_logger.info(f"target:iris({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
     def test_perf_iris_target_num_2(self):
@@ -112,7 +128,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             with self.subTest(f"target:iris({target1},{target2})"):
                 repaired_df = self._build_model("iris").setTargets([target1, target2]).run()
                 rmse = self._compute_rmse(repaired_df, "iris_clean")
-                logging.info(f"target:iris({target1},{target2}) RMSE:{rmse}")
+                _perf_logger.info(f"target:iris({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
     def test_perf_boston_target_num_1(self):
@@ -126,7 +142,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             with self.subTest(f"target:boston({target})"):
                 repaired_df = self._build_model("boston").setTargets([target]).run()
                 rmse = self._compute_rmse(repaired_df, "boston_clean")
-                logging.info(f"target:boston({target}) RMSE:{rmse}")
+                _perf_logger.info(f"target:boston({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
     @unittest.skip(reason="Skip because this test is slow")
@@ -141,7 +157,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             with self.subTest(f"target:boston({target1},{target2})"):
                 repaired_df = self._build_model("boston").setTargets([target1, target2]).run()
                 rmse = self._compute_rmse(repaired_df, "boston_clean")
-                logging.info(f"target:boston({target1},{target2}) RMSE:{rmse}")
+                _perf_logger.info(f"target:boston({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
     def test_perf_hospital(self):
@@ -188,7 +204,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         f1 = (2.0 * precision * recall) / (precision + recall)
 
         msg = f"target:hospital precision:{precision} recall:{recall} f1:{f1}"
-        logging.info(msg)
+        _perf_logger.info(msg)
         self.assertTrue(precision > 0.90 and recall > 0.90 and f1 > 0.90, msg=msg)
 
 
