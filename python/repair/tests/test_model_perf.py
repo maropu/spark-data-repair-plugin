@@ -26,7 +26,7 @@ from repair.tests.requirements import have_pandas, have_pyarrow, \
 from repair.tests.testutils import ReusedSQLTestCase, load_testdata
 
 
-def _setup_logger(logfile: str) -> Any:
+def _setup_logger(logfile: str):
     from _perf_logger import getLogger, FileHandler, Formatter, DEBUG, INFO
     logger = getLogger(__name__)
     logger.setLevel(DEBUG)
