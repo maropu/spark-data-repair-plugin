@@ -450,7 +450,8 @@
         <executions>
           <execution>
             <id>Scala Packaging</id>
-            <phase>package</phase>
+            <!-- TODO: More suitable phase? -->
+            <phase>install</phase>
             <goals>
               <goal>exec</goal>
             </goals>
@@ -460,7 +461,8 @@
           </execution>
           <execution>
             <id>Python Packaging</id>
-            <phase>package</phase>
+            <!-- TODO: More suitable phase? -->
+            <phase>install</phase>
             <goals>
               <goal>exec</goal>
             </goals>
