@@ -105,7 +105,7 @@ class PoorModel():
 
 @elapsed_time  # type: ignore
 def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class: int, n_jobs: int,
-                     opts: Dict[str, str]) -> Any:
+                     opts: Dict[str, str]) -> Tuple[Any, float]:
     import lightgbm as lgb  # type: ignore[import]
 
     # TODO: Validate given parameter values
