@@ -31,7 +31,7 @@ def _setup_logger(logfile: str):
     logger = getLogger(__name__)
     logger.setLevel(DEBUG)
 
-    formatter = Formatter('%(asctime)s.%(msecs)03d: %(message)s', '%Y-%m-%d %H:%M:%S')
+    formatter = Formatter('%(asctime)s.%(msecs)03d %(levelname)s %(module)s: %(message)s', '%Y-%m-%d %H:%M:%S')
     fh = FileHandler(logfile)
     fh.setLevel(INFO)
     fh.setFormatter(formatter)
