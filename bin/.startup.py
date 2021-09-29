@@ -39,7 +39,7 @@ spark.sparkContext.setLogLevel("ERROR")
 # For debugging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s.%(msecs)03d: %(message)s',
+    format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 # spark.sql("SET spark.scavenger.logLevel=TRACE")
