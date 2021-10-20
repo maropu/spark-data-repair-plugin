@@ -54,13 +54,8 @@
             "language": "Python",
             "code": [
                 "import altair as alt",
-                "from sklearn import preprocessing",
                 "",
                 "target = ''",
-                "",
-                "mm = preprocessing.MinMaxScaler()",
-                "data = mm.fit_transform(X)",
-                "X = pd.DataFrame(data, columns=X.columns)",
                 "",
                 "alt.Chart(pdf).mark_circle().encode(",
                 "    alt.X(alt.repeat(\"column\"), type='quantitative'),",
@@ -132,6 +127,20 @@
                 "print('SCORE with selected Features: %1.2f' % rf.score(X_selected, _y))"
             ],
             "id": 5,
+            "tags": []
+        },
+        {
+            "name": "MinMax scaling",
+            "description": "",
+            "language": "Python",
+            "code": [
+                "from sklearn import preprocessing",
+                "",
+                "mm = preprocessing.MinMaxScaler()",
+                "data = mm.fit_transform(X)",
+                "X = pd.DataFrame(data, columns=X.columns)"
+            ],
+            "id": 6,
             "tags": []
         }
     ]
