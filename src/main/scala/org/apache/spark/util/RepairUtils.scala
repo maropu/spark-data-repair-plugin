@@ -52,7 +52,7 @@ object RepairUtils {
     val viewSchema = df.schema
     val hasRowId = viewSchema.exists(_.name == rowId)
     val expectedSchema = StructType.fromDDL(expectedSchemDDL)
-    val hasEnoughFields = !strict || viewSchema.length - 1 == expectedSchema.length
+    val hasEnoughFields = !strict || viewSchema.length - 1 >= expectedSchema.length
     val viewFieldSet = viewSchema.map(f => (f.name, f.dataType)).toSet
     hasRowId && hasEnoughFields && expectedSchema.forall { f =>
       viewFieldSet.contains((f.name, f.dataType))

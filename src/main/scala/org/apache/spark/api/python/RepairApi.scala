@@ -167,8 +167,8 @@ object RepairApi extends RepairBase {
     logBasedOnLevel(s"convertErrorCellsToNull called with: discretizedInputView=$discretizedInputView " +
       s"errCellView=$errCellView rowId=$rowId targetAttrList=$targetAttrList")
 
-    // `errCellView` schema must have `$rowId`, `attribute`, and `current_value` columns
-    assert(checkSchema(errCellView, "attribute STRING, current_value STRING", rowId, strict = true))
+    // `errCellView` schema must have `$rowId` and `attribute` columns
+    assert(checkSchema(errCellView, "attribute STRING", rowId, strict = true))
 
     val attrsToRepair = SparkUtils.stringToSeq(targetAttrList)
     assert(attrsToRepair.nonEmpty)
