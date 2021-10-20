@@ -38,7 +38,7 @@ class RepairUtilsSuite extends QueryTest with SharedSparkSession {
         "tempView", "b bigint, a int, d double, c string, e tinyint", "tid", strict = true))
       assert(checkSchema(
         "tempView", "b bigint, a int", "tid", strict = false))
-      assert(!checkSchema(
+      assert(checkSchema(
         "tempView", "b bigint, a int", "tid", strict = true))
     }
   }
