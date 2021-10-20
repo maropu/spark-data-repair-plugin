@@ -6,6 +6,7 @@ hs_err_pid*
 checkpoint_*
 bin/pycodestyle-*
 bin/pyspark-py36-conda-env.tar.gz
+bin/testdata/test-model-perf.log
 python/docs/build/*
 python/docs/source/apis/*
 build/*.jar
