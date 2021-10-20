@@ -1,0 +1,138 @@
+{
+    // Code Snippet Manager
+    // jupyterlab-code-snippets:snippets
+    // Code Snippet Manager Settings
+    // *********************************
+
+    // Code Snippets
+    // The list of snippets.
+    "snippets": [
+        {
+            "name": "Init script",
+            "description": "",
+            "language": "Python",
+            "code": [
+                "import numpy as np",
+                "import pandas as pd",
+                "from pyspark.sql import *",
+                "from pyspark.sql.types import *",
+                "from pyspark.sql import functions as f",
+                "",
+                "spark = SparkSession.builder.enableHiveSupport().getOrCreate()",
+                "",
+                "# Suppresses user warinig messages in Python",
+                "import warnings",
+                "warnings.simplefilter(\"ignore\", UserWarning)",
+                "",
+                "# Suppresses `WARN` messages in JVM",
+                "spark.sparkContext.setLogLevel(\"ERROR\")"
+            ],
+            "id": 0,
+            "tags": []
+        },
+        {
+            "name": "Create histogram",
+            "description": "",
+            "language": "Python",
+            "code": [
+                "import altair as alt",
+                "",
+                "charts = []",
+                "cols = pdf.columns",
+                "",
+                "for c in cols:",
+                "    charts.append(alt.Chart(pdf).mark_bar().encode(x=alt.X(c), y=alt.Y('count()', axis=alt.Axis(title='freq'))).properties(width=300, height=300))",
+                "",
+                "alt.hconcat(*charts)"
+            ],
+            "id": 1,
+            "tags": []
+        },
+        {
+            "name": "Create scatter plot",
+            "description": "",
+            "language": "Python",
+            "code": [
+                "import altair as alt",
+                "from sklearn import preprocessing",
+                "",
+                "target = ''",
+                "",
+                "mm = preprocessing.MinMaxScaler()",
+                "data = mm.fit_transform(X)",
+                "X = pd.DataFrame(data, columns=X.columns)",
+                "",
+                "alt.Chart(pdf).mark_circle().encode(",
+                "    alt.X(alt.repeat(\"column\"), type='quantitative'),",
+                "    alt.Y(alt.repeat(\"row\"), type='quantitative'),",
+                "    color=f'{target}:N'",
+                ").properties(width=200, height=200).repeat(row=X.columns.tolist(), column=X.columns.tolist())"
+            ],
+            "id": 2,
+            "tags": []
+        },
+        {
+            "name": "PCA",
+            "description": "",
+            "language": "Python",
+            "code": [
+                "import altair as alt",
+                "from sklearn.decomposition import PCA",
+                "",
+                "pca = PCA(n_components=2)",
+                "_X = pca.fit_transform(X)",
+                "_X = pd.DataFrame({'PCA-X': _X[:, 0], 'PCA-Y': _X[:, 1], target: y})",
+                "alt.Chart(_X).mark_point().encode(x='PCA-X', y='PCA-Y', color=f'{target}:N').properties(width=600, height=400).interactive()"
+            ],
+            "id": 3,
+            "tags": []
+        },
+        {
+            "name": "tSNE",
+            "description": "",
+            "language": "Python",
+            "code": [
+                "import altair as alt",
+                "from sklearn.manifold import TSNE",
+                "",
+                "target = ''",
+                "",
+                "tsne = TSNE(n_components=2, random_state=0)",
+                "_X = tsne.fit_transform(X)",
+                "_X = pd.DataFrame({'tSNE-X': _X[:, 0], 'tSNE-Y': _X[:, 1], target: y})",
+                "alt.Chart(_X).mark_point().encode(x='tSNE-X', y='tSNE-Y', color=f'{target}:N').properties(width=600, height=400).interactive()"
+            ],
+            "id": 4,
+            "tags": []
+        },
+        {
+            "name": "Bruta",
+            "description": "",
+            "language": "Python",
+            "code": [
+                "from sklearn.ensemble import RandomForestRegressor",
+                "from boruta import BorutaPy",
+                "",
+                "_y = y.replace(dict(map(lambda v: (v[1], v[0]), enumerate(y.unique()))))",
+                "",
+                "rf = RandomForestRegressor(n_jobs=-1, max_depth=5)",
+                "rf.fit(X, _y)",
+                "print('SCORE with ALL Features: %1.2f\\n' % rf.score(X, _y))",
+                "",
+                "rf = RandomForestRegressor(n_jobs=-1, max_depth=5)",
+                "fs = BorutaPy(rf, n_estimators='auto', random_state=0)",
+                "fs.fit(X.values, _y.values)",
+                "",
+                "selected = fs.support_",
+                "print('Selected Features: %s' % ','.join(X.columns[selected]))",
+                "",
+                "X_selected = X[X.columns[selected]]",
+                "rf = RandomForestRegressor(n_jobs=-1, max_depth=5)",
+                "rf.fit(X_selected, _y)",
+                "print('SCORE with selected Features: %1.2f' % rf.score(X_selected, _y))"
+            ],
+            "id": 5,
+            "tags": []
+        }
+    ]
+}

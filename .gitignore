@@ -33,3 +33,5 @@ spark-warehouse
 libs/postgresql-*.jar
 libs/schemaspy-*.jar
 libs/sqlite-jdbc-*.jar
+.ipynb_checkpoints
+Untitled*.ipynb
