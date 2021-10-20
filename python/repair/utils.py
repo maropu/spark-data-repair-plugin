@@ -21,6 +21,7 @@ import functools
 import inspect
 import time
 import typing
+from typing import Any
 
 
 def argtype_check(f):  # type: ignore
@@ -101,6 +102,14 @@ def argtype_check(f):  # type: ignore
 
         return f(self, *args, **kwargs)
     return wrapper
+
+
+def setup_logger() -> Any:
+    from logging import getLogger, NullHandler, INFO
+    logger = getLogger(__name__)
+    logger.setLevel(INFO)
+    logger.addHandler(NullHandler())
+    return logger
 
 
 def elapsed_time(f):  # type: ignore
