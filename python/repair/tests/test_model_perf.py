@@ -56,9 +56,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .set("spark.jars", os.getenv("REPAIR_API_LIB")) \
             .set("spark.sql.cbo.enabled", "true") \
             .set("spark.sql.statistics.histogram.enabled", "true") \
-            .set("spark.sql.statistics.histogram.numBins", "254") \
-            .set("spark.sql.optimizer.excludedRules",
-                 "org.apache.spark.sql.catalyst.optimizer.PropagateEmptyRelation")
+            .set("spark.sql.statistics.histogram.numBins", "254")
 
     @classmethod
     def setUpClass(cls):

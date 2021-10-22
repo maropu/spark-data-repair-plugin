@@ -48,9 +48,6 @@ logging.basicConfig(
 spark.sql("SET spark.sql.cbo.enabled=true")
 spark.sql("SET spark.sql.statistics.histogram.enabled=true")
 spark.sql("SET spark.sql.statistics.histogram.numBins=254")
-# TODO: Spark v3.1.1 jobs fail because the plan structural integrity is broken
-spark.sql("SET spark.sql.optimizer.excludedRules="
-          "org.apache.spark.sql.catalyst.optimizer.PropagateEmptyRelation")
 
 # Tunes # shuffle partitions
 num_tasks_per_core = 1
