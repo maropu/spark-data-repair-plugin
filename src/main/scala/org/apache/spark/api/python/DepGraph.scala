@@ -289,11 +289,11 @@ private[python] object DepGraph extends RepairBase {
   def computeFunctionalDepMap(inputView: String, X: String, Y: String): String = {
     val df = spark.sql(
       s"""
-         |SELECT CAST($X AS STRING) x, CAST(y[0] AS STRING) y FROM (
-         |  SELECT $X, collect_set($Y) y
+         |SELECT CAST($X AS STRING) _x, CAST(_y[0] AS STRING) _y FROM (
+         |  SELECT $X, collect_set($Y) _y
          |  FROM $inputView
          |  GROUP BY $X
-         |  HAVING size(y) = 1
+         |  HAVING size(_y) = 1
          |)
        """.stripMargin)
 

@@ -66,7 +66,7 @@ abstract class RepairBase extends LoggingBasedOnLevel {
       }
     }
     (keys, values).zipped.foreach { (k, v) =>
-      assert(!SQLConf.staticConfKeys.contains(k))
+      assert(!SQLConf.isStaticConfigKey(k))
       conf.setConfString(k, v)
     }
     try f finally {

@@ -66,7 +66,7 @@ class RepairConf(conf: SQLConf) {
    * return `defaultValue` in [[ConfigEntry]].
    */
   private def getConf[T](entry: ConfigEntry[T]): T = {
-    require(sqlConfEntries.get(entry.key) == entry || SQLConf.staticConfKeys.contains(entry.key),
+    require(sqlConfEntries.get(entry.key) == entry || SQLConf.isStaticConfigKey(entry.key),
       s"$entry is not registered")
     entry.readFrom(reader)
   }

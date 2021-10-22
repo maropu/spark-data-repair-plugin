@@ -48,7 +48,7 @@ class RepairMiscSuite extends QueryTest with SharedSparkSession {
 
   test("flattenTable") {
     val df = RepairMiscApi.flattenTable("default", "t", "tid")
-    val expectedSchema = "`tid` STRING,`attribute` STRING,`value` STRING"
+    val expectedSchema = "`tid` STRING,`attribute` STRING NOT NULL,`value` STRING"
     assert(df.schema.toDDL === expectedSchema)
     checkAnswer(df,
       Row("1", "v1", "100000") ::
@@ -82,7 +82,7 @@ class RepairMiscSuite extends QueryTest with SharedSparkSession {
 
   test("splitInputTableInto") {
     val df1 = RepairMiscApi.splitInputTableInto(2, "default", "t", "tid", "", "")
-    val expectedSchema = "`tid` STRING,`k` INT"
+    val expectedSchema = "`tid` STRING,`k` INT NOT NULL"
     assert(df1.schema.toDDL === expectedSchema)
     assert(df1.select("k").collect.map(_.getInt(0)).toSet === Set(0, 1))
     val df2 = RepairMiscApi.splitInputTableInto(2, "default", "t", "tid", "v1", "")
@@ -181,7 +181,7 @@ class RepairMiscSuite extends QueryTest with SharedSparkSession {
       Seq(("1", "v1"), ("2", "v1"), ("4", "v2")).toDF("tid", "attribute")
         .createOrReplaceTempView("errCellView")
       val df = RepairMiscApi.toErrorMap("errCellView", "default", "t", "tid")
-      val expectedSchema = "`tid` STRING,`error_map` STRING"
+      val expectedSchema = "`tid` STRING,`error_map` STRING NOT NULL"
       assert(df.schema.toDDL === expectedSchema)
       checkAnswer(df.selectExpr("error_map"),
         Row("*-") ::
