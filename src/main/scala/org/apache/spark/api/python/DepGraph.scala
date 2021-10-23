@@ -21,19 +21,17 @@ import java.io.File
 import java.net.URI
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
-
 import scala.collection.mutable
 import scala.io.Source
 import scala.sys.process.{Process, ProcessLogger}
 import scala.util.Try
-
 import org.apache.spark.python.DenialConstraints
 import org.apache.spark.sql.ExceptionUtils.AnalysisException
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.util.stringToFile
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.util.BlockingLineStream
-import org.apache.spark.util.RepairUtils.withTempView
+import org.apache.spark.util.RepairUtils.{getRandomString, withTempView}
 
 private[python] object DepGraph extends RepairBase {
 
@@ -287,13 +285,15 @@ private[python] object DepGraph extends RepairBase {
   }
 
   def computeFunctionalDepMap(inputView: String, X: String, Y: String): String = {
+    val x = getRandomString(prefix="x")
+    val y = getRandomString(prefix="y")
     val df = spark.sql(
       s"""
-         |SELECT CAST($X AS STRING) _x, CAST(_y[0] AS STRING) _y FROM (
-         |  SELECT $X, collect_set($Y) _y
+         |SELECT CAST($X AS STRING) $x, CAST($y[0] AS STRING) $y FROM (
+         |  SELECT $X, collect_set($Y) $y
          |  FROM $inputView
          |  GROUP BY $X
-         |  HAVING size(_y) = 1
+         |  HAVING size($y) = 1
          |)
        """.stripMargin)
 

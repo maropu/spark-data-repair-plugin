@@ -281,11 +281,12 @@ object RepairApi extends RepairBase {
       pairSets.map { attrPairKey =>
         attrPairKey -> {
           val Seq(a1, a2) = attrPairKey.toSeq
+          val hXY = getRandomString(prefix="hXY")
           val df = spark.sql(
             s"""
-               |SELECT -SUM(hXY) hXY
+               |SELECT -SUM($hXY) $hXY
                |FROM (
-               |  SELECT $a1 X, $a2 Y, (cnt / $rowCount) * log10(cnt / $rowCount) hXY
+               |  SELECT $a1 X, $a2 Y, (cnt / $rowCount) * log10(cnt / $rowCount) $hXY
                |  FROM $freqStatView
                |  WHERE $a1 IS NOT NULL AND
                |    $a2 IS NOT NULL
@@ -302,13 +303,14 @@ object RepairApi extends RepairBase {
     val hYs = withJobDescription("compute entropy H(y)") {
       targetAttrs.map { attrKey =>
         attrKey -> {
+          val hY = getRandomString(prefix="hY")
           val df = spark.sql(
             s"""
-               |SELECT -SUM(hY) hY
+               |SELECT -SUM($hY) $hY
                |FROM (
                |  /* TODO: Needs to reconsider how-to-handle NULL */
                |  /* Use `MAX` to drop ($attrKey, null) tuples in `$inputView` */
-               |  SELECT $attrKey Y, (MAX(cnt) / $rowCount) * log10(MAX(cnt) / $rowCount) hY
+               |  SELECT $attrKey Y, (MAX(cnt) / $rowCount) * log10(MAX(cnt) / $rowCount) $hY
                |  FROM $freqStatView
                |  WHERE ${whereCaluseToFilterStat(attrKey, targetAttrs)}
                |  GROUP BY $attrKey
@@ -527,18 +529,19 @@ object RepairApi extends RepairBase {
             // using the naive independence assumption where
             //   p(v_cur | v_init) = p(v_cur) * \prod_i (v_init_i | v_cur)
             // where v_init_i is the init value for corresponding to attribute i.
+            val score = getRandomString(prefix="score")
             val domainWithScoreDf = withTempView(domainDf) { domainView =>
               spark.sql(
                 s"""
                    |SELECT
-                   |  $rowId, attribute, current_value, domain_value, SUM(score) score
+                   |  $rowId, attribute, current_value, domain_value, SUM($score) $score
                    |FROM (
                    |  SELECT
                    |    $rowId,
                    |    attribute,
                    |    current_value,
                    |    domain_value_with_freq.n domain_value,
-                   |    exp(ln(cnt / $rowCount) + ln(domain_value_with_freq.cnt / cnt)) score
+                   |    exp(ln(cnt / $rowCount) + ln(domain_value_with_freq.cnt / cnt)) $score
                    |  FROM (
                    |    SELECT
                    |      $rowId,
@@ -562,17 +565,18 @@ object RepairApi extends RepairBase {
             }
 
             withTempView(domainWithScoreDf) { domainWithScoreView =>
+              val denom = getRandomString(prefix="denom")
               spark.sql(
                 s"""
                    |SELECT
                    |  l.$rowId,
                    |  l.attribute,
                    |  current_value,
-                   |  filter(collect_set(named_struct('n', domain_value, 'prob', score / denom)), x -> x.prob > $domain_threshold_beta) domain
+                   |  filter(collect_set(named_struct('n', domain_value, 'prob', $score / $denom)), x -> x.prob > $domain_threshold_beta) domain
                    |FROM
                    |  $domainWithScoreView l, (
                    |    SELECT
-                   |      $rowId, attribute, SUM(score) denom
+                   |      $rowId, attribute, SUM($score) $denom
                    |    FROM
                    |      $domainWithScoreView
                    |    GROUP BY
