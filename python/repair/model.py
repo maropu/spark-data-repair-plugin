@@ -655,7 +655,7 @@ class RepairModel():
         return err_cells_df.distinct().cache()
 
     def _with_current_values(self, input_table: str, noisy_cells_df: DataFrame, targetAttrs: List[str]) -> DataFrame:
-        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells")
+        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v1")
         jdf = self._repair_api.withCurrentValues(
             input_table, noisy_cells, str(self.row_id), ",".join(targetAttrs))
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
@@ -712,7 +712,7 @@ class RepairModel():
         # Sets NULL at the detected noisy cells
         _logger.debug("{}/{} noisy cells found, then converts them into NULL cells...".format(
             noisy_cells_df.count(), num_input_rows * num_attrs))
-        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells")
+        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v2")
         ret_as_json = json.loads(self._repair_api.convertErrorCellsToNull(
             input_table, noisy_cells, str(self.row_id), ",".join(target_columns)))
 
@@ -743,7 +743,7 @@ class RepairModel():
                           self.attr_stat_threshold))
 
         _logger.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
-        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells")
+        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v3")
         ret_as_json = json.loads(self._repair_api.computeDomainInErrorCells(
             discretized_table, noisy_cells, str(self.row_id),
             ",".join(continous_columns),
