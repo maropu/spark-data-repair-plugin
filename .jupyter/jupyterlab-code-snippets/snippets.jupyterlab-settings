@@ -31,73 +31,123 @@
             "tags": []
         },
         {
-            "name": "Create histogram",
+            "name": "Histogram (altair)",
             "description": "",
             "language": "Python",
             "code": [
-                "import altair as alt",
+                "def to_histogram(pdf):",
+                "    import altair as alt",
+                "    charts = []",
+                "    for c in pdf.columns:",
+                "        c = alt.Chart(pdf).mark_bar().encode(x=alt.X(c), y=alt.Y('count()', axis=alt.Axis(title='freq')))",
+                "        charts.append(c.properties(width=300, height=300))",
                 "",
-                "charts = []",
-                "cols = pdf.columns",
-                "",
-                "for c in cols:",
-                "    charts.append(alt.Chart(pdf).mark_bar().encode(x=alt.X(c), y=alt.Y('count()', axis=alt.Axis(title='freq'))).properties(width=300, height=300))",
-                "",
-                "alt.hconcat(*charts)"
+                "    return alt.hconcat(*charts)"
             ],
             "id": 1,
             "tags": []
         },
         {
-            "name": "Create scatter plot",
+            "name": "Histogram (seaborn, numeric-only)",
             "description": "",
             "language": "Python",
             "code": [
-                "import altair as alt",
-                "",
-                "target = ''",
-                "",
-                "alt.Chart(pdf).mark_circle().encode(",
-                "    alt.X(alt.repeat(\"column\"), type='quantitative'),",
-                "    alt.Y(alt.repeat(\"row\"), type='quantitative'),",
-                "    color=f'{target}:N'",
-                ").properties(width=200, height=200).repeat(row=X.columns.tolist(), column=X.columns.tolist())"
+                "def to_histogram_seaborn_numeirc_only(X):",
+                "    import matplotlib.pyplot as plt",
+                "    import seaborn as sns",
+                "    sns.set()",
+                "    fig = plt.figure(figsize=(20, 16))",
+                "    return X.hist(ax=fig.gca())"
             ],
             "id": 2,
             "tags": []
         },
         {
-            "name": "PCA",
+            "name": "SPLOM (altair)",
             "description": "",
             "language": "Python",
             "code": [
-                "import altair as alt",
-                "from sklearn.decomposition import PCA",
-                "",
-                "pca = PCA(n_components=2)",
-                "_X = pca.fit_transform(X)",
-                "_X = pd.DataFrame({'PCA-X': _X[:, 0], 'PCA-Y': _X[:, 1], target: y})",
-                "alt.Chart(_X).mark_point().encode(x='PCA-X', y='PCA-Y', color=f'{target}:N').properties(width=600, height=400).interactive()"
+                "def to_splom(pdf, target, cols=None):",
+                "    import altair as alt",
+                "    _cols = cols if cols is not None else [c for c in pdf.columns if c != target]",
+                "    chart = alt.Chart(pdf).mark_circle().encode(",
+                "        alt.X(alt.repeat(\"column\"), type='quantitative'),",
+                "        alt.Y(alt.repeat(\"row\"), type='quantitative'),",
+                "        color=f'{target}:N'",
+                "    )",
+                "    chart = chart.properties(width=200, height=200)",
+                "    chart = chart.repeat(",
+                "        row=_cols,",
+                "        column=_cols",
+                "    )",
+                "    return chart"
             ],
             "id": 3,
             "tags": []
         },
         {
-            "name": "tSNE",
+            "name": "SPLOM (seaborn)",
             "description": "",
             "language": "Python",
             "code": [
-                "import altair as alt",
-                "from sklearn.manifold import TSNE",
-                "",
-                "target = ''",
-                "",
-                "tsne = TSNE(n_components=2, random_state=0)",
-                "_X = tsne.fit_transform(X)",
-                "_X = pd.DataFrame({'tSNE-X': _X[:, 0], 'tSNE-Y': _X[:, 1], target: y})",
-                "alt.Chart(_X).mark_point().encode(x='tSNE-X', y='tSNE-Y', color=f'{target}:N').properties(width=600, height=400).interactive()"
+                "def to_splom(pdf, target):",
+                "    import seaborn as sns",
+                "    sns.pairplot(pdf, hue=target, height=6.0)"
             ],
             "id": 4,
+            "tags": []
+        },
+        {
+            "name": "Correlation Heatmap (seaborn)",
+            "description": "",
+            "language": "Python",
+            "code": [
+                "def to_corr_heatmap(pdf):    ",
+                "    import matplotlib.pyplot as plt",
+                "    import seaborn as sns",
+                "    fig = plt.figure(figsize=(10, 8))",
+                "    return sns.heatmap(pdf.corr(method='pearson'), vmax=1, vmin=-1, center=0, ax=fig.gca())"
+            ],
+            "id": 5,
+            "tags": []
+        },
+        {
+            "name": "Mutual information between features",
+            "description": "",
+            "language": "Python",
+            "code": [
+                "def compute_mi_between_features(pdf):",
+                "    from minepy import MINE",
+                "    results = []",
+                "    mine = MINE(alpha=0.6, c=15, est=\"mic_approx\")",
+                "",
+                "    import itertools",
+                "    for c1, c2 in itertools.combinations(pdf.columns, 2):",
+                "        mine.compute_score(pdf[c1], pdf[c2])",
+                "        results.append(((c1, c2), mine.mic()))",
+                "",
+                "    return sorted(results, key=lambda x: x[1], reverse=True)"
+            ],
+            "id": 6,
+            "tags": []
+        },
+        {
+            "name": "Mutual information against target",
+            "description": "",
+            "language": "Python",
+            "code": [
+                "def compute_mi(X, y):",
+                "    from minepy import MINE",
+                "    results = []",
+                "    mine = MINE(alpha=0.6, c=15, est=\"mic_approx\")",
+                "",
+                "    for c in X.columns:",
+                "        mine.compute_score(y, X[c])",
+                "        results.append(((target, c), mine.mic()))",
+                "",
+                "    return sorted(results, key=lambda x: x[1], reverse=True)"
+            ],
+            "id": 7,
             "tags": []
         },
         {
@@ -105,42 +155,85 @@
             "description": "",
             "language": "Python",
             "code": [
-                "from sklearn.ensemble import RandomForestRegressor",
-                "from boruta import BorutaPy",
+                "def select_features_with_bruta(X, y, is_discrete=True):",
+                "    from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor",
+                "    from boruta import BorutaPy",
+                "    model_class = RandomForestClassifier if is_discrete else RandomForestRegressor",
+                "    rf = model_class(n_jobs=-1, max_depth=5)",
+                "    rf.fit(X, y)",
+                "    print('SCORE with ALL Features: %1.2f' % rf.score(X, y))",
                 "",
-                "_y = y.replace(dict(map(lambda v: (v[1], v[0]), enumerate(y.unique()))))",
+                "    rf = model_class(n_jobs=-1, max_depth=5)",
+                "    fs = BorutaPy(rf, n_estimators='auto', random_state=42, perc=80, two_step=False, max_iter=500)",
+                "    fs.fit(X.values, y.values)",
                 "",
-                "rf = RandomForestRegressor(n_jobs=-1, max_depth=5)",
-                "rf.fit(X, _y)",
-                "print('SCORE with ALL Features: %1.2f\\n' % rf.score(X, _y))",
-                "",
-                "rf = RandomForestRegressor(n_jobs=-1, max_depth=5)",
-                "fs = BorutaPy(rf, n_estimators='auto', random_state=0)",
-                "fs.fit(X.values, _y.values)",
-                "",
-                "selected = fs.support_",
-                "print('Selected Features: %s' % ','.join(X.columns[selected]))",
-                "",
-                "X_selected = X[X.columns[selected]]",
-                "rf = RandomForestRegressor(n_jobs=-1, max_depth=5)",
-                "rf.fit(X_selected, _y)",
-                "print('SCORE with selected Features: %1.2f' % rf.score(X_selected, _y))"
+                "    selected = fs.support_",
+                "    X_selected = X[X.columns[selected]]",
+                "    rf = model_class(n_jobs=-1, max_depth=5)",
+                "    rf.fit(X_selected, y)",
+                "    print('SCORE with selected Features: %1.2f' % rf.score(X_selected, y))",
+                "    ",
+                "    return X.columns[selected]"
             ],
-            "id": 5,
+            "id": 8,
             "tags": []
         },
         {
-            "name": "MinMax scaling",
+            "name": "MinMax scaling (sklearn)",
             "description": "",
             "language": "Python",
             "code": [
-                "from sklearn import preprocessing",
-                "",
-                "mm = preprocessing.MinMaxScaler()",
-                "data = mm.fit_transform(X)",
-                "X = pd.DataFrame(data, columns=X.columns)"
+                "def min_max_scaling(pdf):",
+                "    from sklearn import preprocessing",
+                "    mm = preprocessing.MinMaxScaler()",
+                "    data = mm.fit_transform(pdf)",
+                "    return pd.DataFrame(data, columns=pdf.columns)"
             ],
-            "id": 6,
+            "id": 9,
+            "tags": []
+        },
+        {
+            "name": "PCA (sklearn)",
+            "description": "",
+            "language": "Python",
+            "code": [
+                "def to_pca(X, y, target):",
+                "    from sklearn.decomposition import PCA",
+                "    pca = PCA(n_components=2)",
+                "    _X = pca.fit_transform(X)",
+                "    _X = pd.DataFrame({'PCA-X': _X[:, 0], 'PCA-Y': _X[:, 1], target: y})",
+                "",
+                "    import matplotlib.pyplot as plt",
+                "    import seaborn as sns",
+                "    fig = plt.figure(figsize=(10, 8))",
+                "    return sns.scatterplot(data=_X, x='PCA-X', y='PCA-Y', hue=target, ax=fig.gca())"
+            ],
+            "id": 10,
+            "tags": []
+        },
+        {
+            "name": "t-SNE (sklearn)",
+            "description": "",
+            "language": "Python",
+            "code": [
+                "def to_tsne(X, y, target, nsample=100, perplexity=50, n_iter=10000):",
+                "    # One of non-linear embedding in sklearn",
+                "    from sklearn.manifold import TSNE",
+                "    tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity, n_iter=n_iter)",
+                "    _pdf = X.copy(deep=True)",
+                "    _pdf[target] = y",
+                "    _pdf_sampled = _pdf.dropna().sample(n=nsample, random_state=42)",
+                "    _X = _pdf_sampled[_pdf_sampled.columns[_pdf_sampled.columns != target]]",
+                "    _y = _pdf_sampled[target]",
+                "    _tf = tsne.fit_transform(_X)",
+                "    _X = pd.DataFrame({'tSNE-X': _tf[:, 0], 'tSNE-Y': _tf[:, 1], target: _y})",
+                "    print('KL divergence: {}'.format(tsne.kl_divergence_))",
+                "",
+                "    import altair as alt",
+                "    chart = alt.Chart(_X).mark_point().encode(x='tSNE-X', y='tSNE-Y', color=f'{target}:N').properties(width=600, height=400).interactive()",
+                "    return chart"
+            ],
+            "id": 11,
             "tags": []
         }
     ]
