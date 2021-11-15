@@ -392,6 +392,7 @@ class RepairModelTests(ReusedSQLTestCase):
         self.assertEqual(
             null_errors.orderBy("tid", "attribute").collect(),
             self.expected_adult_result_without_repaired)
+
         null_errors = self._build_model() \
             .setInput("adult") \
             .setRowId("tid") \
@@ -400,6 +401,7 @@ class RepairModelTests(ReusedSQLTestCase):
         self.assertEqual(
             null_errors.orderBy("tid", "attribute").collect(),
             self.expected_adult_result_without_repaired)
+
         null_errors = self._build_model() \
             .setInput("adult") \
             .setRowId("tid") \
@@ -407,9 +409,10 @@ class RepairModelTests(ReusedSQLTestCase):
             .run(detect_errors_only=True)
         self.assertEqual(
             null_errors.orderBy("tid", "attribute").collect(), [
-                Row(tid=3, attribute="Sex"),
-                Row(tid=7, attribute="Sex"),
-                Row(tid=12, attribute="Sex")])
+                Row(tid=3, attribute="Sex", current_value=None),
+                Row(tid=7, attribute="Sex", current_value=None),
+                Row(tid=12, attribute="Sex", current_value=None)])
+
         null_errors = self._build_model() \
             .setInput("adult") \
             .setRowId("tid") \
@@ -417,10 +420,11 @@ class RepairModelTests(ReusedSQLTestCase):
             .run(detect_errors_only=True)
         self.assertEqual(
             null_errors.orderBy("tid", "attribute").collect(), [
-                Row(tid=5, attribute="Age"),
-                Row(tid=5, attribute="Income"),
-                Row(tid=12, attribute="Age"),
-                Row(tid=16, attribute="Income")])
+                Row(tid=5, attribute="Age", current_value=None),
+                Row(tid=5, attribute="Income", current_value=None),
+                Row(tid=12, attribute="Age", current_value=None),
+                Row(tid=16, attribute="Income", current_value=None)])
+
         null_errors = self._build_model() \
             .setInput("adult") \
             .setRowId("tid") \
@@ -428,8 +432,8 @@ class RepairModelTests(ReusedSQLTestCase):
             .run(detect_errors_only=True)
         self.assertEqual(
             null_errors.orderBy("tid", "attribute").collect(), [
-                Row(tid=5, attribute="Age"),
-                Row(tid=12, attribute="Age")])
+                Row(tid=5, attribute="Age", current_value=None),
+                Row(tid=12, attribute="Age", current_value=None)])
 
         # Tests for `RegExErrorDetector`
         error_detectors = [
