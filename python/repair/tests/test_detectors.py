@@ -20,6 +20,7 @@ import unittest
 
 from pyspark import SparkConf
 from pyspark.sql import Row
+from pyspark.sql.utils import AnalysisException
 
 from repair.detectors import ConstraintErrorDetector, NullErrorDetector, \
     OutlierErrorDetector, RegExErrorDetector
@@ -48,8 +49,26 @@ class ErrorDetectorTests(ReusedSQLTestCase):
         # Loads test data
         load_testdata(cls.spark, "adult.csv").createOrReplaceTempView("adult")
 
+    def test_invalid_targets(self):
+        self.assertRaisesRegexp(
+            AnalysisException,
+            "Target attributes not found in adult: Unknown",
+            lambda: NullErrorDetector().setUp("tid", "adult", ["Unknown"]).detect())
+        self.assertRaisesRegexp(
+            AnalysisException,
+            "Target attributes not found in adult: Unknown",
+            lambda: RegExErrorDetector("Exec-managerial").setUp("tid", "adult", ["Unknown"]).detect())
+        self.assertRaisesRegexp(
+            AnalysisException,
+            "Target attributes not found in adult: Unknown",
+            lambda: ConstraintErrorDetector("notused").setUp("tid", "adult", ["Unknown"]).detect())
+        self.assertRaisesRegexp(
+            AnalysisException,
+            "Target attributes not found in adult: Unknown",
+            lambda: OutlierErrorDetector().setUp("tid", "adult", ["Unknown"]).detect())
+
     def test_NullErrorDetector(self):
-        errors = NullErrorDetector().setUp("tid", "adult").detect()
+        errors = NullErrorDetector().setUp("tid", "adult", []).detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=3, attribute="Sex"),
@@ -59,10 +78,44 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 Row(tid=12, attribute="Age"),
                 Row(tid=12, attribute="Sex"),
                 Row(tid=16, attribute="Income")])
+        errors = NullErrorDetector().setUp("tid", "adult", ["Sex"]).detect()
+        self.assertEqual(
+            errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=3, attribute="Sex"),
+                Row(tid=7, attribute="Sex"),
+                Row(tid=12, attribute="Sex")])
+        errors = NullErrorDetector().setUp("tid", "adult", ["Age", "Income"]).detect()
+        self.assertEqual(
+            errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=5, attribute="Age"),
+                Row(tid=5, attribute="Income"),
+                Row(tid=12, attribute="Age"),
+                Row(tid=16, attribute="Income")])
+        errors = NullErrorDetector().setUp("tid", "adult", ["Income", "Unknown"]).detect()
+        self.assertEqual(
+            errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=5, attribute="Income"),
+                Row(tid=16, attribute="Income")])
 
     def test_RegExErrorDetector(self):
         errors = RegExErrorDetector("Exec-managerial", error_cells_as_string=False) \
-            .setUp("tid", "adult").detect()
+            .setUp("tid", "adult", []).detect()
+        self.assertEqual(
+            errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=1, attribute="Occupation"),
+                Row(tid=12, attribute="Occupation"),
+                Row(tid=14, attribute="Occupation"),
+                Row(tid=16, attribute="Occupation")])
+        errors = RegExErrorDetector("Exec-managerial", error_cells_as_string=False) \
+            .setUp("tid", "adult", ["Occupation"]).detect()
+        self.assertEqual(
+            errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=1, attribute="Occupation"),
+                Row(tid=12, attribute="Occupation"),
+                Row(tid=14, attribute="Occupation"),
+                Row(tid=16, attribute="Occupation")])
+        errors = RegExErrorDetector("Exec-managerial", error_cells_as_string=False) \
+            .setUp("tid", "adult", ["Unknown", "Occupation"]).detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=1, attribute="Occupation"),
@@ -76,7 +129,7 @@ class ErrorDetectorTests(ReusedSQLTestCase):
             for (error_cells_as_string, expected) in \
                     ((False, []), (True, [Row(tid=3, attribute="v"), Row(tid=4, attribute="v")])):
                 errors = RegExErrorDetector("123.+", error_cells_as_string) \
-                    .setUp("tid", "tempView").detect()
+                    .setUp("tid", "tempView", []).detect()
                 self.assertEqual(
                     errors.orderBy("tid", "attribute").collect(),
                     expected)
@@ -84,12 +137,32 @@ class ErrorDetectorTests(ReusedSQLTestCase):
     def test_ConstraintErrorDetector(self):
         constraint_path = "{}/adult_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
         errors = ConstraintErrorDetector(constraint_path) \
-            .setUp("tid", "adult").detect()
+            .setUp("tid", "adult", []).detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=4, attribute="Relationship"),
                 Row(tid=4, attribute="Sex"),
                 Row(tid=11, attribute="Relationship"),
+                Row(tid=11, attribute="Sex")])
+        errors = ConstraintErrorDetector(constraint_path) \
+            .setUp("tid", "adult", ["Relationship"]).detect()
+        self.assertEqual(
+            errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=4, attribute="Relationship"),
+                Row(tid=11, attribute="Relationship")])
+        errors = ConstraintErrorDetector(constraint_path) \
+            .setUp("tid", "adult", ["Sex", "Relationship"]).detect()
+        self.assertEqual(
+            errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=4, attribute="Relationship"),
+                Row(tid=4, attribute="Sex"),
+                Row(tid=11, attribute="Relationship"),
+                Row(tid=11, attribute="Sex")])
+        errors = ConstraintErrorDetector(constraint_path) \
+            .setUp("tid", "adult", ["Unknown", "Sex"]).detect()
+        self.assertEqual(
+            errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=4, attribute="Sex"),
                 Row(tid=11, attribute="Sex")])
 
     def test_OutlierErrorDetector(self):
@@ -98,7 +171,17 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 .createOrReplaceTempView("tempView")
             for approx_enabled in [True, False]:
                 errors = OutlierErrorDetector(approx_enabled) \
-                    .setUp("tid", "tempView").detect()
+                    .setUp("tid", "tempView", []).detect()
+                self.assertEqual(
+                    errors.orderBy("tid", "attribute").collect(),
+                    [Row(tid=4, attribute="v")])
+                errors = OutlierErrorDetector(approx_enabled) \
+                    .setUp("tid", "tempView", ["v"]).detect()
+                self.assertEqual(
+                    errors.orderBy("tid", "attribute").collect(),
+                    [Row(tid=4, attribute="v")])
+                errors = OutlierErrorDetector(approx_enabled) \
+                    .setUp("tid", "tempView", ["Unknown", "v"]).detect()
                 self.assertEqual(
                     errors.orderBy("tid", "attribute").collect(),
                     [Row(tid=4, attribute="v")])

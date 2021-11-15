@@ -392,6 +392,44 @@ class RepairModelTests(ReusedSQLTestCase):
         self.assertEqual(
             null_errors.orderBy("tid", "attribute").collect(),
             self.expected_adult_result_without_repaired)
+        null_errors = self._build_model() \
+            .setInput("adult") \
+            .setRowId("tid") \
+            .setTargets(["Sex", "Age", "Income"]) \
+            .run(detect_errors_only=True)
+        self.assertEqual(
+            null_errors.orderBy("tid", "attribute").collect(),
+            self.expected_adult_result_without_repaired)
+        null_errors = self._build_model() \
+            .setInput("adult") \
+            .setRowId("tid") \
+            .setTargets(["Sex"]) \
+            .run(detect_errors_only=True)
+        self.assertEqual(
+            null_errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=3, attribute="Sex"),
+                Row(tid=7, attribute="Sex"),
+                Row(tid=12, attribute="Sex")])
+        null_errors = self._build_model() \
+            .setInput("adult") \
+            .setRowId("tid") \
+            .setTargets(["Age", "Income"]) \
+            .run(detect_errors_only=True)
+        self.assertEqual(
+            null_errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=5, attribute="Age"),
+                Row(tid=5, attribute="Income"),
+                Row(tid=12, attribute="Age"),
+                Row(tid=16, attribute="Income")])
+        null_errors = self._build_model() \
+            .setInput("adult") \
+            .setRowId("tid") \
+            .setTargets(["Unknown", "Age"]) \
+            .run(detect_errors_only=True)
+        self.assertEqual(
+            null_errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=5, attribute="Age"),
+                Row(tid=12, attribute="Age")])
 
         # Tests for `RegExErrorDetector`
         error_detectors = [

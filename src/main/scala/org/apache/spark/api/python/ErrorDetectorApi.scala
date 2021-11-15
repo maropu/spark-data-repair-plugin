@@ -22,58 +22,84 @@ import java.net.URI
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 
+import org.apache.spark.SparkException
 import org.apache.spark.python.DenialConstraints
+import org.apache.spark.sql.ExceptionUtils.AnalysisException
 import org.apache.spark.sql._
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.util.LoggingBasedOnLevel
 import org.apache.spark.util.RepairUtils._
+import org.apache.spark.util.{Utils => SparkUtils}
 
 object ErrorDetectorApi extends LoggingBasedOnLevel {
 
-  def detectNullCells(qualifiedName: String, rowId: String): DataFrame = {
-    logBasedOnLevel(s"detectNullCells called with: qualifiedName=$qualifiedName rowId=$rowId")
-    NullErrorDetector.detect(qualifiedName, rowId)
+  def detectNullCells(qualifiedName: String, rowId: String, targetAttrList: String): DataFrame = {
+    logBasedOnLevel(s"detectNullCells called with: qualifiedName=$qualifiedName " +
+      s"rowId=$rowId targetAttrList=$targetAttrList")
+    NullErrorDetector.detect(qualifiedName, rowId, SparkUtils.stringToSeq(targetAttrList))
   }
 
   def detectErrorCellsFromRegEx(
       qualifiedName: String,
       rowId: String,
+      targetAttrList: String,
       regex: String,
       cellsAsString: Boolean = false): DataFrame = {
     logBasedOnLevel(s"detectErrorCellsFromRegEx called with: qualifiedName=$qualifiedName " +
-      s"rowId=$rowId, regex=$regex, cellAsString=$cellsAsString")
-    RegExErrorDetector.detect(qualifiedName, rowId,
+      s"rowId=$rowId targetAttrList=$targetAttrList regex=$regex cellAsString=$cellsAsString")
+    RegExErrorDetector.detect(qualifiedName, rowId, SparkUtils.stringToSeq(targetAttrList),
       Map("regex" -> regex, "cellsAsString" -> cellsAsString))
   }
 
   def detectErrorCellsFromConstraints(
       qualifiedName: String,
       rowId: String,
+      targetAttrList: String,
       constraintFilePath: String): DataFrame = {
     logBasedOnLevel(s"detectErrorCellsFromConstraints called with: qualifiedName=$qualifiedName " +
-      s"rowId=$rowId constraintFilePath=$constraintFilePath")
-    ConstraintErrorDetector.detect(qualifiedName, rowId,
+      s"rowId=$rowId targetAttrlist=$targetAttrList constraintFilePath=$constraintFilePath")
+    ConstraintErrorDetector.detect(qualifiedName, rowId, SparkUtils.stringToSeq(targetAttrList),
       Map("constraintFilePath" -> constraintFilePath))
   }
 
   def detectErrorCellsFromOutliers(
       qualifiedName: String,
       rowId: String,
+      targetAttrList: String,
       approxEnabled: Boolean = false): DataFrame = {
     logBasedOnLevel(s"detectErrorCellsFromOutliers called with: qualifiedName=$qualifiedName " +
-      s"rowId=$rowId approxEnabled=$approxEnabled")
-    GaussianOutlierErrorDetector.detect(qualifiedName, rowId,
+      s"rowId=$rowId targetAttrList=$targetAttrList approxEnabled=$approxEnabled")
+    GaussianOutlierErrorDetector.detect(qualifiedName, rowId, SparkUtils.stringToSeq(targetAttrList),
       Map("approxEnabled" -> approxEnabled))
   }
 }
 
 abstract class ErrorDetector extends RepairBase {
 
-  def detect(qualifiedName: String, rowId: String, options: Map[String, Any]): DataFrame
+  def detect(
+    qualifiedName: String,
+    rowId: String,
+    targetAttrs: Seq[String],
+    options: Map[String, Any]): DataFrame
 
   protected def emptyTable(df: DataFrame, rowId: String): DataFrame = {
     val rowIdType = df.schema.find(_.name == rowId).get.dataType.sql
     createEmptyTable(s"$rowId $rowIdType, attribute STRING")
+  }
+
+  protected def getInput(qualifiedName: String, targetAttrs: Seq[String]): (DataFrame, Seq[String]) = {
+    val df = spark.table(qualifiedName)
+    val targetColumns = if (targetAttrs.nonEmpty) {
+      val filteredColumns = df.columns.filter(targetAttrs.contains)
+      if (filteredColumns.isEmpty) {
+        throw AnalysisException(s"Target attributes not found in $qualifiedName: " +
+          targetAttrs.mkString(","))
+      }
+      filteredColumns
+    } else {
+      df.columns
+    }
+    (df, targetColumns.toSeq)
   }
 
   protected def getOptionValue[T](key: String, options: Map[String, Any]): T = {
@@ -123,13 +149,14 @@ object NullErrorDetector extends ErrorDetector {
   override def detect(
       qualifiedName: String,
       rowId: String,
+      targetAttrs: Seq[String],
       options: Map[String, Any] = Map.empty): DataFrame = {
 
-    val inputDf = spark.table(qualifiedName)
+    val (inputDf, inputColumns) = getInput(qualifiedName, targetAttrs)
 
     withTempView(inputDf, cache = true) { inputView =>
       // Detects error erroneous cells in a given table
-      val sqls = inputDf.columns.filter(_ != rowId).map { attr =>
+      val sqls = inputColumns.filter(_ != rowId).map { attr =>
         s"""
            |SELECT $rowId, '$attr' AS attribute
            |FROM $inputView
@@ -149,9 +176,10 @@ object RegExErrorDetector extends ErrorDetector {
   override def detect(
       qualifiedName: String,
       rowId: String,
+      targetAttrs: Seq[String],
       options: Map[String, Any] = Map.empty): DataFrame = {
 
-    val inputDf = spark.table(qualifiedName)
+    val (inputDf, inputColumns) = getInput(qualifiedName, targetAttrs)
 
     // If `regex` not given, just returns an empty table
     val regex = getOptionValue[String]("regex", options)
@@ -162,15 +190,18 @@ object RegExErrorDetector extends ErrorDetector {
         // Detects error erroneous cells in a given table
         val cellsAsString = getOptionValue[Boolean]("cellsAsString", options)
         val sqls = if (cellsAsString) {
-          inputDf.columns.filter(_ != rowId).map { attr =>
+          inputColumns.filter(_ != rowId).map { attr =>
             s"""
                |SELECT $rowId, '$attr' AS attribute
                |FROM $inputView
                |WHERE CAST($attr AS STRING) RLIKE '$regex'
              """.stripMargin
-          }.toSeq
+          }
         } else {
-          inputDf.schema.filter { f => f.name != rowId && f.dataType == StringType }.map { f =>
+          val validInputColumns = inputDf.schema.filter { f =>
+            f.name != rowId && inputColumns.contains(f.name) && f.dataType == StringType
+          }
+          validInputColumns.map { f =>
             s"""
                |SELECT $rowId, '${f.name}' AS attribute
                |FROM $inputView
@@ -196,9 +227,10 @@ object ConstraintErrorDetector extends ErrorDetector {
   override def detect(
       qualifiedName: String,
       rowId: String,
+      targetAttrs: Seq[String],
       options: Map[String, Any] = Map.empty): DataFrame = {
 
-    val inputDf = spark.table(qualifiedName)
+    val (inputDf, inputColumns) = getInput(qualifiedName, targetAttrs)
 
     // If `constraintFilePath` not given, just returns an empty table
     val constraintFilePath = getOptionValue[String]("constraintFilePath", options)
@@ -211,7 +243,7 @@ object ConstraintErrorDetector extends ErrorDetector {
         val constraints = try {
           file = Source.fromFile(new URI(constraintFilePath).getPath)
           file.getLines()
-          DenialConstraints.parseAndVerifyConstraints(file.getLines(), qualifiedName, inputDf.columns)
+          DenialConstraints.parseAndVerifyConstraints(file.getLines(), qualifiedName, inputDf.columns.toSeq)
         } finally {
           if (file != null) {
             file.close()
@@ -232,20 +264,24 @@ object ConstraintErrorDetector extends ErrorDetector {
           })
 
           // Detects error erroneous cells in a given table
-          val sqls = constraints.predicates.map { preds =>
+          val sqls = constraints.predicates.flatMap { preds =>
             import DenialConstraints._
-            val attrs = preds.flatMap(_.references).distinct
-            // TODO: Needs to look for a more smart logic to filter error cells
-            s"""
-               |SELECT DISTINCT $rowId, explode(array(${attrs.map(a => s"'$a'").mkString(",")})) attribute
-               |FROM (
-               |  SELECT $leftRelationIdent.$rowId FROM $inputView AS $leftRelationIdent
-               |  WHERE EXISTS (
-               |    SELECT $rowId FROM $inputView AS $rightRelationIdent
-               |    WHERE ${preds.mkString(" AND ")}
-               |  )
-               |)
-             """.stripMargin
+            val attrs = preds.flatMap(_.references).filter(inputColumns.contains).distinct
+            if (attrs.nonEmpty) {
+              // TODO: Needs to look for a more smart logic to filter error cells
+              Some(s"""
+                 |SELECT DISTINCT $rowId, explode(array(${attrs.map(a => s"'$a'").mkString(",")})) attribute
+                 |FROM (
+                 |  SELECT $leftRelationIdent.$rowId FROM $inputView AS $leftRelationIdent
+                 |  WHERE EXISTS (
+                 |    SELECT $rowId FROM $inputView AS $rightRelationIdent
+                 |    WHERE ${preds.mkString(" AND ")}
+                 |  )
+                 |)
+               """.stripMargin)
+            } else {
+              None
+            }
           }
 
           val errCellDf = spark.sql(sqls.mkString(" UNION ALL "))
@@ -265,12 +301,15 @@ object GaussianOutlierErrorDetector extends ErrorDetector {
   override def detect(
       qualifiedName: String,
       rowId: String,
+      targetAttrs: Seq[String],
       options: Map[String, Any] = Map.empty): DataFrame = {
 
-    val inputDf = spark.table(qualifiedName)
+    val (inputDf, inputColumns) = getInput(qualifiedName, targetAttrs)
 
-    val continousAttrs = inputDf.schema
-      .filter(f => continousTypes.contains(f.dataType)).map(_.name)
+    val continousAttrs = inputDf.schema.filter { f =>
+      inputColumns.contains(f.name) && continousTypes.contains(f.dataType)
+    }.map(_.name)
+
     if (continousAttrs.isEmpty) {
       emptyTable(inputDf, rowId)
     } else {

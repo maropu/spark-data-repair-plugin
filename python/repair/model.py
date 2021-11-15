@@ -649,7 +649,7 @@ class RepairModel():
     def _detect_error_cells(self, input_table: str) -> DataFrame:
         # Initializes the given error detectors with the input params
         for d in self.error_detectors:
-            d.setUp(str(self.row_id), input_table)  # type: ignore
+            d.setUp(str(self.row_id), input_table, self.targets)  # type: ignore
 
         error_cells_dfs = [d.detect() for d in self.error_detectors]
         err_cells_df = functools.reduce(lambda x, y: x.union(y), error_cells_dfs)
@@ -674,9 +674,13 @@ class RepairModel():
             noisy_cells_df = self._spark.table(self._error_cells)
             _logger.info(f'[Error Detection Phase] Error cells provided by `{self._error_cells}`')
 
-            # Filters out non-existent columns in `input_table`
-            noisy_cells_df = self._filter_columns_from(
-                noisy_cells_df, self._spark.table(input_table).columns)
+            if len(self.targets) == 0:
+                # Filters out non-existent columns in `input_table`
+                noisy_cells_df = self._filter_columns_from(
+                    noisy_cells_df, self._spark.table(input_table).columns)
+            else:
+                # Filters target attributes if `self.targets` defined
+                noisy_cells_df = self._filter_columns_from(noisy_cells_df, self.targets)
 
             # We assume that the given error cells are true, so we skip computing error domains
             # with probability because the computational cost is much high.
@@ -687,10 +691,6 @@ class RepairModel():
             _logger.info(f'[Error Detection Phase] Detecting errors '
                          f'in a table `{input_table}` '
                          f'({num_attrs} cols x {num_input_rows} rows)...')
-
-        # Filters target attributes if `self.targets` defined
-        if len(self.targets) > 0:
-            noisy_cells_df = self._filter_columns_from(noisy_cells_df, self.targets)
 
         noisy_columns: List[str] = []
         num_noisy_cells = noisy_cells_df.count()
