@@ -29,7 +29,7 @@ $ git clone https://github.com/maropu/spark-data-repair-plugin.git
 $ cd spark-data-repair-plugin
 
 # This repository includes a simple wrapper script `bin/python` to create
-# a virtual environment to resolve the required dependencies (e.g., Python 3.6 and PySpark 3.1),
+# a virtual environment to resolve the required dependencies (e.g., Python 3.7 and PySpark 3.2),
 # then launch a Python VM with this plugin.
 $ ./bin/python
 
@@ -37,12 +37,12 @@ Welcome to
       ____              __
      / __/__  ___ _____/ /__
     _\ \/ _ \/ _ `/ __/  '_/
-   /__ / .__/\_,_/_/ /_/\_\   version 3.1.2
+   /__ / .__/\_,_/_/ /_/\_\   version 3.2.0
       /_/
 
 Using Python version 3.6.8 (default, Dec 29 2018 19:04:46)
 SparkSession available as 'spark'.
-Scavenger APIs (version 0.1.0-spark3.1-EXPERIMENTAL) available as 'scavenger'.
+Scavenger APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'scavenger'.
 
 # Loads CSV data having seven NULL cells
 >>> spark.read.option("header", True).csv("./testdata/adult.csv").createOrReplaceTempView("adult")
@@ -219,7 +219,7 @@ You can run a repair job ([main.py](./python/main.py)) on your Spark cluster as 
 
 ```
 $ echo $SPARK_HOME
-/tmp/spark-3.1.2-bin-hadoop3.2
+/tmp/spark-3.2.0-bin-hadoop3.2
 
 $ ./bin/spark-submit ./python/main.py --input adult --output repaired --row-id tid
 Predicted repair values are saved as 'repaired'
