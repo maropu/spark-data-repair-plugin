@@ -173,7 +173,7 @@ if __name__ == "__main__":
     elif args.command == 'get_env_name':
         print(conda_env_name)
     elif args.command == 'create_env_only':
-        print("conda virtual env '{}' created.".format(conda_env_name))
+        print("conda virtual env '{}' created.".format(conda_env_name), file=sys.stderr)
     else:
-        print("Unknown command: {}".format(args.command))
+        print("Unknown command: {}".format(args.command), file=sys.stderr)
         sys.exit(-1)
