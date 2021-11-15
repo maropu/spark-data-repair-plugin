@@ -1377,13 +1377,15 @@ class RepairModel():
              repair_data: bool) -> DataFrame:
 
         _logger.info(f"input_table: {input_table} ({num_input_rows}rows x {num_attrs}cols)")
+        input_df = self._spark.table(input_table)
+        if self.targets and len(set(self.targets) & set(input_df.columns)) == 0:
+            raise ValueError(f"Target attributes not found in {input_table}: {','.join(self.targets)}")
 
         #################################################################################
         # 1. Error Detection Phase
         #################################################################################
 
         # If no error found, we don't need to do nothing
-        input_df = self._spark.table(input_table)
         noisy_cells_df, noisy_columns = self._detect_errors(input_table, num_attrs, num_input_rows)
         if noisy_cells_df.count() == 0:  # type: ignore
             _logger.info("Any error cell not found, so the input data is already clean")

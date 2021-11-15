@@ -67,15 +67,14 @@ class NullErrorDetector(ErrorDetector):
 
 class RegExErrorDetector(ErrorDetector):
 
-    def __init__(self, error_pattern: str, error_cells_as_string: bool = False) -> None:
+    def __init__(self, attr: str, error_pattern: str) -> None:
         ErrorDetector.__init__(self, 'RegExErrorDetector')
+        self.attr = attr
         self.error_pattern = error_pattern
-        self.error_cells_as_string = error_cells_as_string
 
     def _detect_impl(self) -> DataFrame:
         jdf = self._detector_api.detectErrorCellsFromRegEx(
-            self.qualified_input_name, self.row_id, self._to_target_list(), self.error_pattern,
-            self.error_cells_as_string)
+            self.qualified_input_name, self.row_id, self._to_target_list(), self.attr, self.error_pattern)
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
 

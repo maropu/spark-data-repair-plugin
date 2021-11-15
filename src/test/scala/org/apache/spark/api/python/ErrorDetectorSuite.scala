@@ -39,26 +39,12 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
 
   test("Error detector - common error handling") {
     Seq[String => DataFrame](ErrorDetectorApi.detectNullCells(_, "tid", ""),
-      ErrorDetectorApi.detectErrorCellsFromRegEx(_, "tid", "", null),
+      ErrorDetectorApi.detectErrorCellsFromRegEx(_, "tid", "", "v", null),
       ErrorDetectorApi.detectErrorCellsFromConstraints(_, "tid", "", null),
       ErrorDetectorApi.detectErrorCellsFromOutliers(_, "tid", "")
     ).foreach { f =>
       val errMsg = intercept[AnalysisException] { f("nonexistent") }.getMessage()
       assert(errMsg.contains("Table or view not found: nonexistent"))
-    }
-  }
-
-  test("Error detector - common error handling for non-existent target attributes") {
-    withTable("t") {
-      spark.sql("CREATE TABLE t(tid STRING, v1 STRING) USING parquet")
-      Seq[String => DataFrame](ErrorDetectorApi.detectNullCells(_, "tid", "v2,v3"),
-        ErrorDetectorApi.detectErrorCellsFromRegEx(_, "tid", "v2,v3", null),
-        ErrorDetectorApi.detectErrorCellsFromConstraints(_, "tid", "v2,v3", null),
-        ErrorDetectorApi.detectErrorCellsFromOutliers(_, "tid", "v2,v3")
-      ).foreach { f =>
-        val errMsg = intercept[AnalysisException] { f("t") }.getMessage()
-        assert(errMsg.contains("Target attributes not found in t: v2,v3"))
-      }
     }
   }
 
@@ -98,23 +84,21 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
            |  ("4", 987654321,  NULL, "123-hij")
          """.stripMargin)
 
-      def test(targetAttrList: String, regex: String, cellsAsString: Boolean, expected: Seq[Row]): Unit = {
+      def test(targetAttrList: String, attr: String, regex: String, expected: Seq[Row]): Unit = {
         val df = ErrorDetectorApi
-          .detectErrorCellsFromRegEx("default.t", "tid", targetAttrList, regex, cellsAsString)
+          .detectErrorCellsFromRegEx("default.t", "tid", targetAttrList, attr, regex)
         checkAnswer(df, expected)
       }
-      test("", "123-hij", false, Row("4", "v3") :: Nil)
-      test("", "123.*", false, Row("1", "v3") :: Row("4", "v3") :: Nil)
-      test("", "123.*", true,
-        Row("1", "v1") :: Row("1", "v3") :: Row("2", "v1") :: Row("2", "v2") :: Row("3", "v1") :: Row("4", "v3") :: Nil)
-      test("v3", "123.*", true,
-        Row("1", "v3") :: Row("4", "v3") :: Nil)
-      test("v2,v3", "123.*", true,
-        Row("1", "v3") :: Row("4", "v3") :: Row("2", "v2") :: Nil)
-      test("v2,v1", "123.*", true,
-        Row("1", "v1") :: Row("2", "v1") :: Row("2", "v2") :: Row("3", "v1") :: Nil)
-      test("v1,v4,v5", "123.*", true,
-        Row("1", "v1") :: Row("2", "v1") :: Row("3", "v1") :: Nil)
+      test("", "v3", "123-hij",
+        Row("1", "v3") :: Row("2", "v3") :: Row("3", "v3") :: Nil)
+      test("", "v3", "123.*",
+        Row("2", "v3") :: Row("3", "v3") :: Nil)
+      test("", "v1", "123.*",
+        Row("4", "v1") :: Nil)
+      test("v3", "v3", "123.*",
+        Row("2", "v3") :: Row("3", "v3") :: Nil)
+      test("v2,v3", "v2", "123.*",
+        Row("1", "v2") :: Row("3", "v2") :: Row("4", "v2") :: Nil)
     }
   }
 
@@ -122,7 +106,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
     withTempView("t") {
       spark.range(1).selectExpr("id AS tid", "1 AS value").createOrReplaceTempView("t")
       def test(regex: String): Unit = {
-        val df = ErrorDetectorApi.detectErrorCellsFromRegEx("t", "tid", "", regex)
+        val df = ErrorDetectorApi.detectErrorCellsFromRegEx("t", "tid", "", "value", regex)
         checkAnswer(df, Nil)
       }
       test(null)

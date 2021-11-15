@@ -22,7 +22,6 @@ import java.net.URI
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 
-import org.apache.spark.SparkException
 import org.apache.spark.python.DenialConstraints
 import org.apache.spark.sql.ExceptionUtils.AnalysisException
 import org.apache.spark.sql._
@@ -43,12 +42,12 @@ object ErrorDetectorApi extends LoggingBasedOnLevel {
       qualifiedName: String,
       rowId: String,
       targetAttrList: String,
-      regex: String,
-      cellsAsString: Boolean = false): DataFrame = {
+      attr: String,
+      regex: String): DataFrame = {
     logBasedOnLevel(s"detectErrorCellsFromRegEx called with: qualifiedName=$qualifiedName " +
-      s"rowId=$rowId targetAttrList=$targetAttrList regex=$regex cellAsString=$cellsAsString")
+      s"rowId=$rowId targetAttrList=$targetAttrList regex=$regex")
     RegExErrorDetector.detect(qualifiedName, rowId, SparkUtils.stringToSeq(targetAttrList),
-      Map("regex" -> regex, "cellsAsString" -> cellsAsString))
+      Map("attr" -> attr, "regex" -> regex))
   }
 
   def detectErrorCellsFromConstraints(
@@ -91,10 +90,7 @@ abstract class ErrorDetector extends RepairBase {
     val df = spark.table(qualifiedName)
     val targetColumns = if (targetAttrs.nonEmpty) {
       val filteredColumns = df.columns.filter(targetAttrs.contains)
-      if (filteredColumns.isEmpty) {
-        throw AnalysisException(s"Target attributes not found in $qualifiedName: " +
-          targetAttrs.mkString(","))
-      }
+      assert(filteredColumns.nonEmpty, s"Target attributes not found in $qualifiedName: ${targetAttrs.mkString(",")}")
       filteredColumns
     } else {
       df.columns
@@ -181,42 +177,21 @@ object RegExErrorDetector extends ErrorDetector {
 
     val (inputDf, inputColumns) = getInput(qualifiedName, targetAttrs)
 
-    // If `regex` not given, just returns an empty table
+    val targetColumn = getOptionValue[String]("attr", options)
     val regex = getOptionValue[String]("regex", options)
-    if (regex == null || regex.trim.isEmpty) {
+    if (!inputColumns.contains(targetColumn) || regex == null || regex.trim.isEmpty) {
       emptyTable(inputDf, rowId)
     } else {
-      withTempView(inputDf, cache = true) { inputView =>
-        // Detects error erroneous cells in a given table
-        val cellsAsString = getOptionValue[Boolean]("cellsAsString", options)
-        val sqls = if (cellsAsString) {
-          inputColumns.filter(_ != rowId).map { attr =>
-            s"""
-               |SELECT $rowId, '$attr' AS attribute
-               |FROM $inputView
-               |WHERE CAST($attr AS STRING) RLIKE '$regex'
-             """.stripMargin
-          }
-        } else {
-          val validInputColumns = inputDf.schema.filter { f =>
-            f.name != rowId && inputColumns.contains(f.name) && f.dataType == StringType
-          }
-          validInputColumns.map { f =>
-            s"""
-               |SELECT $rowId, '${f.name}' AS attribute
-               |FROM $inputView
-               |WHERE ${f.name} RLIKE '$regex'
-             """.stripMargin
-          }
-        }
+      withTempView(inputDf) { inputView =>
+        val errCellDf = spark.sql(
+          s"""
+             |SELECT $rowId, '$targetColumn' AS attribute
+             |FROM $inputView
+             |WHERE CAST($targetColumn AS STRING) NOT RLIKE '$regex' OR $targetColumn IS NULL
+           """.stripMargin)
 
-        if (sqls.isEmpty) {
-          emptyTable(inputDf, rowId)
-        } else {
-          val errCellDf = spark.sql(sqls.mkString(" UNION ALL "))
-          loggingErrorStats("RegEx-based error detector", qualifiedName, errCellDf)
-          errCellDf
-        }
+        loggingErrorStats("RegEx-based error detector", qualifiedName, errCellDf)
+        errCellDf
       }
     }
   }

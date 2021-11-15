@@ -297,7 +297,10 @@ class RepairModelTests(ReusedSQLTestCase):
         _test_setTargets(["Sex", "Income"])
         _test_setTargets(["Age", "Sex"])
         _test_setTargets(["Non-Existent", "Age"])
-        _test_setTargets(["Non-Existent"])
+
+        self.assertRaises(
+            ValueError,
+            lambda: self._build_model().setInput("adult").setRowId("tid").setTargets(["Non-Existent"]).run())
 
     def test_setErrorCells(self):
         def _test_setErrorCells(error_cells):
@@ -437,36 +440,35 @@ class RepairModelTests(ReusedSQLTestCase):
 
         # Tests for `RegExErrorDetector`
         error_detectors = [
-            NullErrorDetector(),
-            RegExErrorDetector("Exec-managerial"),
-            RegExErrorDetector("India")
+            RegExErrorDetector("Country", "United-States"),
+            RegExErrorDetector("Relationship", "(Husband|Own-child|Not-in-family)")
         ]
         regex_errors = self._build_model() \
             .setInput("adult") \
             .setRowId("tid") \
+            .setTargets(["Country", "Relationship"]) \
             .setErrorDetectors(error_detectors) \
             .run(detect_errors_only=True)
         self.assertEqual(
-            regex_errors.subtract(null_errors).orderBy("tid", "attribute").collect(), [
-                Row(tid=1, attribute="Occupation", current_value="Exec-managerial"),
+            regex_errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=7, attribute="Country", current_value="India"),
-                Row(tid=12, attribute="Occupation", current_value="Exec-managerial"),
-                Row(tid=14, attribute="Occupation", current_value="Exec-managerial"),
-                Row(tid=16, attribute="Occupation", current_value="Exec-managerial")])
+                Row(tid=14, attribute="Relationship", current_value="Unmarried"),
+                Row(tid=16, attribute="Relationship", current_value="Unmarried"),
+                Row(tid=19, attribute="Country", current_value="Iran")])
 
         # Tests for `ConstraintErrorDetector`
         constraint_path = "{}/adult_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
         error_detectors = [
-            NullErrorDetector(),
             ConstraintErrorDetector(constraint_path)
         ]
         constraint_errors = self._build_model() \
             .setInput("adult") \
             .setRowId("tid") \
+            .setTargets(["Sex", "Relationship"]) \
             .setErrorDetectors(error_detectors) \
             .run(detect_errors_only=True)
         self.assertEqual(
-            constraint_errors.subtract(null_errors).orderBy("tid", "attribute").collect(), [
+            constraint_errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=4, attribute="Relationship", current_value="Husband"),
                 Row(tid=4, attribute="Sex", current_value="Female"),
                 Row(tid=11, attribute="Relationship", current_value="Husband"),
