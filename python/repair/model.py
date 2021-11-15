@@ -645,6 +645,7 @@ class RepairModel():
         return input_table, num_input_rows, num_attrs, \
             continous_columns if continous_columns != [""] else []
 
+    # TODO: Needs to implement an error detector based on edit distances
     def _detect_error_cells(self, input_table: str) -> DataFrame:
         # Initializes the given error detectors with the input params
         for d in self.error_detectors:
