@@ -4,23 +4,12 @@
 [![Coverage Status](https://coveralls.io/repos/github/maropu/spark-data-repair-plugin/badge.svg?branch=master)](https://coveralls.io/github/maropu/spark-data-repair-plugin?branch=master)
 -->
 
-This is an experimental prototype to provide a statistical model to repair data errors on a distributed computing framework, Spark.
-Clean and consistent data can have a positive impact on downstream processing;
-clean data make reporting and machine learning more accurate and
-consistent data with constraints (e.g., functional dependency) are important for efficient query plans.
-Therefore, data repairing to make data clean and consistent is a first step for an reliable anaysis pipeline and
-the prototype intends to implement a scalable repair algorithm on Spark.
-
-NOTE: Dirty data can have the various types of data errors, but the prototype aims to correct data errors
-only if an attributes having data errors is correlated to the other attributes in an input relation and
-the domain of the attribute has correct values against their errors.
-A statistical model in the prototype captures data dependencies between attributes and uses them to repair data.
-To correct the data errors that the prototype cannot handle,
-existing data cleaning tools might be suitable; for instance, a programming-by-examples technique is a good fit to fix
-format errors like '2021.8.23' -> '2021/8/23' and [Trifacta](https://www.trifacta.com/) has a functionality,
-named [Transformation by Example](https://docs.trifacta.com/display/SS/Transformation+by+Example+Page),
-to implement the technique. Therefore, to handle all error types in an input dirty relation,
-the prototype must be complementary to other tools.
+This is an experimental prototype for building a statistical model to repair tabular data errors on [Apache Spark](https://spark.apache.org/)
+which is a parallel and distributed framework for large-scale data processing.
+Clean and consistent data is one of major interests for downstream analytics;
+clean data makes machine learning and BI reporting more accurate and
+consistent data with constraints (e.g., functional dependences) is important for efficient query plans.
+Therefore, data repairing is a first step for an reliable analytics pipeline.
 
 ## How to Repair Error Cells
 
@@ -29,8 +18,9 @@ $ git clone https://github.com/maropu/spark-data-repair-plugin.git
 $ cd spark-data-repair-plugin
 
 # This repository includes a simple wrapper script `bin/python` to create
-# a virtual environment to resolve the required dependencies (e.g., Python 3.7 and PySpark 3.2),
-# then launch a Python VM with this plugin.
+# a conda virtual environment to resolve the required dependencies
+# (e.g., Python 3.7 and PySpark 3.2), and then
+# launch a Python VM with our plugin.
 $ ./bin/python
 
 Welcome to
@@ -72,8 +62,8 @@ Scavenger APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'scavenger'.
 | 19|31-50|     HS-grad|            Sales|      Husband|  Male|         Iran|MoreThan50K|
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 
-# Runs jobs to compute repair updates for the seven NULL cells above in `dirty_df`
-# A `repaired` column represents proposed updates to repiar them.
+# Runs a job to compute repair updates for the seven NULL cells above in `dirty_df`
+# A `repaired` column represents proposed updates to repiar them
 >>> repair_updates_df = scavenger.repair.setInput("adult").setRowId("tid").run()
 >>> repair_updates_df.show()
 +---+---------+-------------+-----------+
@@ -88,7 +78,7 @@ Scavenger APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'scavenger'.
 | 16|   Income|         null|MoreThan50K|
 +---+---------+-------------+-----------+
 
-# You need to set `True` to `repair_data` for getting repaired data
+# You need to set `True` to `repair_data` for getting repaired data directly
 >>> clean_df = scavenger.repair.setInput("adult").setRowId("tid").run(repair_data=True)
 >>> clean_df.show()
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
@@ -116,14 +106,27 @@ Scavenger APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'scavenger'.
 | 19|31-50|     HS-grad|            Sales|      Husband|  Male|         Iran|MoreThan50K|
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 
-# Or, you can apply the computed repair updates into the input directly
+# Or, you can merge the computed repair updates with the input table as follows
 >>> repair_updates_df.createOrReplaceTempView("predicted")
 >>> clean_df = scavenger.misc.options({"repair_updates": "predicted", "table_name": "adult", "row_id": "tid"}).repair()
 >>> clean_df.show()
 <the same output above>
 ```
 
-For more running examples, please check scripts in the [resources/examples](./resources/examples) folder.
+For more running examples, please check Python scripts in the [resources/examples](./resources/examples) folder.
+
+NOTE: There are many types of errors on dirty data [9], but our purpose is to repair the data
+whose attribute already has correct values against their errors.
+For instance, in the `Sex` column in the `adult` table above, our plugin can repair the three NULL cells
+because it already has correct values, `Female` or `Male`, against the NULL cells.
+To repair them, our plugin captures and exploits data dependencies between the `Sex` column and the other ones.
+For repairing the other types of data errors, existing data cleaning tools might be suitable;
+a programming-by-examples technique is a good fit to fix format errors like `2021.8.23` -> `2021/8/23` and
+[Trifacta](https://www.trifacta.com/) has a functionality,
+named [Transformation by Example](https://docs.trifacta.com/display/SS/Transformation+by+Example+Page),
+to implement it. Few existing tools can handle the error cases in the `adult` example above and,
+therefore, our plugin is complementary to those other tools.
+
 
 ## Error Detection
 
@@ -169,7 +172,7 @@ If you want to know detected error cells, you can set `True` to `detect_errors_o
 for getting them in pre-processing as follows;
 
 ```
-# Runs jobs to detect error cells
+# Runs a job to detect error cells
 >>> error_cells_df = scavenger.repair.setInput("adult").setRowId("tid").run(detect_errors_only=True)
 >>> error_cells_df.show()
 +---+---------+-------------+
@@ -299,6 +302,10 @@ scavenger.repair
  - [13] Ihab F. Ilyas and Xu Chu, Trends in Cleaning Relational Data: Consistency and Deduplication, Foundations and Trends in Databases, vol.5, no.4, pp.281-393, 2015.
  - [14] Mohamed Yakout et al., Guided data repair, Proceedings of the VLDB Endowment, 4(5), pp.279–289, 2011.
  - [15] El Kindi Rezig et al., Horizon: Scalable Dependency-driven Data Cleaning, Proceedings of the VLDB Endowment, vol.14, no.11, 2021.
+
+## TODO
+
+ - Renames scavenger to delphi
 
 ## Bug reports
 
