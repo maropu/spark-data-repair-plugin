@@ -253,7 +253,7 @@ scavenger.repair
 
   // Parameters for Error Detection
   .setErrorCells(str)                          // user-specified error cells
-  .setErrorDetectors(list)                     // list of error detector implementations (`NullErrorDetector`, `RegExErrorDetector`, `ConstraintErrorDetector`, and `OutlierErrorDetector`)
+  .setErrorDetectors(list)                     // list of error detector implementations (`NullErrorDetector`, `DomainValues`, `RegExErrorDetector`, `ConstraintErrorDetector`, and `OutlierErrorDetector`)
   .setDiscreteThreshold(float)                 // max domain size of discrete values (default: 80)
   .setMinCorrThreshold(float)                  // threshold to decide which columns are used to compute domains (default: 0.70)
   .setDomainThresholds(float, float)           // thresholds to reduce domain size (default: 0.0, 0.70)

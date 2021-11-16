@@ -67,13 +67,23 @@ class NullErrorDetector(ErrorDetector):
 
 class DomainValues(ErrorDetector):
 
-    def __init__(self, attr: str, values: List[str]) -> None:
+    def __init__(self, attr: str, values: List[str] = [], autofill: bool = False, min_count_thres: int = 12) -> None:
         ErrorDetector.__init__(self, 'DomainValues')
         self.attr = attr
-        self.domain_values = values
+        self.values = values
+        self.autofill = autofill
+        self.min_count_thres = min_count_thres
 
     def _detect_impl(self) -> DataFrame:
-        regex = '({})'.format('|'.join(self.domain_values)) if self.domain_values else '$^'
+        domain_values = self.values
+        if self.autofill:
+            domain_value_df = self._spark.table(str(self.qualified_input_name)) \
+                .groupBy(self.attr).count() \
+                .where(f'count > {self.min_count_thres}') \
+                .selectExpr(self.attr)
+            domain_values = [r[0] for r in domain_value_df.collect()]
+
+        regex = '({})'.format('|'.join(domain_values)) if domain_values else '$^'
         jdf = self._detector_api.detectErrorCellsFromRegEx(
             self.qualified_input_name, self.row_id, self._to_target_list(), self.attr, regex)
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
