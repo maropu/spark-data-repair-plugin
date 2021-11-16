@@ -73,7 +73,7 @@ class DomainValues(ErrorDetector):
         self.domain_values = values
 
     def _detect_impl(self) -> DataFrame:
-        regex = '({})'.format('|'.join(self.domain_values))
+        regex = '({})'.format('|'.join(self.domain_values)) if self.domain_values else '$^'
         jdf = self._detector_api.detectErrorCellsFromRegEx(
             self.qualified_input_name, self.row_id, self._to_target_list(), self.attr, regex)
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore

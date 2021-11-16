@@ -81,7 +81,7 @@ abstract class ErrorDetector extends RepairBase {
     targetAttrs: Seq[String],
     options: Map[String, Any]): DataFrame
 
-  protected def emptyTable(df: DataFrame, rowId: String): DataFrame = {
+  protected def createEmptyResultDfFrom(df: DataFrame, rowId: String): DataFrame = {
     val rowIdType = df.schema.find(_.name == rowId).get.dataType.sql
     createEmptyTable(s"$rowId $rowIdType, attribute STRING")
   }
@@ -180,7 +180,7 @@ object RegExErrorDetector extends ErrorDetector {
     val targetColumn = getOptionValue[String]("attr", options)
     val regex = getOptionValue[String]("regex", options)
     if (!inputColumns.contains(targetColumn) || regex == null || regex.trim.isEmpty) {
-      emptyTable(inputDf, rowId)
+      createEmptyResultDfFrom(inputDf, rowId)
     } else {
       withTempView(inputDf) { inputView =>
         val errCellDf = spark.sql(
@@ -210,7 +210,7 @@ object ConstraintErrorDetector extends ErrorDetector {
     // If `constraintFilePath` not given, just returns an empty table
     val constraintFilePath = getOptionValue[String]("constraintFilePath", options)
     if (constraintFilePath == null || constraintFilePath.trim.isEmpty) {
-      emptyTable(inputDf, rowId)
+      createEmptyResultDfFrom(inputDf, rowId)
     } else {
       withTempView(inputDf, cache = true) { inputView =>
         // Loads all the denial constraints from a given file path
@@ -226,7 +226,7 @@ object ConstraintErrorDetector extends ErrorDetector {
         }
 
         if (constraints.predicates.isEmpty) {
-          emptyTable(inputDf, rowId)
+          createEmptyResultDfFrom(inputDf, rowId)
         } else {
           logBasedOnLevel({
             val constraintLists = constraints.predicates.zipWithIndex.map { case (preds, i) =>
@@ -286,7 +286,7 @@ object GaussianOutlierErrorDetector extends ErrorDetector {
     }.map(_.name)
 
     if (continousAttrs.isEmpty) {
-      emptyTable(inputDf, rowId)
+      createEmptyResultDfFrom(inputDf, rowId)
     } else {
       val percentileExprs = continousAttrs.map { attr =>
         val approxEnabled = getOptionValue[Boolean]("approxEnabled", options)

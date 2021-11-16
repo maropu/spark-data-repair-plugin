@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pyspark.sql import DataFrame, SparkSession, functions  # type: ignore[import]
 from pyspark.sql.functions import col, expr  # type: ignore[import]
-from pyspark.sql.types import ByteType, ShortType, IntegerType, LongType  # type: ignore[import]
+from pyspark.sql.types import ByteType, IntegerType, LongType, ShortType, StructType  # type: ignore[import]
 
 from repair.costs import UpdateCostFunction, NoCost
 from repair.detectors import ConstraintErrorDetector, ErrorDetector, NullErrorDetector
@@ -633,19 +633,16 @@ class RepairModel():
             _logger.debug(f"Dropping an auto-generated view: {v}")
             self._spark.sql(f"DROP VIEW IF EXISTS {v}")
 
-    def _check_input_table(self) -> Tuple[str, int, int, List[str]]:
-        ret_as_json = json.loads(self._repair_api.checkInputTable(
-            self.db_name, self._input_table, str(self.row_id)))
-
+    def _check_input_table(self) -> Tuple[str, List[str]]:
+        ret_as_json = json.loads(self._repair_api.checkInputTable(self.db_name, self._input_table, str(self.row_id)))
         input_table = ret_as_json["input_table"]
-        num_input_rows = int(ret_as_json["num_input_rows"])
-        num_attrs = int(ret_as_json["num_attrs"])
         continous_columns = ret_as_json["continous_attrs"].split(",")
 
-        _logger.info(f"input_table: {input_table} ({num_input_rows}rows x {num_attrs}cols)")
+        _logger.info("input_table: {} ({} rows x {} columns)".format(
+            input_table, self._spark.table(input_table).count(),
+            len(self._spark.table(input_table).columns) - 1))
 
-        return input_table, num_input_rows, num_attrs, \
-            continous_columns if continous_columns != [""] else []
+        return input_table, continous_columns if continous_columns != [""] else []
 
     # TODO: Needs to implement an error detector based on edit distances
     def _detect_error_cells(self, input_table: str) -> DataFrame:
@@ -668,7 +665,7 @@ class RepairModel():
             "NOT IN" if negate else "IN", ",".join(map(lambda x: f"'{x}'", targets))))
 
     @_spark_job_group(name="error detection")
-    def _detect_errors(self, input_table: str, num_attrs: int, num_input_rows: int) -> Tuple[DataFrame, List[str]]:
+    def _detect_errors(self, input_table: str) -> Tuple[DataFrame, List[str]]:
         # If `self.error_cells` provided, just uses it
         if self.error_cells is not None:
             # TODO: Even in this case, we need to use a NULL detector because
@@ -690,9 +687,6 @@ class RepairModel():
         else:
             # Applies error detectors to get noisy cells
             noisy_cells_df = self._detect_error_cells(input_table)
-            _logger.info(f'[Error Detection Phase] Detecting errors '
-                         f'in a table `{input_table}` '
-                         f'({num_attrs} cols x {num_input_rows} rows)...')
 
         noisy_columns: List[str] = []
         num_noisy_cells = noisy_cells_df.count()
@@ -704,15 +698,14 @@ class RepairModel():
             noisy_cells_df = self._with_current_values(
                 input_table, noisy_cells_df, noisy_columns)
 
-        _logger.info('[Error Detection Phase] {} noisy cells found ({}%)'.format(
-            num_noisy_cells, (num_noisy_cells * 100.0) / (num_attrs * num_input_rows)))
-
         return noisy_cells_df, noisy_columns
 
     def _prepare_repair_base_cells(
-            self, input_table: str, noisy_cells_df: DataFrame, target_columns: List[str],
-            num_input_rows: int, num_attrs: int) -> DataFrame:
+            self, input_table: str, noisy_cells_df: DataFrame, target_columns: List[str]) -> DataFrame:
         # Sets NULL at the detected noisy cells
+        input_df = self._spark.table(input_table)
+        num_input_rows = input_df.count()
+        num_attrs = len(input_df.columns) - 1
         _logger.debug("{}/{} noisy cells found, then converts them into NULL cells...".format(
             noisy_cells_df.count(), num_input_rows * num_attrs))
         noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v2")
@@ -734,9 +727,9 @@ class RepairModel():
 
     @_spark_job_group(name="cell domain analysis")
     def _analyze_error_cell_domain(
-            self, noisy_cells_df: DataFrame, discretized_table: str,
-            continous_columns: List[str], target_columns: List[str], discretized_columns: List[str],
-            num_input_rows: int) -> Tuple[str, str]:
+            self, input_table: str, discretized_table: str, noisy_cells_df: DataFrame,
+            continous_columns: List[str], target_columns: List[str],
+            discretized_columns: List[str]) -> Tuple[str, str]:
 
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
@@ -752,7 +745,7 @@ class RepairModel():
             ",".join(continous_columns),
             ",".join(target_columns),
             ",".join(discretized_columns),
-            num_input_rows,
+            self._spark.table(input_table).count(),
             self.max_attrs_to_compute_domains,
             self.attr_stat_sample_ratio,
             self.attr_stat_threshold,
@@ -764,8 +757,13 @@ class RepairModel():
 
         return ret_as_json["cell_domain"], ret_as_json["pairwise_attr_stats"]
 
-    def _extract_error_cells(self, noisy_cells_df: DataFrame, cell_domain: str,
-                             num_input_rows: int, num_attrs: int) -> Tuple[DataFrame, DataFrame]:
+    def _extract_error_cells(self, input_table: str, noisy_cells_df: DataFrame,
+                             discretized_table: str, discretized_columns: List[str], continous_columns: List[str],
+                             target_columns: List[str]) -> Tuple[DataFrame, Any]:
+        cell_domain, pairwise_stats = self._analyze_error_cell_domain(
+            input_table, discretized_table, noisy_cells_df, continous_columns,
+            target_columns, discretized_columns)
+
         # Fixes cells if a predicted value is the same with an initial one
         fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) repaired"
         weak_labeled_cells_df = self._spark.table(cell_domain) \
@@ -777,11 +775,9 @@ class RepairModel():
         assert noisy_cells_df.count() == error_cells_df.count() + weak_labeled_cells_df.count()
 
         _logger.info('[Error Detection Phase] {} noisy cells fixed and '
-                     '{} error cells ({}%) remaining...'.format(
-                         weak_labeled_cells_df.count(), error_cells_df.count(),
-                         error_cells_df.count() * 100.0 / (num_attrs * num_input_rows)))
+                     '{} error cells remaining...'.format(weak_labeled_cells_df.count(), error_cells_df.count()))
 
-        return error_cells_df, weak_labeled_cells_df
+        return error_cells_df, pairwise_stats
 
     def _split_clean_and_dirty_rows(
             self, repair_base_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame]:
@@ -1371,9 +1367,34 @@ class RepairModel():
         # TODO: Implements a logic to check if constraints hold on the repair candidates
         return repair_candidates
 
+    def _do_error_detection(self, input_table: str, continous_columns: List[str]) -> Tuple[DataFrame, Any, Any, Any]:
+        # If no error found, we don't need to do nothing
+        noisy_cells_df, noisy_columns = self._detect_errors(input_table)
+        if noisy_cells_df.count() == 0:  # type: ignore
+            return noisy_cells_df, [], {}, {}
+
+        discretized_table, discretized_columns, distinct_stats = self._discretize_attrs(input_table)
+        if len(discretized_columns) == 0:
+            return noisy_cells_df, [], {}, {}
+
+        # Target repairable(discretizable) columns
+        target_columns = list(filter(lambda c: c in discretized_columns, noisy_columns))
+        _logger.info(f"Repairable target columns are {','.join(target_columns)} "
+                     f"in noisy columns ({','.join(noisy_columns)})")
+
+        # Defines true error cells based on the result of domain analysis
+        if len(target_columns) > 0 and len(discretized_columns) > 1:
+            error_cells_df, pairwise_stats = self._extract_error_cells(
+                input_table, noisy_cells_df, discretized_table, discretized_columns, continous_columns, target_columns)
+            return error_cells_df, target_columns, pairwise_stats, distinct_stats
+
+        return noisy_cells_df, target_columns, {}, distinct_stats
+
+    def _emptyDf(self, schema: StructType) -> DataFrame:
+        return self._spark.createDataFrame(self._spark.sparkContext.emptyRDD(), schema)
+
     @elapsed_time  # type: ignore
-    def _run(self, input_table: str, num_input_rows: int, num_attrs: int,
-             continous_columns: List[str], detect_errors_only: bool,
+    def _run(self, input_table: str, continous_columns: List[str], detect_errors_only: bool,
              compute_repair_candidate_prob: bool,
              compute_repair_prob: bool, compute_repair_score: bool,
              repair_data: bool) -> DataFrame:
@@ -1381,66 +1402,30 @@ class RepairModel():
         #################################################################################
         # 1. Error Detection Phase
         #################################################################################
+        _logger.info(f'[Error Detection Phase] Detecting errors in a table `{input_table}`... ')
 
-        # If no error found, we don't need to do nothing
-        noisy_cells_df, noisy_columns = self._detect_errors(input_table, num_attrs, num_input_rows)
-        if noisy_cells_df.count() == 0:  # type: ignore
-            _logger.info("Any error cell not found, so the input data is already clean")
-            if repair_data:
-                return self._spark.table(input_table)
-            else:
-                return noisy_cells_df
-
-        discretized_table, discretized_columns, distinct_stats = self._discretize_attrs(input_table)
-        if not len(discretized_columns) > 0:
-            if not detect_errors_only:
-                raise ValueError("At least one valid discretizable feature is needed to repair error cells, "
-                                 "but no such feature found")
-            else:
-                return noisy_cells_df
-
-        # Target repairable(discretizable) columns
-        target_columns = list(filter(lambda c: c in discretized_columns, noisy_columns))
-        _logger.info(f"Target repairable columns are {','.join(target_columns)} "
-                     f"in noisy columns ({','.join(noisy_columns)})")
-
-        # Defines true error cells based on the result of domain analysis
-        error_cells_df = noisy_cells_df
-        weak_labeled_cells_df_opt = None
-        pairwise_stats: Dict[str, List[str]] = {}
-
-        # Checks if pairwise stats can be computed
-        if len(target_columns) > 0 and len(discretized_columns) > 1:
-            cell_domain, pairwise_stats = self._analyze_error_cell_domain(
-                noisy_cells_df, discretized_table, continous_columns, target_columns,
-                discretized_columns, num_input_rows)
-            error_cells_df, weak_labeled_cells_df_opt = self._extract_error_cells(
-                noisy_cells_df, cell_domain, num_input_rows, num_attrs)
+        error_cells_df, target_columns, pairwise_stats, distinct_stats = \
+            self._do_error_detection(input_table, continous_columns)
 
         # If `detect_errors_only` is True, returns found error cells
         if detect_errors_only:
             return error_cells_df
 
+        # If no error found, we don't need to do nothing
+        if error_cells_df.count() == 0:  # type: ignore
+            _logger.info("Any error cell not found, so the input data is already clean")
+            return self._spark.table(input_table) if repair_data \
+                else self._emptyDf(error_cells_df.schema)
+
         if len(target_columns) == 0:
-            raise ValueError("To repair noisy cells, they should be discretizable")
+            raise ValueError("At least one valid discretizable feature is needed to repair error cells, "
+                             "but no such feature found")
 
         # Filters out non-repairable columns from `error_cells_df`
         error_cells_df = self._filter_columns_from(error_cells_df, target_columns)
 
-        # If no error found, we don't need to do nothing
-        if error_cells_df.count() == 0:
-            _logger.info("Any error cells not found, so the input data is already clean")
-            if repair_data:
-                return self._spark.table(input_table)
-            else:
-                return error_cells_df
-
-        # Clear out noisy cells (to NULL)
-        repair_base_df = self._prepare_repair_base_cells(
-            input_table, noisy_cells_df, target_columns, num_input_rows, num_attrs)
-        # Updates the base cells by using the predicted weak labeled ones
-        repair_base_df = self._repair_attrs(weak_labeled_cells_df_opt, repair_base_df) \
-            if weak_labeled_cells_df_opt is not None else repair_base_df
+        # Clear out error cells (to NULL)
+        repair_base_df = self._prepare_repair_base_cells(input_table, error_cells_df, target_columns)
 
         #################################################################################
         # 2. Repair Model Training Phase
@@ -1595,7 +1580,7 @@ class RepairModel():
 
         try:
             # Validates input data
-            input_table, num_input_rows, num_attrs, continous_columns = self._check_input_table()
+            input_table, continous_columns = self._check_input_table()
 
             if self.maximal_likelihood_repair_enabled and len(continous_columns) != 0:
                 raise ValueError("Cannot enable the maximal likelihood repair mode "
@@ -1605,9 +1590,7 @@ class RepairModel():
                 raise ValueError(f"Target attributes not found in {input_table}: {','.join(self.targets)}")
 
             df, elapsed_time = self._run(
-                input_table, num_input_rows, num_attrs,
-                continous_columns, detect_errors_only,
-                compute_repair_candidate_prob,
+                input_table, continous_columns, detect_errors_only, compute_repair_candidate_prob,
                 compute_repair_prob, compute_repair_score, repair_data)
 
             _logger.info(f"!!!Total Processing time is {elapsed_time}(s)!!!")

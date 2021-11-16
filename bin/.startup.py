@@ -42,7 +42,6 @@ logging.basicConfig(
     format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
-# spark.sql("SET spark.scavenger.logLevel=TRACE")
 
 # Sets Spark configs for data repairing
 spark.sql("SET spark.sql.cbo.enabled=true")

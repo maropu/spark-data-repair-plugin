@@ -54,11 +54,7 @@ object RepairApi extends RepairBase {
       .filter(f => f.name != rowId && continousTypes.contains(f.dataType))
       .map(_.name).mkString(",")
 
-    Seq("input_table" -> qualifiedName,
-      "num_input_rows" -> s"${inputDf.count}",
-      "num_attrs" -> s"${inputDf.columns.length - 1}",
-      "continous_attrs" -> continousAttrs
-    ).asJson
+    Seq("input_table" -> qualifiedName, "continous_attrs" -> continousAttrs).asJson
   }
 
   def withCurrentValues(

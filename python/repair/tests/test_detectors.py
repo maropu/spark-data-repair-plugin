@@ -79,6 +79,11 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 Row(tid=16, attribute="Income")])
 
     def test_DomainValues(self):
+        errors = DomainValues("Country", []) \
+            .setUp("tid", "adult", []).detect()
+        self.assertEqual(
+            errors.orderBy("tid", "attribute").collect(),
+            [Row(tid=i, attribute="Country") for i in range(0, 20)])
         errors = DomainValues("Country", ["United-States"]) \
             .setUp("tid", "adult", []).detect()
         self.assertEqual(

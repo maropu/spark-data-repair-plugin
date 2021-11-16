@@ -81,10 +81,9 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       val jsonObj = parse(jsonString)
       val data = jsonObj.asInstanceOf[JObject].values
       assert(data("input_table") === "t")
-      assert(data("num_input_rows") === "1")
-      assert(data("num_attrs") === "7")
       assert(data("continous_attrs") === "v0,v1,v2,v3,v4,v5")
     }
+
   }
 
   test("withCurrentValues") {

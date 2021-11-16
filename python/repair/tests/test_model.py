@@ -599,7 +599,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setRowId("tid")
             self.assertRaisesRegexp(
                 ValueError,
-                "To repair noisy cells, they should be discretizable",
+                "At least one valid discretizable feature is needed to repair error cells, but no such feature found",
                 lambda: test_model.run(detect_errors_only=False))
             self.assertEqual(
                 test_model.run(detect_errors_only=True).orderBy("tid", "attribute").collect(), [
