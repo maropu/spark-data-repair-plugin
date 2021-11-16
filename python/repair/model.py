@@ -642,6 +642,8 @@ class RepairModel():
         num_attrs = int(ret_as_json["num_attrs"])
         continous_columns = ret_as_json["continous_attrs"].split(",")
 
+        _logger.info(f"input_table: {input_table} ({num_input_rows}rows x {num_attrs}cols)")
+
         return input_table, num_input_rows, num_attrs, \
             continous_columns if continous_columns != [""] else []
 
@@ -1376,11 +1378,6 @@ class RepairModel():
              compute_repair_prob: bool, compute_repair_score: bool,
              repair_data: bool) -> DataFrame:
 
-        _logger.info(f"input_table: {input_table} ({num_input_rows}rows x {num_attrs}cols)")
-        input_df = self._spark.table(input_table)
-        if self.targets and len(set(self.targets) & set(input_df.columns)) == 0:
-            raise ValueError(f"Target attributes not found in {input_table}: {','.join(self.targets)}")
-
         #################################################################################
         # 1. Error Detection Phase
         #################################################################################
@@ -1389,10 +1386,10 @@ class RepairModel():
         noisy_cells_df, noisy_columns = self._detect_errors(input_table, num_attrs, num_input_rows)
         if noisy_cells_df.count() == 0:  # type: ignore
             _logger.info("Any error cell not found, so the input data is already clean")
-            if not repair_data:
-                return noisy_cells_df
+            if repair_data:
+                return self._spark.table(input_table)
             else:
-                return input_df
+                return noisy_cells_df
 
         discretized_table, discretized_columns, distinct_stats = self._discretize_attrs(input_table)
         if not len(discretized_columns) > 0:
@@ -1433,10 +1430,10 @@ class RepairModel():
         # If no error found, we don't need to do nothing
         if error_cells_df.count() == 0:
             _logger.info("Any error cells not found, so the input data is already clean")
-            if not repair_data:
-                return error_cells_df
+            if repair_data:
+                return self._spark.table(input_table)
             else:
-                return input_df
+                return error_cells_df
 
         # Clear out noisy cells (to NULL)
         repair_base_df = self._prepare_repair_base_cells(
@@ -1515,7 +1512,7 @@ class RepairModel():
             return repair_candidates_df
         else:
             clean_df = clean_rows_df.union(repaired_df)
-            assert clean_df.count() == input_df.count()
+            assert clean_df.count() == self._spark.table(input_table).count()
             return clean_df
 
     def run(self, detect_errors_only: bool = False, compute_repair_candidate_prob: bool = False,
@@ -1588,6 +1585,9 @@ class RepairModel():
             raise ValueError("{} cannot be set to True simultaneously".format(
                 "/".join(map(lambda x: f"`{x}`", selected_param))))
 
+        if compute_repair_score and not self.maximal_likelihood_repair_enabled:
+            raise ValueError("Cannot compute repair scores when the maximal likelihood repair mode disabled")
+
         # To compute scores or the probabiity of predicted repairs, we need to compute
         # the probabiity mass function of candidate repairs.
         if compute_repair_prob or compute_repair_score:
@@ -1597,18 +1597,21 @@ class RepairModel():
             # Validates input data
             input_table, num_input_rows, num_attrs, continous_columns = self._check_input_table()
 
-            if compute_repair_score and not self.maximal_likelihood_repair_enabled:
-                raise ValueError("Cannot compute repair scores when the maximal likelihood repair mode disabled")
             if self.maximal_likelihood_repair_enabled and len(continous_columns) != 0:
                 raise ValueError("Cannot enable the maximal likelihood repair mode "
                                  "when continous attributes found")
+
+            if self.targets and len(set(self.targets) & set(self._spark.table(input_table).columns)) == 0:
+                raise ValueError(f"Target attributes not found in {input_table}: {','.join(self.targets)}")
 
             df, elapsed_time = self._run(
                 input_table, num_input_rows, num_attrs,
                 continous_columns, detect_errors_only,
                 compute_repair_candidate_prob,
                 compute_repair_prob, compute_repair_score, repair_data)
+
             _logger.info(f"!!!Total Processing time is {elapsed_time}(s)!!!")
+
             return df
         finally:
             self._release_resources()

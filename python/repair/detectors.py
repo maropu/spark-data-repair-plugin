@@ -65,16 +65,30 @@ class NullErrorDetector(ErrorDetector):
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
 
+class DomainValues(ErrorDetector):
+
+    def __init__(self, attr: str, values: List[str]) -> None:
+        ErrorDetector.__init__(self, 'DomainValues')
+        self.attr = attr
+        self.domain_values = values
+
+    def _detect_impl(self) -> DataFrame:
+        regex = '({})'.format('|'.join(self.domain_values))
+        jdf = self._detector_api.detectErrorCellsFromRegEx(
+            self.qualified_input_name, self.row_id, self._to_target_list(), self.attr, regex)
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
+
+
 class RegExErrorDetector(ErrorDetector):
 
-    def __init__(self, attr: str, error_pattern: str) -> None:
+    def __init__(self, attr: str, regex: str) -> None:
         ErrorDetector.__init__(self, 'RegExErrorDetector')
         self.attr = attr
-        self.error_pattern = error_pattern
+        self.regex = regex
 
     def _detect_impl(self) -> DataFrame:
         jdf = self._detector_api.detectErrorCellsFromRegEx(
-            self.qualified_input_name, self.row_id, self._to_target_list(), self.attr, self.error_pattern)
+            self.qualified_input_name, self.row_id, self._to_target_list(), self.attr, self.regex)
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
 

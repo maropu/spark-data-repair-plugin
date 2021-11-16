@@ -40,7 +40,7 @@ Welcome to
    /__ / .__/\_,_/_/ /_/\_\   version 3.2.0
       /_/
 
-Using Python version 3.6.8 (default, Dec 29 2018 19:04:46)
+Using Python version 3.7.11 (default, Jul 27 2021 07:03:16)
 SparkSession available as 'spark'.
 Scavenger APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'scavenger'.
 

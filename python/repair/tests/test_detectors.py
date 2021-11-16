@@ -21,7 +21,7 @@ import unittest
 from pyspark import SparkConf
 from pyspark.sql import Row
 
-from repair.detectors import ConstraintErrorDetector, NullErrorDetector, \
+from repair.detectors import ConstraintErrorDetector, DomainValues, NullErrorDetector, \
     OutlierErrorDetector, RegExErrorDetector
 from repair.tests.testutils import ReusedSQLTestCase, load_testdata
 
@@ -73,6 +73,20 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 Row(tid=12, attribute="Age"),
                 Row(tid=16, attribute="Income")])
         errors = NullErrorDetector().setUp("tid", "adult", ["Income", "Unknown"]).detect()
+        self.assertEqual(
+            errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=5, attribute="Income"),
+                Row(tid=16, attribute="Income")])
+
+    def test_DomainValues(self):
+        errors = DomainValues("Country", ["United-States"]) \
+            .setUp("tid", "adult", []).detect()
+        self.assertEqual(
+            errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=7, attribute="Country"),
+                Row(tid=19, attribute="Country")])
+        errors = DomainValues("Income", ["LessThan50K", "MoreThan50K"]) \
+            .setUp("tid", "adult", []).detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=5, attribute="Income"),

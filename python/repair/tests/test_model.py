@@ -27,7 +27,7 @@ from pyspark.sql.utils import AnalysisException
 from repair.costs import Levenshtein
 from repair.misc import RepairMisc
 from repair.model import FunctionalDepModel, RepairModel, PoorModel
-from repair.detectors import ConstraintErrorDetector, NullErrorDetector, RegExErrorDetector
+from repair.detectors import ConstraintErrorDetector, DomainValues, NullErrorDetector, RegExErrorDetector
 from repair.tests.requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
 from repair.tests.testutils import Eventually, ReusedSQLTestCase, load_testdata
@@ -437,6 +437,23 @@ class RepairModelTests(ReusedSQLTestCase):
             null_errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=5, attribute="Age", current_value=None),
                 Row(tid=12, attribute="Age", current_value=None)])
+
+        # Tests for `DomainValues`
+        error_detectors = [
+            DomainValues("Country", ["United-States"]),
+            DomainValues("Income", ["LessThan50K", "MoreThan50K"])
+        ]
+        regex_errors = self._build_model() \
+            .setInput("adult") \
+            .setRowId("tid") \
+            .setErrorDetectors(error_detectors) \
+            .run(detect_errors_only=True)
+        self.assertEqual(
+            regex_errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=5, attribute="Income", current_value=None),
+                Row(tid=7, attribute="Country", current_value="India"),
+                Row(tid=16, attribute="Income", current_value=None),
+                Row(tid=19, attribute="Country", current_value="Iran")])
 
         # Tests for `RegExErrorDetector`
         error_detectors = [
