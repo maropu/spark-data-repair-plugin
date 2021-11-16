@@ -70,7 +70,7 @@ class DomainValues(ErrorDetector):
     def __init__(self, attr: str, values: List[str] = [], autofill: bool = False, min_count_thres: int = 12) -> None:
         ErrorDetector.__init__(self, 'DomainValues')
         self.attr = attr
-        self.values = values
+        self.values = values if not autofill else []
         self.autofill = autofill
         self.min_count_thres = min_count_thres
 
@@ -79,9 +79,11 @@ class DomainValues(ErrorDetector):
         if self.autofill:
             domain_value_df = self._spark.table(str(self.qualified_input_name)) \
                 .groupBy(self.attr).count() \
-                .where(f'count > {self.min_count_thres}') \
+                .where(f'{self.attr} IS NOT NULL AND count > {self.min_count_thres}') \
                 .selectExpr(self.attr)
-            domain_values = [r[0] for r in domain_value_df.collect()]
+
+            if domain_value_df.count() > 0:
+                domain_values = [r[0] for r in domain_value_df.collect()]
 
         regex = '({})'.format('|'.join(domain_values)) if domain_values else '$^'
         jdf = self._detector_api.detectErrorCellsFromRegEx(

@@ -104,6 +104,10 @@ class ErrorDetectorTests(ReusedSQLTestCase):
             errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=7, attribute="Country"),
                 Row(tid=19, attribute="Country")])
+        errors = DomainValues("Income", autofill=True, min_count_thres=1) \
+            .setUp("tid", "adult", []).detect()
+        self.assertEqual(
+            errors.orderBy("tid", "attribute").collect(), [])
 
     def test_RegExErrorDetector(self):
         errors = RegExErrorDetector("Country", "United-States") \
