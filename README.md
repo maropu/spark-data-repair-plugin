@@ -302,6 +302,7 @@ scavenger.repair
  - [13] Ihab F. Ilyas and Xu Chu, Trends in Cleaning Relational Data: Consistency and Deduplication, Foundations and Trends in Databases, vol.5, no.4, pp.281-393, 2015.
  - [14] Mohamed Yakout et al., Guided data repair, Proceedings of the VLDB Endowment, 4(5), pp.279–289, 2011.
  - [15] El Kindi Rezig et al., Horizon: Scalable Dependency-driven Data Cleaning, Proceedings of the VLDB Endowment, vol.14, no.11, 2021.
+ - [16] Peng Li et al., CleanML: A Study for Evaluating the Impact of Data Cleaning on ML Classification Tasks, Proceedings of ICDE, pp.13-24, 2021.
 
 ## TODO
 
