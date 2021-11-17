@@ -50,16 +50,16 @@ find_package() {
 find_package
 
 # Check if a virtual env already exists or not
-PYSPARK_CONDA_ENV="pyspark-py36-conda-env"
+PYSPARK_CONDA_ENV="pyspark-py37-conda-env"
 if [ -z "$(conda env list | grep "$PYSPARK_CONDA_ENV ")" ]; then
-  conda env create -q -n $PYSPARK_CONDA_ENV python=3.6 --file ${ROOT_DIR}/bin/conda-reduced.yml
+  conda env create -q -n $PYSPARK_CONDA_ENV python=3.7 --file ${ROOT_DIR}/bin/conda-reduced.yml
 fi
 
 # Activate a conda virtual env for a driver
 source activate $PYSPARK_CONDA_ENV
 
 # Package the required dependencies for executors if necessary
-PYSPARK_EXECUTOR_ENV=${ROOT_DIR}/bin/pyspark-py36-conda-env.tar.gz
+PYSPARK_EXECUTOR_ENV=${ROOT_DIR}/bin/pyspark-py37-conda-env.tar.gz
 if [ ! -f "$PYSPARK_EXECUTOR_ENV" ]; then
   conda pack -q -f -o $PYSPARK_EXECUTOR_ENV
 fi

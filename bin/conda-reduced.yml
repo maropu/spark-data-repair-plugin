@@ -7,7 +7,7 @@ dependencies:
   - conda-pack=0.6.0
   - pyarrow=1.0.0
   - pandas=0.25.3
-  - lightgbm=2.3.1
+  - lightgbm=3.3.1
   - scikit-learn=0.24.2
   - hyperopt=0.2.5
   - category_encoders=2.2.2

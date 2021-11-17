@@ -82,7 +82,7 @@ if __name__ == "__main__":
     try:
         repaired_df.write.saveAsTable(args.output)
     except:
-        temp_output_table_name = _create_temp_name()
+        temp_output_table_name = _create_temp_name(prefix=args.output)
         repaired_df.write.saveAsTable(temp_output_table_name)
         print(f"Table '{args.output}' already exists, so saved the predicted repair values "
               f"as '{temp_output_table_name}' instead")
