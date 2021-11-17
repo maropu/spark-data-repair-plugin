@@ -201,13 +201,18 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
             f = filter(lambda x: x[1] > 0.0, zip(model.feature_name_, model.feature_importances_))
             return list(sorted(f, key=lambda x: x[1], reverse=True))
 
-        _logger.debug(f"lightgbm: feature_importances={_feature_importances()}")
+        # TODO: Fix an error below:
+        # $ ./bin/spark-submit ./python/main.py --input adult --output repaired --row-id tid
+        #   Failed to build a stat model because: 'LGBMClassifier' object has no attribute 'feature_name_'
+        #   ...
+        #
+        # _logger.debug(f"lightgbm: feature_importances={_feature_importances()}")
 
         sorted_lst = sorted(trials.trials, key=lambda x: x['result']['loss'])
         min_loss = sorted_lst[0]['result']['loss']
         return model, -min_loss
     except Exception as e:
-        _logger.warning(f"Failed to build a stat model because: ${e}")
+        _logger.warning(f"Failed to build a stat model because: {e}")
         return None, 0.0
 
 
