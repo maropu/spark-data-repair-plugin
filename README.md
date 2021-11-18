@@ -307,6 +307,7 @@ scavenger.repair
 ## TODO
 
  - Renames scavenger to delphi
+ - Supports Isolation Forest for error detection
 
 ## Bug reports
 
