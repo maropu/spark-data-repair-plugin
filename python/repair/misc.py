@@ -108,7 +108,7 @@ class RepairMisc():
         | 16|   Income|MoreThan50K|
         +---+---------+-----------+
 
-        >>> df = scavenger.misc.options({"repair_updates": "predicted", "table_name": "adult",
+        >>> df = delphi.misc.options({"repair_updates": "predicted", "table_name": "adult",
         ...    "row_id": "tid"}).repair()
         >>> df.where("tid in ('3', '5', '7', '12', '16')").show()
         +---+-----+------------+---------------+------------+------+-------------+-----------+
@@ -136,7 +136,7 @@ class RepairMisc():
 
         Examples
         --------
-        >>> df = scavenger.misc.option("table_name", "adult").describe()
+        >>> df = delphi.misc.option("table_name", "adult").describe()
         >>> df.show()
         +------------+-----------+----+----+-------+------+------+----+
         |    attrName|distinctCnt| min| max|nullCnt|avgLen|maxLen|hist|
@@ -163,7 +163,7 @@ class RepairMisc():
 
         Examples
         --------
-        >>> df = scavenger.misc.options({"table_name": "adult", "row_id": "tid"}).flatten()
+        >>> df = delphi.misc.options({"table_name": "adult", "row_id": "tid"}).flatten()
         >>> df.show(3)
         +---+------------+---------------+
         |tid|   attribute|          value|
@@ -186,7 +186,7 @@ class RepairMisc():
 
         Examples
         --------
-        >>> df = scavenger.misc.options({"table_name": "adult", "row_id": "tid", "k": "2"})
+        >>> df = delphi.misc.options({"table_name": "adult", "row_id": "tid", "k": "2"})
         ...    .splitInputTable()
         >>> df.show(3)
         +---+---+
@@ -221,7 +221,7 @@ class RepairMisc():
         Examples
         --------
         >>> spark.range(10).write.saveAsTable("t")
-        >>> df = scavenger.misc.options({"table_name": "t", "target_attr_list": "id",
+        >>> df = delphi.misc.options({"table_name": "t", "target_attr_list": "id",
         ...    "null_ratio": "0.9"}).injectNull()
         >>> df.show()
         +----+
@@ -280,7 +280,7 @@ class RepairMisc():
 
         Examples
         --------
-        >>> df = scavenger.misc.options({"table_name": "adult", "row_id": "tid",
+        >>> df = delphi.misc.options({"table_name": "adult", "row_id": "tid",
         ...    "targets": "Income,Age,Relationship,Sex"}).toHistogram()
         >>> df.show()
         +------------+------------------------------------------------------------------+
@@ -305,7 +305,7 @@ class RepairMisc():
 
         Examples
         --------
-        >>> df = scavenger.misc.options({"table_name": "adult", "row_id": "tid",
+        >>> df = delphi.misc.options({"table_name": "adult", "row_id": "tid",
         ...    "error_cells": "error_cells"}).toErrorMap()
         >>> df.show()
         +---+---------+
@@ -346,7 +346,7 @@ class RepairMisc():
 
         Examples
         --------
-        >>> scavenger.misc.options({"table_name": "adult", "path": "/tmp/adult",
+        >>> delphi.misc.options({"table_name": "adult", "path": "/tmp/adult",
         ...    "min_corr_thres": "0.60"}).generateDepGraph()
         """
         self._check_required_options(["path", "table_name"])

@@ -260,7 +260,7 @@ class RepairModel():
         | 16|   Income|
         +---+---------+
 
-        >>> df = scavenger.repair.setInput("adult").setRowId("tid")
+        >>> df = delphi.repair.setInput("adult").setRowId("tid")
         ...     .setErrorCells("error_cells").run()
         >>> df.show()
         +---+---------+-------------+-----------+
@@ -1523,7 +1523,7 @@ class RepairModel():
 
         Examples
         --------
-        >>> df = scavenger.repair.setInput(spark.table("adult")).setRowId("tid").run()
+        >>> df = delphi.repair.setInput(spark.table("adult")).setRowId("tid").run()
         >>> df.show()
         +---+---------+-------------+-----------+
         |tid|attribute|current_value|   repaired|
@@ -1537,7 +1537,7 @@ class RepairModel():
         | 16|   Income|         null|MoreThan50K|
         +---+---------+-------------+-----------+
 
-        >>> df = scavenger.repair.setInput(spark.table("adult")).setRowId("tid")
+        >>> df = delphi.repair.setInput(spark.table("adult")).setRowId("tid")
         ...    .run(compute_repair_prob=True)
         >>> df.show()
         +---+---------+-------------+-----------+-------------------+

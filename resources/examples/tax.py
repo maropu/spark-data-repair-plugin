@@ -5,7 +5,7 @@ spark.read \
     .write \
     .saveAsTable("tax")
 
-scavenger.misc \
+delphi.misc \
     .options({"db_name": "default", "table_name": "tax", "row_id": "tid"}) \
     .flatten() \
     .write \
@@ -31,10 +31,10 @@ spark.table("tax_clean").show(1)
 spark.table("error_cells_ground_truth").show(1)
 
 # Shows column stats
-scavenger.misc.options({"table_name": "tax"}).describe().show()
+delphi.misc.options({"table_name": "tax"}).describe().show()
 
 # Detects error cells then repairs them
-repaired_df = scavenger.repair \
+repaired_df = delphi.repair \
     .setDbName("default") \
     .setTableName("tax") \
     .setRowId("tid") \

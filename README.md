@@ -32,7 +32,7 @@ Welcome to
 
 Using Python version 3.7.11 (default, Jul 27 2021 07:03:16)
 SparkSession available as 'spark'.
-Scavenger APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'scavenger'.
+Delphi APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'delphi'.
 
 # Loads CSV data having seven NULL cells
 >>> spark.read.option("header", True).csv("./testdata/adult.csv").createOrReplaceTempView("adult")
@@ -64,7 +64,7 @@ Scavenger APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'scavenger'.
 
 # Runs a job to compute repair updates for the seven NULL cells above in `dirty_df`
 # A `repaired` column represents proposed updates to repiar them
->>> repair_updates_df = scavenger.repair.setInput("adult").setRowId("tid").run()
+>>> repair_updates_df = delphi.repair.setInput("adult").setRowId("tid").run()
 >>> repair_updates_df.show()
 +---+---------+-------------+-----------+
 |tid|attribute|current_value|   repaired|
@@ -79,7 +79,7 @@ Scavenger APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'scavenger'.
 +---+---------+-------------+-----------+
 
 # You need to set `True` to `repair_data` for getting repaired data directly
->>> clean_df = scavenger.repair.setInput("adult").setRowId("tid").run(repair_data=True)
+>>> clean_df = delphi.repair.setInput("adult").setRowId("tid").run(repair_data=True)
 >>> clean_df.show()
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 |tid|  Age|   Education|       Occupation| Relationship|   Sex|      Country|     Income|
@@ -108,7 +108,7 @@ Scavenger APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'scavenger'.
 
 # Or, you can merge the computed repair updates with the input table as follows
 >>> repair_updates_df.createOrReplaceTempView("predicted")
->>> clean_df = scavenger.misc.options({"repair_updates": "predicted", "table_name": "adult", "row_id": "tid"}).repair()
+>>> clean_df = delphi.misc.options({"repair_updates": "predicted", "table_name": "adult", "row_id": "tid"}).repair()
 >>> clean_df.show()
 <the same output above>
 ```
@@ -144,7 +144,7 @@ t1&EQ(t1.Sex,"Female")&EQ(t1.Relationship,"Husband")
 t1&EQ(t1.Sex,"Male")&EQ(t1.Relationship,"Wife")
 
 # Use the constraints to detect errors then repair them.
->>> repair_updates_df = scavenger.repair.setInput("adult").setRowId("tid") \
+>>> repair_updates_df = delphi.repair.setInput("adult").setRowId("tid") \
 ...   .setErrorDetectors([NullErrorDetector(), ConstraintErrorDetector(constraint_path="./testdata/adult_constraints.txt")]) \
 ...   .run()
 
@@ -173,7 +173,7 @@ for getting them in pre-processing as follows;
 
 ```
 # Runs a job to detect error cells
->>> error_cells_df = scavenger.repair.setInput("adult").setRowId("tid").run(detect_errors_only=True)
+>>> error_cells_df = delphi.repair.setInput("adult").setRowId("tid").run(detect_errors_only=True)
 >>> error_cells_df.show()
 +---+---------+-------------+
 |tid|attribute|current_value|
@@ -195,7 +195,7 @@ If you want to select some of repaired updates based on theier probabilities, yo
 
 ```
 # To get predicted probabilities, computes repair updates with `compute_repair_prob`=`True`
->>> repair_updates_df = scavenger.repair.setInput("adult").setRowId("tid").run(compute_repair_prob=True)
+>>> repair_updates_df = delphi.repair.setInput("adult").setRowId("tid").run(compute_repair_prob=True)
 >>> repair_updates_df.show()
 +---+---------+-------------+-----------+------------------+
 |tid|attribute|current_value|   repaired|              prob|
@@ -211,7 +211,7 @@ If you want to select some of repaired updates based on theier probabilities, yo
 
 # Applies the repair udpates whose probabilities are greater than 0.70
 >>> repair_updates_df.where("prob > 0.70").createOrReplaceTempView("predicted")
->>> clean_df = scavenger.misc.options({"repair_updates": "predicted", "table_name": "adult", "row_id": "tid"}).repair()
+>>> clean_df = delphi.misc.options({"repair_updates": "predicted", "table_name": "adult", "row_id": "tid"}).repair()
 >>> clean_df.show()
 <output with the four cells repaired>
 ```
@@ -246,7 +246,7 @@ scala> spark.table("repaired").show()
 ## Major Configurations
 
 ```
-scavenger.repair
+delphi.repair
 
   // Basic Parameters
   .setDbName(str)                              // database name (default: '')
@@ -306,7 +306,6 @@ scavenger.repair
 
 ## TODO
 
- - Renames scavenger to delphi
  - Supports Isolation Forest for error detection
 
 ## Bug reports

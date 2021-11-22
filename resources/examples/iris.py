@@ -8,7 +8,7 @@ spark.read \
     .write \
     .saveAsTable("iris")
 
-scavenger.misc \
+delphi.misc \
     .options({"db_name": "default", "table_name": "iris", "row_id": "tid"}) \
     .flatten() \
     .write \
@@ -27,7 +27,7 @@ spark.read \
 spark.table("iris_clean").show(1)
 
 # Detects error cells then repairs them
-repaired_df = scavenger.repair \
+repaired_df = delphi.repair \
     .setDbName("default") \
     .setTableName("iris") \
     .setRowId("tid") \

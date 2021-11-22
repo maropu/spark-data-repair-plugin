@@ -5,7 +5,7 @@ spark.read \
     .write \
     .saveAsTable("beers")
 
-scavenger.misc \
+delphi.misc \
     .options({"db_name": "default", "table_name": "beers", "row_id": "index"}) \
     .flatten() \
     .write \
@@ -33,7 +33,7 @@ spark.table("error_cells_ground_truth").show(1)
 # Detects error cells then repairs them
 # NOTE: Erroneous attributes are 'ibu', 'abv', 'state', 'ounces', and 'city',
 # but the attributes except for 'state' have simple format errors.
-repaired_df = scavenger.repair \
+repaired_df = delphi.repair \
     .setDbName("default") \
     .setTableName("beers") \
     .setRowId("index") \

@@ -70,11 +70,11 @@ if __name__ == "__main__":
     num_parallelism = spark.sparkContext.defaultParallelism
     spark.sql(f"SET spark.sql.shuffle.partitions={num_parallelism * num_tasks_per_core}")
 
-    # Defines an entrypoint for Scavenger APIs
-    from repair.api import Scavenger
+    # Defines an entrypoint for Delphi APIs
+    from repair.api import Delphi
 
-    scavenger = Scavenger.getOrCreate()
-    repaired_df = scavenger.repair \
+    delphi = Delphi.getOrCreate()
+    repaired_df = Delphi.repair \
         .setTableName(args.input) \
         .setRowId(args.row_id) \
         .run()

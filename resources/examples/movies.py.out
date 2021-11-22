@@ -12,7 +12,7 @@ Welcome to
 
 Using Python version 3.6.8 (default, Dec 29 2018 19:04:46)
 SparkSession available as 'spark'.
-Scavenger APIs (version 0.1.0-spark3.1-EXPERIMENTAL) available as 'scavenger'.
+Delphi APIs (version 0.1.0-spark3.1-EXPERIMENTAL) available as 'delphi'.
 >>> # Loads a target data then defines tables for it
 ... spark.read \
 ...     .option("header", True) \
@@ -20,7 +20,7 @@ Scavenger APIs (version 0.1.0-spark3.1-EXPERIMENTAL) available as 'scavenger'.
 ...     .write \
 ...     .saveAsTable("movies")
 >>>                                                                             
->>> scavenger.misc \
+>>> delphi.misc \
 ...     .options({"db_name": "default", "table_name": "movies", "row_id": "id"}) \
 ...     .flatten() \
 ...     .write \
@@ -73,7 +73,7 @@ only showing top 1 row
 only showing top 1 row
 
 >>> # Detects error cells then repairs them
-... repaired_df = scavenger.repair \
+... repaired_df = delphi.repair \
 ...     .setDbName("default") \
 ...     .setTableName("movies") \
 ...     .setRowId("id") \

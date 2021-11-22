@@ -12,7 +12,7 @@ Welcome to
 
 Using Python version 3.6.8 (default, Dec 29 2018 19:04:46)
 SparkSession available as 'spark'.
-Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
+Delphi APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'delphi'.
 >>> # Loads a target data then defines tables for it
 ... boston_schema = "tid int, CRIM double, ZN int, INDUS string, CHAS string, NOX string, RM double, AGE string, DIS double, RAD string, TAX int, PTRATIO string, B double, LSTAT double"
 >>> spark.read \
@@ -22,7 +22,7 @@ Scavenger APIs (version 0.1.0-spark3.0-EXPERIMENTAL) available as 'scavenger'.
 ...   .write \
 ...   .saveAsTable("boston")
 >>> 
->>> scavenger.repair().misc \
+>>> delphi.repair().misc \
 ...   .options({"db_name": "default", "table_name": "boston", "row_id": "tid"}) \
 ...   .flatten() \
 ...   .write \
@@ -76,7 +76,7 @@ only showing top 1 row
 
 >>> 
 >>> # Detects error cells then repairs them
-... val repaired_df = scavenger.repair \
+... val repaired_df = delphi.repair \
 ...   .setDbName("default") \
 ...   .setTableName("boston") \
 ...   .setRowId("tid") \

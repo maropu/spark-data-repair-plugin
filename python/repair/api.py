@@ -23,10 +23,10 @@ from repair.misc import RepairMisc
 from repair.model import RepairModel
 
 
-class Scavenger():
-    """A Scavenger API set for data repairing.
+class Delphi():
+    """A Delphi API set for data repairing.
 
-    A :class:`Scavenger` has two types of API groups:
+    A :class:`Delphi` has two types of API groups:
 
     * ``repair``: Detect errors in input data and infer correct ones from clean data.
     * ``misc``: Provide helper functionalities.
@@ -36,14 +36,14 @@ class Scavenger():
 
     _instance: Any = None
 
-    def __new__(cls, *args: Any, **kwargs: Any) -> "Scavenger":
+    def __new__(cls, *args: Any, **kwargs: Any) -> "Delphi":
         if cls._instance is None:
-            cls._instance = super(Scavenger, cls).__new__(cls)
+            cls._instance = super(Delphi, cls).__new__(cls)
         return cls._instance
 
     @staticmethod
-    def getOrCreate() -> "Scavenger":
-        return Scavenger()
+    def getOrCreate() -> "Delphi":
+        return Delphi()
 
     @property
     def repair(self) -> RepairModel:

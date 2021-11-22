@@ -5,7 +5,7 @@ spark.read \
     .write \
     .saveAsTable("hospital")
 
-scavenger.misc \
+delphi.misc \
     .options({"db_name": "default", "table_name": "hospital", "row_id": "tid"}) \
     .flatten() \
     .write \
@@ -36,7 +36,7 @@ error_detectors = [
     ConstraintErrorDetector(constraint_path="./testdata/hospital_constraints.txt"),
     NullErrorDetector()
 ]
-repaired_df = scavenger.repair \
+repaired_df = delphi.repair \
     .setDbName("default") \
     .setTableName("hospital") \
     .setRowId("tid") \

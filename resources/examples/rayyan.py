@@ -5,7 +5,7 @@ spark.read \
     .write \
     .saveAsTable("rayyan")
 
-scavenger.misc \
+delphi.misc \
     .options({"db_name": "default", "table_name": "rayyan", "row_id": "id"}) \
     .flatten() \
     .write \
@@ -31,7 +31,7 @@ spark.table("rayyan_clean").show(1)
 spark.table("error_cells_ground_truth").show(1)
 
 # Detects error cells then repairs them
-repaired_df = scavenger.repair \
+repaired_df = delphi.repair \
     .setDbName("default") \
     .setTableName("rayyan") \
     .setRowId("id") \

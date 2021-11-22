@@ -19,7 +19,7 @@ jobs:
       CONDA_DISABLED: 1
       MAVEN_OPTS: -Xmx1g
     steps:
-      - name: Checkout Scavenger repository
+      - name: Checkout Delphi repository
         uses: actions/checkout@v2
         # In order to fetch changed files
         with:

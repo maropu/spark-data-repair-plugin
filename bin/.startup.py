@@ -53,8 +53,8 @@ num_tasks_per_core = 1
 num_parallelism = spark.sparkContext.defaultParallelism
 spark.sql(f"SET spark.sql.shuffle.partitions={num_parallelism * num_tasks_per_core}")
 
-# Defines an entrypoint for Scavenger APIs
-from repair.api import Scavenger
-scavenger = Scavenger.getOrCreate()
+# Defines an entrypoint for Delphi APIs
+from repair.api import Delphi
+delphi = Delphi.getOrCreate()
 
-print(f"Scavenger APIs (version {Scavenger.version()}) available as 'scavenger'.")
+print(f"Delphi APIs (version {Delphi.version()}) available as 'delphi'.")
