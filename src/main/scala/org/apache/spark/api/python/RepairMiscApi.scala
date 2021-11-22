@@ -43,9 +43,9 @@ object RepairMiscApi extends RepairBase {
 
     val (inputDf, _) = checkAndGetQualifiedInputName(dbName, tableName, rowId)
     val expr = inputDf.schema.filter(_.name != rowId)
-      .map { f => s"STRUCT($rowId, '${f.name}', CAST(`${f.name}` AS STRING))" }
+      .map { f => s"STRUCT(`$rowId`, '${f.name}', CAST(`${f.name}` AS STRING))" }
       .mkString("ARRAY(", ", ", ")")
-    inputDf.selectExpr(s"INLINE($expr) AS ($rowId, attribute, value)")
+    inputDf.selectExpr(s"INLINE($expr) AS (`$rowId`, attribute, value)")
   }
 
   // TODO: Implements this func as an expression for supporting codegen
@@ -116,7 +116,7 @@ object RepairMiscApi extends RepairBase {
       val q = if (optionMap.contains("q")) Try(optionMap("q").toInt).getOrElse(2) else 2
       // TODO: Adds an option for using a feature hashing trick to reduce dimension
       // https://spark.apache.org/docs/latest/ml-features.html#featurehasher
-      val df = inputDf.selectExpr(rowId, s"array(${targetAttrs.mkString(", ")}) AS $inputAttr")
+      val df = inputDf.selectExpr(s"`$rowId`", s"array(${targetAttrs.mkString(", ")}) AS $inputAttr")
         .withColumn(bigramAttr, computeQgramUdf(lit(q), $"$inputAttr"))
         .drop(inputAttr)
 
@@ -206,20 +206,20 @@ object RepairMiscApi extends RepairBase {
     val repairDf = spark.sql(
       s"""
          |SELECT
-         |  $rowId, map_from_entries(collect_list(r)) AS repairs
+         |  `$rowId`, map_from_entries(collect_list(r)) AS repairs
          |FROM (
-         |  select $rowId, struct(attribute, repaired) r
+         |  select `$rowId`, struct(attribute, repaired) r
          |  FROM $repairUpdates
          |)
          |GROUP BY
-         |  $rowId
+         |  `$rowId`
        """.stripMargin)
 
     withTempView(inputDf) { inputView =>
       withTempView(repairDf) { repairView =>
         val cleanAttrs = inputDf.schema.map {
           case f if f.name == rowId =>
-            s"$inputView.$rowId"
+            s"$inputView.`$rowId`"
           case f if attrsToRepair.contains(f.name) =>
             val repaired = if (continousAttrTypeMap.contains(f.name)) {
               val dataType = continousAttrTypeMap(f.name)
@@ -240,7 +240,7 @@ object RepairMiscApi extends RepairBase {
              |SELECT ${cleanAttrs.mkString(", ")}
              |FROM $inputView
              |LEFT OUTER JOIN $repairView
-             |ON $inputView.$rowId = $repairView.$rowId
+             |ON $inputView.`$rowId` = $repairView.`$rowId`
            """.stripMargin)
       }
     }
@@ -289,10 +289,10 @@ object RepairMiscApi extends RepairBase {
         s"""
            |SELECT '${f.name}' attribute, collect_list(b) histogram
            |FROM (
-           |  SELECT named_struct('value', ${f.name}, 'cnt', COUNT(1)) b
+           |  SELECT named_struct('value', `${f.name}`, 'cnt', COUNT(1)) b
            |  FROM $inputView
-           |  WHERE ${f.name} IS NOT NULL
-           |  GROUP BY ${f.name}
+           |  WHERE `${f.name}` IS NOT NULL
+           |  GROUP BY `${f.name}`
            |)
          """.stripMargin
       }
@@ -318,13 +318,13 @@ object RepairMiscApi extends RepairBase {
     val errorDf = spark.sql(
       s"""
          |SELECT
-         |  $rowId, map_from_entries(COLLECT_LIST(r)) AS errors
+         |  `$rowId`, map_from_entries(COLLECT_LIST(r)) AS errors
          |FROM (
-         |  select $rowId, struct(attribute, '') r
+         |  select `$rowId`, struct(attribute, '') r
          |  FROM $errCellView
          |)
          |GROUP BY
-         |  $rowId
+         |  `$rowId`
        """.stripMargin)
 
     withTempView(inputDf) { inputView =>
@@ -337,10 +337,10 @@ object RepairMiscApi extends RepairBase {
         }
         spark.sql(
           s"""
-             |SELECT $inputView.$rowId, ${errorBitmapExprs.mkString(" || ")} AS error_map
+             |SELECT $inputView.`$rowId`, ${errorBitmapExprs.mkString(" || ")} AS error_map
              |FROM $inputView
              |LEFT OUTER JOIN $errorView
-             |ON $inputView.$rowId = $errorView.$rowId
+             |ON $inputView.`$rowId` = $errorView.`$rowId`
            """.stripMargin)
       }
     }

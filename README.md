@@ -308,7 +308,6 @@ scavenger.repair
 
  - Renames scavenger to delphi
  - Supports Isolation Forest for error detection
- - Escape all the input attributes in SQL
 
 ## Bug reports
 

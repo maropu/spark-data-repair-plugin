@@ -44,7 +44,7 @@ object RepairApi extends RepairBase {
 
     // Checks if `row_id` is unique
     val rowCount = inputDf.count()
-    val distinctCount = inputDf.selectExpr(rowId).distinct().count()
+    val distinctCount = inputDf.selectExpr(s"`$rowId`").distinct().count()
     if (distinctCount != rowCount) {
       throw AnalysisException(s"Uniqueness does not hold in column '$rowId' " +
         s"of table '$qualifiedName' (# of distinct '$rowId': $distinctCount, # of rows: $rowCount)")
@@ -78,17 +78,17 @@ object RepairApi extends RepairBase {
     spark.udf.register("extractField", (row: Row, attribute: String) => {
       row.getString(attrToId(attribute))
     })
-    val cellExprs = targetAttrs.map { a => s"CAST(r.`$a` AS STRING) $a" }
+    val cellExprs = targetAttrs.map { a => s"CAST(r.`$a` AS STRING) `$a`" }
     val df = spark.sql(
       s"""
          |SELECT
-         |  l.$rowId,
+         |  l.`$rowId`,
          |  l.attribute,
          |  extractField(struct(${cellExprs.mkString(", ")}), l.attribute) current_value
          |FROM
          |  $errCellView l, $inputView r
          |WHERE
-         |  l.$rowId = r.$rowId
+         |  l.`$rowId` = r.`$rowId`
        """.stripMargin)
     assert(checkSchema(df, "attribute STRING, current_value STRING", rowId, strict = true))
     df
@@ -127,10 +127,10 @@ object RepairApi extends RepairBase {
         case (ColumnStat(_, min, max), tpe) if continousTypes.contains(tpe) =>
           logBasedOnLevel(s"'$attr' regraded as a continuous attribute (min=${min.get}, " +
             s"max=${max.get}), so discretized into [0, $discreteThres)")
-          Some(s"int(($attr - ${min.get}) / (${max.get} - ${min.get}) * $discreteThres) $attr")
+          Some(s"int((`$attr` - ${min.get}) / (${max.get} - ${min.get}) * $discreteThres) `$attr`")
         case (ColumnStat(distinctCount, _, _), _)
-          if whitelist.contains(attr) || (1 < distinctCount && distinctCount < discreteThres) =>
-          Some(attr)
+          if whitelist.contains(attr) || (1 < distinctCount && distinctCount <= discreteThres) =>
+          Some(s"`$attr`")
         case (ColumnStat(distinctCount, _, _), _) =>
           logWarning(s"'$attr' dropped because of its unsuitable domain (size=$distinctCount)")
           None
@@ -171,26 +171,26 @@ object RepairApi extends RepairBase {
 
     val errAttrDf = spark.sql(
       s"""
-         |SELECT $rowId, collect_set(attribute) AS errors
+         |SELECT `$rowId`, collect_set(attribute) AS errors
          |FROM $errCellView
-         |GROUP BY $rowId
+         |GROUP BY `$rowId`
        """.stripMargin)
 
     val repairBase = withTempView(errAttrDf) { errAttrView =>
       val cleanAttrs = spark.table(discretizedInputView).columns.map {
         case attr if attr == rowId =>
-          s"$discretizedInputView.$rowId"
+          s"$discretizedInputView.`$rowId`"
         case attr if attrsToRepair.contains(attr) =>
-          s"IF(array_contains(errors, '$attr'), NULL, $attr) AS $attr"
+          s"IF(array_contains(errors, '$attr'), NULL, `$attr`) AS `$attr`"
         case cleanAttr =>
-          cleanAttr
+          s"`$cleanAttr`"
       }
       spark.sql(
         s"""
            |SELECT ${cleanAttrs.mkString(", ")}
            |FROM $discretizedInputView
            |LEFT OUTER JOIN $errAttrView
-           |ON $discretizedInputView.$rowId = $errAttrView.$rowId
+           |ON $discretizedInputView.`$rowId` = $errAttrView.`$rowId`
          """.stripMargin)
     }
     val repairBaseView = createAndCacheTempView(repairBase, "repair_base_cells")
@@ -245,7 +245,7 @@ object RepairApi extends RepairBase {
       }
       spark.sql(
         s"""
-           |SELECT ${targetAttrs.mkString(", ")}, COUNT(1) cnt
+           |SELECT ${targetAttrs.map(a => s"`$a`").mkString(", ")}, COUNT(1) cnt
            |FROM $inputView
            |GROUP BY GROUPING SETS (
            |  ${groupingSetSeq.mkString(", ")}
@@ -256,7 +256,7 @@ object RepairApi extends RepairBase {
   }
 
   private def whereCaluseToFilterStat(a: String, attrs: Seq[String]): String = {
-    s"$a IS NOT NULL AND ${attrs.filter(_ != a).map(a => s"$a IS NULL").mkString(" AND ")}"
+    s"`$a` IS NOT NULL AND ${attrs.filter(_ != a).map(a => s"`$a` IS NULL").mkString(" AND ")}"
   }
 
   private[python] def computePairwiseStats(
@@ -282,10 +282,10 @@ object RepairApi extends RepairBase {
             s"""
                |SELECT -SUM($hXY) $hXY
                |FROM (
-               |  SELECT $a1 X, $a2 Y, (cnt / $rowCount) * log10(cnt / $rowCount) $hXY
+               |  SELECT `$a1` X, `$a2` Y, (cnt / $rowCount) * log10(cnt / $rowCount) $hXY
                |  FROM $freqStatView
-               |  WHERE $a1 IS NOT NULL AND
-               |    $a2 IS NOT NULL
+               |  WHERE `$a1` IS NOT NULL AND
+               |    `$a2` IS NOT NULL
                |)
              """.stripMargin)
 
@@ -306,10 +306,10 @@ object RepairApi extends RepairBase {
                |FROM (
                |  /* TODO: Needs to reconsider how-to-handle NULL */
                |  /* Use `MAX` to drop ($attrKey, null) tuples in `$inputView` */
-               |  SELECT $attrKey Y, (MAX(cnt) / $rowCount) * log10(MAX(cnt) / $rowCount) $hY
+               |  SELECT `$attrKey` Y, (MAX(cnt) / $rowCount) * log10(MAX(cnt) / $rowCount) $hY
                |  FROM $freqStatView
                |  WHERE ${whereCaluseToFilterStat(attrKey, targetAttrs)}
-               |  GROUP BY $attrKey
+               |  GROUP BY `$attrKey`
                |)
              """.stripMargin)
 
@@ -439,18 +439,18 @@ object RepairApi extends RepairBase {
           spark.sql(
             s"""
                |SELECT
-               |  l.$rowId, r.attribute, r.current_value, $domainInitValue domain
+               |  l.`$rowId`, r.attribute, r.current_value, $domainInitValue domain
                |FROM
                |  $discretizedInputView l, $repairCellView r
                |WHERE
-               |  l.$rowId = r.$rowId
+               |  l.`$rowId` = r.`$rowId`
              """.stripMargin)
         }
       } else {
         // Needs to keep the correlated attributes for selecting their domains
         val corrAttrSet = corrAttrMap.flatMap(_._2.map(_._1)).toSet
         val corrAttrs = if (corrAttrSet.nonEmpty) {
-          corrAttrSet.mkString(", ", ", ", "")
+          corrAttrSet.map(c => s"`$c`").mkString(", ", ", ", "")
         } else {
           ""
         }
@@ -459,11 +459,11 @@ object RepairApi extends RepairBase {
           spark.sql(
             s"""
                |SELECT
-               |  l.$rowId, r.attribute, r.current_value $corrAttrs
+               |  l.`$rowId`, r.attribute, r.current_value $corrAttrs
                |FROM
                |  $discretizedInputView l, $repairCellView r
                |WHERE
-               |  l.$rowId = r.$rowId
+               |  l.`$rowId` = r.`$rowId`
              """.stripMargin)
         }
 
@@ -473,7 +473,7 @@ object RepairApi extends RepairBase {
             // Adds an empty domain for initial state
             val initDomainDf = spark.sql(
               s"""
-                 |SELECT $rowId, attribute, current_value, $domainInitValue domain $corrAttrs
+                 |SELECT `$rowId`, attribute, current_value, $domainInitValue domain $corrAttrs
                  |FROM $rvView
                  |WHERE attribute = '$attribute'
                """.stripMargin)
@@ -493,27 +493,27 @@ object RepairApi extends RepairBase {
                   spark.sql(
                     s"""
                        |SELECT
-                       |  $rowId,
+                       |  `$rowId`,
                        |  attribute,
                        |  current_value,
                        |  IF(ISNOTNULL(l.domain), CONCAT(l.domain, r.d), r.d) domain,
-                       |  ${corrAttrSet.map(a => s"l.$a").mkString(",")}
+                       |  ${corrAttrSet.map(a => s"l.`$a`").mkString(",")}
                        |FROM
                        |  $domainSpaceView l
                        |LEFT OUTER JOIN (
-                       |  SELECT $attr, collect_set(named_struct('n', $attribute, 'cnt', array_max(array(double(cnt) - 1.0, 0.1)))) d
+                       |  SELECT `$attr`, collect_set(named_struct('n', `$attribute`, 'cnt', array_max(array(double(cnt) - 1.0, 0.1)))) d
                        |  FROM (
                        |    SELECT *
                        |    FROM $attrStatView
-                       |    WHERE $attribute IS NOT NULL AND
-                       |      $attr IS NOT NULL AND
+                       |    WHERE `$attribute` IS NOT NULL AND
+                       |      `$attr` IS NOT NULL AND
                        |      cnt > $tau
                        |  )
                        |  GROUP BY
-                       |    $attr
+                       |    `$attr`
                        |) r
                        |ON
-                       |  l.$attr = r.$attr
+                       |  l.`$attr` = r.`$attr`
                      """.stripMargin)
                 }
               }
@@ -530,33 +530,33 @@ object RepairApi extends RepairBase {
               spark.sql(
                 s"""
                    |SELECT
-                   |  $rowId, attribute, current_value, domain_value, SUM($score) $score
+                   |  `$rowId`, attribute, current_value, domain_value, SUM($score) $score
                    |FROM (
                    |  SELECT
-                   |    $rowId,
+                   |    `$rowId`,
                    |    attribute,
                    |    current_value,
                    |    domain_value_with_freq.n domain_value,
                    |    exp(ln(cnt / $rowCount) + ln(domain_value_with_freq.cnt / cnt)) $score
                    |  FROM (
                    |    SELECT
-                   |      $rowId,
+                   |      `$rowId`,
                    |      attribute,
                    |      current_value,
                    |      explode_outer(domain) domain_value_with_freq
                    |    FROM
                    |      $domainView
                    |  ) d LEFT OUTER JOIN (
-                   |    SELECT $attribute, MAX(cnt) cnt
+                   |    SELECT `$attribute`, MAX(cnt) cnt
                    |    FROM $attrStatView
                    |    WHERE ${whereCaluseToFilterStat(attribute, discretizedAttrs)}
-                   |    GROUP BY $attribute
+                   |    GROUP BY `$attribute`
                    |  ) s
                    |  ON
-                   |    d.domain_value_with_freq.n = s.$attribute
+                   |    d.domain_value_with_freq.n = s.`$attribute`
                    |)
                    |GROUP BY
-                   |  $rowId, attribute, current_value, domain_value
+                   |  `$rowId`, attribute, current_value, domain_value
                  """.stripMargin)
             }
 
@@ -565,23 +565,23 @@ object RepairApi extends RepairBase {
               spark.sql(
                 s"""
                    |SELECT
-                   |  l.$rowId,
+                   |  l.`$rowId`,
                    |  l.attribute,
                    |  current_value,
                    |  filter(collect_set(named_struct('n', domain_value, 'prob', $score / $denom)), x -> x.prob > $domain_threshold_beta) domain
                    |FROM
                    |  $domainWithScoreView l, (
                    |    SELECT
-                   |      $rowId, attribute, SUM($score) $denom
+                   |      `$rowId`, attribute, SUM($score) $denom
                    |    FROM
                    |      $domainWithScoreView
                    |    GROUP BY
-                   |      $rowId, attribute
+                   |      `$rowId`, attribute
                    |  ) r
                    |WHERE
-                   |  l.$rowId = r.$rowId AND l.attribute = r.attribute
+                   |  l.`$rowId` = r.`$rowId` AND l.attribute = r.attribute
                    |GROUP BY
-                   |  l.$rowId, l.attribute, current_value
+                   |  l.`$rowId`, l.attribute, current_value
                  """.stripMargin)
             }
           }

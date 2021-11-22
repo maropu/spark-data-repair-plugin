@@ -130,9 +130,9 @@ private[python] object DepGraph extends RepairBase {
       attrPairs.foreach { case Seq(x, y) =>
         val df = spark.sql(
           s"""
-             |SELECT CAST($x AS STRING) x, collect_set(named_struct('y', CAST($y AS STRING), 'cnt', cnt)) ys
+             |SELECT CAST(`$x` AS STRING) x, collect_set(named_struct('y', CAST(`$y` AS STRING), 'cnt', cnt)) ys
              |FROM $attrStatView
-             |WHERE $x IS NOT NULL AND $y IS NOT NULL
+             |WHERE `$x` IS NOT NULL AND `$y` IS NOT NULL
              |GROUP BY $x
            """.stripMargin)
 

@@ -83,7 +83,7 @@ abstract class ErrorDetector extends RepairBase {
 
   protected def createEmptyResultDfFrom(df: DataFrame, rowId: String): DataFrame = {
     val rowIdType = df.schema.find(_.name == rowId).get.dataType.sql
-    createEmptyTable(s"$rowId $rowIdType, attribute STRING")
+    createEmptyTable(s"`$rowId` $rowIdType, attribute STRING")
   }
 
   protected def getInput(qualifiedName: String, targetAttrs: Seq[String]): (DataFrame, Seq[String]) = {
@@ -154,9 +154,9 @@ object NullErrorDetector extends ErrorDetector {
       // Detects error erroneous cells in a given table
       val sqls = inputColumns.filter(_ != rowId).map { attr =>
         s"""
-           |SELECT $rowId, '$attr' AS attribute
+           |SELECT `$rowId`, '$attr' AS attribute
            |FROM $inputView
-           |WHERE $attr IS NULL
+           |WHERE `$attr` IS NULL
          """.stripMargin
       }
 
@@ -185,9 +185,9 @@ object RegExErrorDetector extends ErrorDetector {
       withTempView(inputDf) { inputView =>
         val errCellDf = spark.sql(
           s"""
-             |SELECT $rowId, '$targetColumn' AS attribute
+             |SELECT `$rowId`, '$targetColumn' AS attribute
              |FROM $inputView
-             |WHERE CAST($targetColumn AS STRING) NOT RLIKE '$regex' OR $targetColumn IS NULL
+             |WHERE CAST(`$targetColumn` AS STRING) NOT RLIKE '$regex' OR `$targetColumn` IS NULL
            """.stripMargin)
 
         loggingErrorStats("RegEx-based error detector", qualifiedName, errCellDf)
@@ -245,11 +245,11 @@ object ConstraintErrorDetector extends ErrorDetector {
             if (attrs.nonEmpty) {
               // TODO: Needs to look for a more smart logic to filter error cells
               Some(s"""
-                 |SELECT DISTINCT $rowId, explode(array(${attrs.map(a => s"'$a'").mkString(",")})) attribute
+                 |SELECT DISTINCT `$rowId`, explode(array(${attrs.map(a => s"'$a'").mkString(",")})) attribute
                  |FROM (
-                 |  SELECT $leftRelationIdent.$rowId FROM $inputView AS $leftRelationIdent
+                 |  SELECT $leftRelationIdent.`$rowId` FROM $inputView AS $leftRelationIdent
                  |  WHERE EXISTS (
-                 |    SELECT $rowId FROM $inputView AS $rightRelationIdent
+                 |    SELECT `$rowId` FROM $inputView AS $rightRelationIdent
                  |    WHERE ${preds.mkString(" AND ")}
                  |  )
                  |)
@@ -311,9 +311,9 @@ object GaussianOutlierErrorDetector extends ErrorDetector {
         val (lower, upper) = (q1 - 1.5 * (q3 - q1), q3 + 1.5 * (q3 - q1))
         logBasedOnLevel(s"Non-outlier values in $attr should be in [$lower, $upper]")
         s"""
-           |SELECT $rowId, '$attr' attribute
+           |SELECT `$rowId`, '$attr' attribute
            |FROM $qualifiedName
-           |WHERE $attr < $lower OR $attr > $upper
+           |WHERE `$attr` < $lower OR `$attr` > $upper
          """.stripMargin
       }
 

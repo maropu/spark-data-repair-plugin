@@ -501,6 +501,58 @@ class RepairModelTests(ReusedSQLTestCase):
             test_model.run(repair_data=True).orderBy("tid").collect(),
             expected_result)
 
+    def test_escaped_column_names(self):
+        with self.tempView("inputView1", "inputView2"):
+            rows = [
+                (1, "1", None, 1.0),
+                (2, None, "test-2", 2.0),
+                (3, "1", "test-1", 1.0),
+                (4, "2", "test-2", 2.0),
+                (5, "2", "test-2", 1.0),
+                (6, "1", "test-1", 1.0)
+            ]
+            self.spark.createDataFrame(rows, ["t i d", "x x", "y y", "z z"]) \
+                .createOrReplaceTempView("inputView1")
+
+            test_model = self._build_model() \
+                .setTableName("inputView1") \
+                .setRowId("t i d") \
+                .setDiscreteThreshold(10)
+            self.assertEqual(
+                test_model.run().orderBy("t i d", "attribute").collect(), [
+                    Row(1, "y y", None, 'test-1'),
+                    Row(2, "x x", None, '2')])
+            df = test_model.run(compute_repair_candidate_prob=True).selectExpr('`t i d`', 'attribute')
+            self.assertEqual(
+                df.orderBy('t i d', 'attribute').collect(), [
+                    Row(1, "y y"),
+                    Row(2, "x x")])
+            df = test_model.run(compute_repair_prob=True).selectExpr('`t i d`', 'attribute')
+            self.assertEqual(
+                df.orderBy('t i d', 'attribute').collect(), [
+                    Row(1, "y y"),
+                    Row(2, "x x")])
+            self.assertEqual(
+                test_model.run(repair_data=True).where('`t i d` IN (1, 2)').orderBy("t i d").collect(), [
+                    Row(1, '1', 'test-1', 1.0),
+                    Row(2, '2', 'test-2', 2.0)])
+
+            self.spark.table('inputView1').selectExpr('`t i d`', '`x x`', '`y y`') \
+                .createOrReplaceTempView("inputView2")
+            test_model = self._build_model() \
+                .setTableName("inputView2") \
+                .setRowId("t i d") \
+                .setDiscreteThreshold(10) \
+                .setMaximalLikelihoodRepairEnabled(True) \
+                .setRepairDelta(3)
+            df = test_model \
+                .run(compute_repair_score=True) \
+                .selectExpr('`t i d`', 'attribute')
+            self.assertEqual(
+                df.orderBy('t i d', 'attribute').collect(), [
+                    Row(1, "y y"),
+                    Row(2, "x x")])
+
     def test_unsupported_types(self):
         with self.tempView("inputView"):
             self.spark.range(1).selectExpr("id tid", "1 AS x", "CAST('2021-08-01' AS DATE) y") \

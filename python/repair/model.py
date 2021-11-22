@@ -767,7 +767,7 @@ class RepairModel():
         # Fixes cells if a predicted value is the same with an initial one
         fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) repaired"
         weak_labeled_cells_df = self._spark.table(cell_domain) \
-            .selectExpr(str(self.row_id), "attribute", fix_cells_expr) \
+            .selectExpr(f"`{self.row_id}`", "attribute", fix_cells_expr) \
             .where("repaired IS NOT NULL")
 
         # Removes weak labeled cells from the noisy cells
@@ -781,7 +781,7 @@ class RepairModel():
 
     def _split_clean_and_dirty_rows(
             self, repair_base_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame]:
-        error_rows_df = error_cells_df.selectExpr(str(self.row_id))
+        error_rows_df = error_cells_df.selectExpr(f"`{self.row_id}`")
         clean_rows_df = repair_base_df.join(error_rows_df, str(self.row_id), "left_anti")
         dirty_rows_df = repair_base_df.join(error_rows_df, str(self.row_id), "left_semi")
         return clean_rows_df, dirty_rows_df
@@ -886,7 +886,7 @@ class RepairModel():
                 continue
 
             index = len(models) + 1
-            df = train_df.where(f"{y} IS NOT NULL")
+            df = train_df.where(f"`{y}` IS NOT NULL")
             training_data_num = df.count()
             # Number of training data must be positive
             if training_data_num == 0:
@@ -947,7 +947,7 @@ class RepairModel():
                 continue
 
             index = len(models) + len(train_dfs_per_target) + 1
-            df = train_df.where(f"{y} IS NOT NULL")
+            df = train_df.where(f"`{y}` IS NOT NULL")
             training_data_num = df.count()
             # Number of training data must be positive
             if training_data_num == 0:
@@ -1298,21 +1298,21 @@ class RepairModel():
         discrete_repaired_df = repaired_df if len(continous_columns) == 0 \
             else self._filter_columns_from(repaired_df, continous_columns, negate=True)
         pmf_df = discrete_repaired_df \
-            .selectExpr(str(self.row_id), "attribute", "current_value", parse_pmf_json_expr) \
-            .selectExpr(str(self.row_id), "attribute", "current_value", "pmf.classes classes", slice_probs) \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", parse_pmf_json_expr) \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "pmf.classes classes", slice_probs) \
             .withColumn("costs", cost_func(col("current_value"), col("classes"))) \
-            .selectExpr(str(self.row_id), "attribute", "current_value", "classes", to_weighted_probs) \
-            .selectExpr(str(self.row_id), "attribute", "current_value", "classes", "probs", sum_probs) \
-            .selectExpr(str(self.row_id), "attribute", "current_value", "classes c", normalize_probs) \
-            .selectExpr(str(self.row_id), "attribute", to_current_expr, to_pmf_expr) \
-            .selectExpr(str(self.row_id), "attribute", "current", sorted_pmf_expr)
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes", to_weighted_probs) \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes", "probs", sum_probs) \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes c", normalize_probs) \
+            .selectExpr(f"`{self.row_id}`", "attribute", to_current_expr, to_pmf_expr) \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current", sorted_pmf_expr)
 
         if len(continous_columns) > 0:
             continous_repaired_df = self._filter_columns_from(repaired_df, continous_columns, negate=False)
             continous_to_pmf_expr = "array(named_struct('c', value, 'p', 1.0D)) pmf"
             to_current_expr = "named_struct('value', current_value, 'prob', 0.0D) current"
             continous_pmf_df = continous_repaired_df \
-                .selectExpr(str(self.row_id), "attribute", to_current_expr, continous_to_pmf_expr)
+                .selectExpr(f"`{self.row_id}`", "attribute", to_current_expr, continous_to_pmf_expr)
             pmf_df = pmf_df.union(continous_pmf_df)
 
         assert pmf_df.count() == error_cells_df.count()
@@ -1332,9 +1332,9 @@ class RepairModel():
         score_expr = "ln(repaired.prob / IF(current.prob > 0.0, current.prob, 1e-6)) " \
             "* (1.0 / (1.0 + cost)) score"
         score_df = pmf_df \
-            .selectExpr(str(self.row_id), "attribute", "current", maximal_likelihood_repair_expr) \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current", maximal_likelihood_repair_expr) \
             .withColumn("cost", cost_func(expr(current_expr), col("repaired.value"))) \
-            .selectExpr(str(self.row_id), "attribute", "current.value current_value",
+            .selectExpr(f"`{self.row_id}`", "attribute", "current.value current_value",
                         "repaired.value repaired", score_expr)
 
         return score_df
@@ -1451,13 +1451,13 @@ class RepairModel():
         # of repair candidates.
         if compute_repair_candidate_prob and not self.maximal_likelihood_repair_enabled:
             pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df, continous_columns)
-            pmf_df = pmf_df.selectExpr(str(self.row_id), "attribute", "current.value AS current_value", "pmf")
+            pmf_df = pmf_df.selectExpr(f"`{self.row_id}`", "attribute", "current.value AS current_value", "pmf")
 
             # If `compute_repair_prob` is true, returns a predicted repair with
             # the highest probability only.
             if compute_repair_prob:
                 return pmf_df.selectExpr(
-                    str(self.row_id), "attribute", "current_value",
+                    f"`{self.row_id}`", "attribute", "current_value",
                     "pmf[0].c AS repaired",
                     "pmf[0].p AS prob")
 
@@ -1488,7 +1488,7 @@ class RepairModel():
         if not repair_data:
             repair_candidates_df = self._flatten(self._create_temp_view(repaired_df)) \
                 .join(error_cells_df, [str(self.row_id), "attribute"], "inner") \
-                .selectExpr(str(self.row_id), "attribute", "current_value", "value repaired") \
+                .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "value repaired") \
                 .where("repaired IS NULL OR not(current_value <=> repaired)")
 
             if self.repair_validation_enabled:
