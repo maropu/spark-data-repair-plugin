@@ -143,7 +143,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 _perf_logger.info(f"target:boston({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
-    @unittest.skip(reason="Skip because this test is slow")
     def test_perf_boston_target_num_2(self):
         test_params = [
             ("CRIM", "RAD", 0.4691041696958255),
