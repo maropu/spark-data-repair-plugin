@@ -125,32 +125,84 @@ class RepairModelTests(ReusedSQLTestCase):
             .setMaximalLikelihoodRepairEnabled(True).run())
         self.assertRaisesRegexp(
             ValueError,
-            "`attrs` has at least one attribute",
+            "`attrs` should have at least one attribute",
             lambda: RepairModel().setTargets([]))
         self.assertRaisesRegexp(
             ValueError,
-            "threshold must be bigger than 1",
-            lambda: RepairModel().setDiscreteThreshold(1))
+            "`thres` should be bigger than 1, got 0",
+            lambda: RepairModel().setDiscreteThreshold(0))
         self.assertRaisesRegexp(
             ValueError,
-            "`alpha` should be in [0.0, 1.0), but: -0.1",
+            "`alpha` should be in \\[0.0, 1.0\\), got -0.1",
             lambda: RepairModel().setDomainThresholds(-0.1, 0.7))
         self.assertRaisesRegexp(
             ValueError,
-            "`alpha` should be in [0.0, 1.0), but: 1.1",
+            "`alpha` should be in \\[0.0, 1.0\\), got 1.1",
             lambda: RepairModel().setDomainThresholds(1.1, 0.7))
         self.assertRaisesRegexp(
             ValueError,
-            "`beta` should be in [0.0, 1.0), but: -0.1",
+            "`beta` should be in \\[0.0, 1.0\\), got -0.1",
             lambda: RepairModel().setDomainThresholds(0.0, -0.1))
         self.assertRaisesRegexp(
             ValueError,
-            "`beta` should be in [0.0, 1.0), but: 1.1",
+            "`beta` should be in \\[0.0, 1.0\\), got 1.1",
             lambda: RepairModel().setDomainThresholds(0.0, 1.1))
         self.assertRaisesRegexp(
             ValueError,
-            "`alpha` should be greater than `beta`, but: 0.7 >= 0.0",
+            "`alpha` should be greater than `beta`, got 0.7 >= 0.0",
             lambda: RepairModel().setDomainThresholds(0.7, 0.0))
+        self.assertRaisesRegexp(
+            ValueError,
+            "Can not specify a database name when input is `DataFrame`",
+            lambda: RepairModel().setInput(self.spark.range(0)).setDbName('db'))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`table_name` should have at least character",
+            lambda: RepairModel().setTableName(''))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`table_name` should have at least character",
+            lambda: RepairModel().setInput(''))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`row_id` should have at least character",
+            lambda: RepairModel().setRowId(''))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`thres` should be bigger than 1, got 0",
+            lambda: RepairModel().setDiscreteThreshold(0))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`thres` should be in \\[0.0, 1.0\\), got -1.0",
+            lambda: RepairModel().setMinCorrThreshold(-1.0))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`n` should be greater than 1, got 0",
+            lambda: RepairModel().setAttrMaxNumToComputeDomains(0))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`ratio` should be in \\[0.0, 1.0\\], got -1.0",
+            lambda: RepairModel().setAttrStatSampleRatio(-1.0))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`ratio` should be in \\[0.0, 1.0\\], got -1.0",
+            lambda: RepairModel().setAttrStatThreshold(-1.0))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`n` should be greater than and equal to 1000, got 999",
+            lambda: RepairModel().setMaxTrainingRowNum(999))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`n` should be greater than 2, got 0",
+            lambda: RepairModel().setMaxTrainingColumnNum(0))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`thres` should be greater than 2, got 0",
+            lambda: RepairModel().setSmallDomainThreshold(0))
+        self.assertRaisesRegexp(
+            ValueError,
+            "Repair delta should be positive, got -1",
+            lambda: RepairModel().setRepairDelta(-1))
 
     def test_exclusive_params(self):
         def _assert_exclusive_params(func):
@@ -209,6 +261,10 @@ class RepairModelTests(ReusedSQLTestCase):
             TypeError,
             "`cf` should be provided as UpdateCostFunction, got int",
             lambda: RepairModel().setUpdateCostFunction([1]))
+        self.assertRaises(
+            TypeError,
+            "`error_cells` should have at least charactor",
+            lambda: RepairModel().setErrorCells(''))
 
     def test_invalid_running_modes(self):
         test_model = RepairModel() \

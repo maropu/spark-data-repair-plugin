@@ -175,6 +175,7 @@ class RepairModel():
         """
         if type(self.input) is DataFrame:
             raise ValueError("Can not specify a database name when input is `DataFrame`")
+
         self.db_name = db_name
         return self
 
@@ -189,6 +190,9 @@ class RepairModel():
         table_name : str
             table or view name.
         """
+        if not table_name:
+            raise ValueError("`table_name` should have at least character")
+
         self.input = table_name
         return self
 
@@ -203,9 +207,12 @@ class RepairModel():
         input: str, :class:`DataFrame`
             table/view name or :class:`DataFrame`.
         """
-        if type(input) is DataFrame:
+        if type(input) is str:
+            self.setTableName(input)
+        else:  # DataFrame
             self.db_name = ""
-        self.input = input
+            self.input = input
+
         return self
 
     @argtype_check  # type: ignore
@@ -219,6 +226,9 @@ class RepairModel():
         input: str
             the column where all values are different.
         """
+        if not row_id:
+            raise ValueError("`row_id` should have at least character")
+
         self.row_id = row_id
         return self
 
@@ -234,7 +244,8 @@ class RepairModel():
             list of target attributes.
         """
         if len(attrs) == 0:
-            raise ValueError("`attrs` has at least one attribute")
+            raise ValueError("`attrs` should have at least one attribute")
+
         self.targets = attrs
         return self
 
@@ -271,6 +282,9 @@ class RepairModel():
         | 16|   Income|         null|MoreThan50K|
         +---+---------+-------------+-----------+
         """
+        if type(error_cells) is str and not error_cells:
+            raise ValueError("`error_cells` should have at least charactor")
+
         self.error_cells = error_cells
         return self
 
@@ -298,6 +312,7 @@ class RepairModel():
         if len(unknown_detectors) > 0:
             raise TypeError("`detectors` should be provided as list[ErrorDetector], "
                             f"got {type(unknown_detectors[0]).__name__} in elements")
+
         self.error_detectors = detectors
         return self
 
@@ -314,7 +329,8 @@ class RepairModel():
             the default value is 80.
         """
         if int(thres) < 2:
-            raise ValueError("threshold must be bigger than 1")
+            raise ValueError(f"`thres` should be bigger than 1, got {thres}")
+
         self.discrete_thres = thres
         return self
 
@@ -327,9 +343,12 @@ class RepairModel():
         Parameters
         ----------
         thres: float
-           threshold value. The value must be in [0.0, 1.0] and
+           threshold value. The value must be in [0.0, 1.0) and
            the default value is 0.7.0.
         """
+        if thres < 0.0 or thres >= 1.0:
+            raise ValueError(f'`thres` should be in [0.0, 1.0), got {thres}')
+
         self.min_corr_thres = thres
         return self
 
@@ -346,11 +365,11 @@ class RepairModel():
            the default values of alpha and beta are 0.0 and 0.70, respectively.
         """
         if alpha < 0.0 or alpha >= 1.0:
-            raise ValueError(f'`alpha` should be in [0.0, 1.0), but: {alpha}')
+            raise ValueError(f'`alpha` should be in [0.0, 1.0), got {alpha}')
         if beta < 0.0 or beta >= 1.0:
-            raise ValueError(f'`beta` should be in [0.0, 1.0), but: {beta}')
+            raise ValueError(f'`beta` should be in [0.0, 1.0), got {beta}')
         if alpha >= beta:
-            raise ValueError(f'`alpha` should be greater than `beta`, but: {alpha} >= {beta}')
+            raise ValueError(f'`alpha` should be greater than `beta`, got {alpha} >= {beta}')
 
         self.domain_threshold_alpha = alpha
         self.domain_threshold_beta = beta
@@ -369,6 +388,9 @@ class RepairModel():
         n: int
             the max number of attributes (default: 4).
         """
+        if n < 2:
+            raise ValueError(f'`n` should be greater than 1, got {n}')
+
         self.max_attrs_to_compute_domains = n
         return self
 
@@ -383,6 +405,9 @@ class RepairModel():
         ratio: float
             sampling ratio (default: 1.0).
         """
+        if ratio < 0.0 or ratio > 1.0:
+            raise ValueError(f'`ratio` should be in [0.0, 1.0], got {ratio}')
+
         self.attr_stat_sample_ratio = ratio
         return self
 
@@ -397,6 +422,9 @@ class RepairModel():
         ratio: float
             threshold value (default: 0.0).
         """
+        if ratio < 0.0 or ratio > 1.0:
+            raise ValueError(f'`ratio` should be in [0.0, 1.0], got {ratio}')
+
         self.attr_stat_threshold = ratio
         return self
 
@@ -426,6 +454,9 @@ class RepairModel():
         n: int
             the max number of training data (default: 10000).
         """
+        if n < 1000:
+            raise ValueError(f'`n` should be greater than and equal to 1000, got {n}')
+
         self.max_training_row_num = n
         return self
 
@@ -441,6 +472,9 @@ class RepairModel():
         n: int
             the max number of columns (default: None).
         """
+        if n < 3:
+            raise ValueError(f'`n` should be greater than 2, got {n}')
+
         self.max_training_column_num = n
         return self
 
@@ -469,6 +503,9 @@ class RepairModel():
         thres: int
             threshold value (default: 12).
         """
+        if thres < 3:
+            raise ValueError(f'`thres` should be greater than 2, got {thres}')
+
         self.small_domain_threshold = thres
         return self
 
@@ -526,7 +563,8 @@ class RepairModel():
             delta value (default: None). The value must be positive.
         """
         if delta <= 0:
-            raise ValueError("Repair delta must be positive")
+            raise ValueError(f"Repair delta should be positive, got {delta}")
+
         self.repair_delta = int(delta)
         return self
 
@@ -544,8 +582,8 @@ class RepairModel():
         """
         # TODO: Removes this if `argtype_check` can handle this
         if not isinstance(cf, UpdateCostFunction):
-            raise TypeError("`cf` should be provided as UpdateCostFunction, "
-                            f"got {type(cf)}")
+            raise TypeError(f"`cf` should be provided as UpdateCostFunction, got {type(cf)}")
+
         self.cf = cf
         return self
 
@@ -568,7 +606,7 @@ class RepairModel():
         df = self.error_cells if type(self.error_cells) is DataFrame \
             else self._spark.table(str(self.error_cells))
         if not all(c in df.columns for c in (str(self.row_id), "attribute")):  # type: ignore
-            raise ValueError(f"Error cells must have `{self.row_id}` and "
+            raise ValueError(f"Error cells should have `{self.row_id}` and "
                              "`attribute` in columns")
         return self._create_temp_view(df, "error_cells")
 
