@@ -152,7 +152,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       val discretizedTable = data("discretized_table").toString
       assert(discretizedTable.startsWith("discretized_table_"))
       val discretizedCols = spark.table(discretizedTable).columns
-      assert(discretizedCols.toSet === Set("tid", "HospitalType", "EmergencyService", "State"))
+      assert(discretizedCols.toSet === Set("HospitalType", "EmergencyService", "State"))
       assert(data("distinct_stats") === Map(
         "HospitalOwner" -> 28,
         "MeasureName" -> 63,
@@ -171,7 +171,6 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         "ZipCode" -> 67,
         "Address1" -> 78,
         "State" -> 4,
-        "tid" -> 1000,
         "Stateavg" -> 74,
         "MeasureCode" -> 56))
     }
@@ -195,9 +194,8 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       val discretizedTable = data("discretized_table").toString
       assert(discretizedTable.startsWith("discretized_table_"))
       val discretizedCols = spark.table(discretizedTable).columns
-      assert(discretizedCols.toSet === Set("t i d", "c 0", "c 1", "c 2"))
+      assert(discretizedCols.toSet === Set("c 0", "c 1", "c 2"))
       assert(data("distinct_stats") === Map(
-        "t i d" -> 5,
         "c 0" -> 2,
         "c 1" -> 2,
         "c 2" -> 5))

@@ -116,28 +116,27 @@ object RepairApi extends RepairBase {
 
   private def discretizeTable(
       inputView: String,
-      discreteThres: Int,
-      whitelist: Set[String] = Set.empty): (DataFrame, Map[String, ColumnStat]) = {
+      targetAttrs: Seq[String],
+      statMap: Map[String, ColumnStat],
+      discreteThres: Int): DataFrame = {
     assert(2 <= discreteThres && discreteThres < 65536, "discreteThres should be in [2, 65536).")
-    val statMap = computeAndGetTableStats(inputView)
     val inputDf = spark.table(inputView)
     val attrTypeMap = inputDf.schema.map { f => f.name -> f.dataType }.toMap
-    val discretizedExprs = inputDf.columns.flatMap { attr =>
+    val discretizedExprs = targetAttrs.flatMap { attr =>
       (statMap(attr), attrTypeMap(attr)) match {
         case (ColumnStat(_, min, max), tpe) if continousTypes.contains(tpe) =>
           logBasedOnLevel(s"'$attr' regraded as a continuous attribute (min=${min.get}, " +
             s"max=${max.get}), so discretized into [0, $discreteThres)")
           Some(s"int((`$attr` - ${min.get}) / (${max.get} - ${min.get}) * $discreteThres) `$attr`")
         case (ColumnStat(distinctCount, _, _), _)
-          if whitelist.contains(attr) || (1 < distinctCount && distinctCount <= discreteThres) =>
+          if 1 < distinctCount && distinctCount <= discreteThres =>
           Some(s"`$attr`")
         case (ColumnStat(distinctCount, _, _), _) =>
           logWarning(s"'$attr' dropped because of its unsuitable domain (size=$distinctCount)")
           None
       }
     }
-    val df = inputDf.selectExpr(discretizedExprs: _*)
-    (df, statMap)
+    inputDf.selectExpr(discretizedExprs: _*)
   }
 
   def convertToDiscretizedTable(
@@ -147,7 +146,9 @@ object RepairApi extends RepairBase {
     assert(rowId.nonEmpty, s"$rowId should be a non-empty string.")
     logBasedOnLevel(s"convertToDiscretizedTable called with: qualifiedName=$qualifiedName " +
       s"rowId=$rowId discreteThres=$discreteThres")
-    val (discreteDf, statMap) = discretizeTable(qualifiedName, discreteThres, Set(rowId))
+    val targetAttrs = spark.table(qualifiedName).columns.filter(_ != rowId).toSeq
+    val statMap = computeAndGetTableStats(qualifiedName).filterKeys(_ != rowId)
+    val discreteDf = discretizeTable(qualifiedName, targetAttrs, statMap, discreteThres)
     val distinctStats = statMap.mapValues(_.distinctCount.toString)
     val discretizedView = createAndCacheTempView(discreteDf, "discretized_table")
     Seq("discretized_table" -> discretizedView,
