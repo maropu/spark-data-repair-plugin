@@ -342,9 +342,16 @@ class RepairModel():
         Parameters
         ----------
         thres: float
-           threshold values. The values must be in [0.0, 1.0] and
+           threshold values. The values must be in [0.0, 1.0) and
            the default values of alpha and beta are 0.0 and 0.70, respectively.
         """
+        if alpha < 0.0 or alpha >= 1.0:
+            raise ValueError(f'`alpha` should be in [0.0, 1.0), but: {alpha}')
+        if beta < 0.0 or beta >= 1.0:
+            raise ValueError(f'`beta` should be in [0.0, 1.0), but: {beta}')
+        if alpha >= beta:
+            raise ValueError(f'`alpha` should be greater than `beta`, but: {alpha} >= {beta}')
+
         self.domain_threshold_alpha = alpha
         self.domain_threshold_beta = beta
         return self
@@ -680,10 +687,6 @@ class RepairModel():
             else:
                 # Filters target attributes if `self.targets` defined
                 noisy_cells_df = self._filter_columns_from(noisy_cells_df, self.targets)
-
-            # We assume that the given error cells are true, so we skip computing error domains
-            # with probability because the computational cost is much high.
-            self.domain_threshold_beta = 1.0
         else:
             # Applies error detectors to get noisy cells
             noisy_cells_df = self._detect_error_cells(input_table)
@@ -715,22 +718,17 @@ class RepairModel():
         return self._register_and_get_df(ret_as_json["repair_base_cells"])
 
     # Checks if attributes are discrete or not, and discretizes continous ones
-    def _discretize_attrs(self, input_table: str) -> Tuple[str, List[str], Dict[str, str]]:
+    def _discretize_attrs(self, input_table: str) -> Tuple[str, Dict[str, int]]:
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
         ret_as_json = json.loads(self._repair_api.convertToDiscretizedTable(
             input_table, str(self.row_id), self.discrete_thres))
         discretized_table = self._register_table(ret_as_json["discretized_table"])
-        discretized_columns = self._spark.table(discretized_table).columns
-        discretized_columns.remove(str(self.row_id))
-        return discretized_table, discretized_columns, ret_as_json["distinct_stats"]
+        domain_stats = {k: int(v) for k, v in ret_as_json["domain_stats"].items()}
+        return discretized_table, domain_stats
 
-    @_spark_job_group(name="cell domain analysis")
-    def _analyze_error_cell_domain(
-            self, input_table: str, discretized_table: str, noisy_cells_df: DataFrame,
-            continous_columns: List[str], target_columns: List[str],
-            discretized_columns: List[str]) -> Tuple[str, str]:
-
+    def _compute_attr_stats(self, discretized_table: str, target_columns: List[str],
+                            domain_stats: Dict[str, int]) -> Tuple[str, Dict[str, Any]]:
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
         _logger.debug("Collecting and sampling attribute stats (ratio={} threshold={}) "
@@ -738,31 +736,54 @@ class RepairModel():
                           self.attr_stat_sample_ratio,
                           self.attr_stat_threshold))
 
+        ret_as_json = json.loads(self._repair_api.computeAttrStats(
+            discretized_table,
+            str(self.row_id),
+            ','.join(target_columns),
+            json.dumps(domain_stats),
+            self.attr_stat_sample_ratio,
+            self.attr_stat_threshold))
+
+        return self._register_table(ret_as_json['freq_attr_stats']), \
+            ret_as_json['pairwise_attr_stats']
+
+    @_spark_job_group(name="cell domain analysis")
+    def _analyze_error_cell_domain(
+            self, discretized_table: str, noisy_cells_df: DataFrame,
+            continous_columns: List[str], target_columns: List[str],
+            domain_stats: Dict[str, int],
+            freq_attr_stats: str,
+            pairwise_attr_stats: Dict[str, int]) -> str:
         _logger.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
         noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v3")
-        ret_as_json = json.loads(self._repair_api.computeDomainInErrorCells(
+        jdf = self._repair_api.computeDomainInErrorCells(
             discretized_table, noisy_cells, str(self.row_id),
             ",".join(continous_columns),
             ",".join(target_columns),
-            ",".join(discretized_columns),
-            self._spark.table(input_table).count(),
+            freq_attr_stats,
+            json.dumps(pairwise_attr_stats),
+            json.dumps(domain_stats),
             self.max_attrs_to_compute_domains,
-            self.attr_stat_sample_ratio,
-            self.attr_stat_threshold,
             self.min_corr_thres,
             self.domain_threshold_alpha,
-            self.domain_threshold_beta))
+            self.domain_threshold_beta)
 
-        self._register_and_get_df(ret_as_json["cell_domain"])
-
-        return ret_as_json["cell_domain"], ret_as_json["pairwise_attr_stats"]
+        cell_domain_df = DataFrame(jdf, self._spark._wrapped)  # type: ignore
+        cell_domain = self._create_temp_view(cell_domain_df, "cell_domain")
+        return cell_domain
 
     def _extract_error_cells(self, input_table: str, noisy_cells_df: DataFrame,
-                             discretized_table: str, discretized_columns: List[str], continous_columns: List[str],
-                             target_columns: List[str]) -> Tuple[DataFrame, Any]:
-        cell_domain, pairwise_stats = self._analyze_error_cell_domain(
-            input_table, discretized_table, noisy_cells_df, continous_columns,
-            target_columns, discretized_columns)
+                             discretized_table: str, continous_columns: List[str], target_columns: List[str],
+                             domain_stats: Dict[str, int]) -> Tuple[DataFrame, Any]:
+        freq_attr_stats, pairwise_attr_stats = self._compute_attr_stats(
+            discretized_table, target_columns, domain_stats)
+
+        if self.error_cells is not None:
+            return noisy_cells_df, pairwise_attr_stats
+
+        cell_domain = self._analyze_error_cell_domain(
+            discretized_table, noisy_cells_df, continous_columns, target_columns,
+            domain_stats, freq_attr_stats, pairwise_attr_stats)
 
         # Fixes cells if a predicted value is the same with an initial one
         fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) repaired"
@@ -777,7 +798,7 @@ class RepairModel():
         _logger.info('[Error Detection Phase] {} noisy cells fixed and '
                      '{} error cells remaining...'.format(weak_labeled_cells_df.count(), error_cells_df.count()))
 
-        return error_cells_df, pairwise_stats
+        return error_cells_df, pairwise_attr_stats
 
     def _split_clean_and_dirty_rows(
             self, repair_base_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame]:
@@ -788,12 +809,12 @@ class RepairModel():
 
     # Selects relevant features if necessary. To reduce model training time,
     # it is important to drop non-relevant in advance.
-    def _select_features(self, pairwise_stats: Dict[str, str], y: str, features: List[str]) -> List[str]:
+    def _select_features(self, pairwise_attr_stats: Dict[str, str], y: str, features: List[str]) -> List[str]:
         if self.max_training_column_num is not None and \
                 int(self.max_training_column_num) < len(features) and \
-                y in pairwise_stats:
+                y in pairwise_attr_stats:
             heap: List[Tuple[float, str]] = []
-            for f, corr in map(lambda x: tuple(x), pairwise_stats[y]):  # type: ignore
+            for f, corr in map(lambda x: tuple(x), pairwise_attr_stats[y]):  # type: ignore
                 if f in features:
                     # Converts to a negative value for extracting higher values
                     heapq.heappush(heap, (-float(corr), f))
@@ -812,7 +833,7 @@ class RepairModel():
 
         return features
 
-    def _create_transformers(self, distinct_stats: Dict[str, str], features: List[str],
+    def _create_transformers(self, domain_stats: Dict[str, str], features: List[str],
                              continous_columns: List[str]) -> List[Any]:
         # Transforms discrete attributes with some categorical encoders if necessary
         import category_encoders as ce  # type: ignore[import]
@@ -824,7 +845,7 @@ class RepairModel():
             # encoders, see https://github.com/scikit-learn-contrib/category_encoders
             small_domain_columns = [
                 c for c in discrete_columns
-                if int(distinct_stats[c]) < self.small_domain_threshold]  # type: ignore
+                if int(domain_stats[c]) < self.small_domain_threshold]  # type: ignore
             discrete_columns = [
                 c for c in discrete_columns if c not in small_domain_columns]
             if len(small_domain_columns) > 0:
@@ -1044,8 +1065,8 @@ class RepairModel():
 
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, train_df: DataFrame, target_columns: List[str], continous_columns: List[str],
-                             distinct_stats: Dict[str, str],
-                             pairwise_stats: Dict[str, str]) -> List[Any]:
+                             domain_stats: Dict[str, str],
+                             pairwise_attr_stats: Dict[str, str]) -> List[Any]:
         # We now employ a simple repair model based on the SCARE paper [2] for scalable processing
         # on Apache Spark. In the paper, given a database tuple t = ce (c: correct attribute values,
         # e: error attribute values), the conditional probability of each combination of the
@@ -1079,9 +1100,9 @@ class RepairModel():
         transformer_map: Dict[str, List[Any]] = {}
         for y in target_columns:
             input_columns = [c for c in train_df.columns if c != y]  # type: ignore
-            features = self._select_features(pairwise_stats, y, input_columns)  # type: ignore
+            features = self._select_features(pairwise_attr_stats, y, input_columns)  # type: ignore
             feature_map[y] = features
-            transformer_map[y] = self._create_transformers(distinct_stats, features, continous_columns)
+            transformer_map[y] = self._create_transformers(domain_stats, features, continous_columns)
 
         # If `self.rule_based_model_enabled` is `True`, try to analyze
         # functional deps on training data.
@@ -1126,13 +1147,13 @@ class RepairModel():
 
                 def _qualified(x: str) -> bool:
                     # Checks if the domain size of `x` is small enough
-                    return x in feature_map[y] and int(distinct_stats[x]) < _max_domain_size()
+                    return x in feature_map[y] and int(domain_stats[x]) < _max_domain_size()
 
                 fx = list(filter(lambda x: _qualified(x), functional_deps[y]))
                 if len(fx) > 0:
                     logs.append((y, "rule", None, None, train_df.count(), num_class_map[y], None))  # type: ignore
                     _logger.info("Building {}/{} model... type=rule(FD: X->y)  y={}(|y|={}) X={}(|X|={})".format(
-                        index, len(target_columns), y, num_class_map[y], fx[0], distinct_stats[fx[0]]))
+                        index, len(target_columns), y, num_class_map[y], fx[0], domain_stats[fx[0]]))
                     model = self._build_rule_model(train_df, target_columns, fx[0], y)
                     models[y] = (model, [fx[0]], None)
 
@@ -1373,7 +1394,8 @@ class RepairModel():
         if noisy_cells_df.count() == 0:  # type: ignore
             return noisy_cells_df, [], {}, {}
 
-        discretized_table, discretized_columns, distinct_stats = self._discretize_attrs(input_table)
+        discretized_table, domain_stats = self._discretize_attrs(input_table)
+        discretized_columns = self._spark.table(discretized_table).columns
         if len(discretized_columns) == 0:
             return noisy_cells_df, [], {}, {}
 
@@ -1384,11 +1406,14 @@ class RepairModel():
 
         # Defines true error cells based on the result of domain analysis
         if len(target_columns) > 0 and len(discretized_columns) > 1:
-            error_cells_df, pairwise_stats = self._extract_error_cells(
-                input_table, noisy_cells_df, discretized_table, discretized_columns, continous_columns, target_columns)
-            return error_cells_df, target_columns, pairwise_stats, distinct_stats
+            error_cells_df, pairwise_attr_stats = self._extract_error_cells(
+                input_table, noisy_cells_df, discretized_table,
+                continous_columns, target_columns,
+                domain_stats)
 
-        return noisy_cells_df, target_columns, {}, distinct_stats
+            return error_cells_df, target_columns, pairwise_attr_stats, domain_stats
+
+        return noisy_cells_df, target_columns, {}, domain_stats
 
     def _emptyDf(self, schema: StructType) -> DataFrame:
         return self._spark.createDataFrame(self._spark.sparkContext.emptyRDD(), schema)
@@ -1404,7 +1429,7 @@ class RepairModel():
         #################################################################################
         _logger.info(f'[Error Detection Phase] Detecting errors in a table `{input_table}`... ')
 
-        error_cells_df, target_columns, pairwise_stats, distinct_stats = \
+        error_cells_df, target_columns, pairwise_attr_stats, domain_stats = \
             self._do_error_detection(input_table, continous_columns)
 
         # If `detect_errors_only` is True, returns found error cells
@@ -1436,7 +1461,8 @@ class RepairModel():
             self._split_clean_and_dirty_rows(repair_base_df, error_cells_df)
 
         models = self._build_repair_models(
-            repair_base_df, target_columns, continous_columns, distinct_stats, pairwise_stats)
+            repair_base_df, target_columns, continous_columns,
+            domain_stats, pairwise_attr_stats)
 
         #################################################################################
         # 3. Repair Phase

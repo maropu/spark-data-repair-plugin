@@ -131,6 +131,26 @@ class RepairModelTests(ReusedSQLTestCase):
             ValueError,
             "threshold must be bigger than 1",
             lambda: RepairModel().setDiscreteThreshold(1))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`alpha` should be in [0.0, 1.0), but: -0.1",
+            lambda: RepairModel().setDomainThresholds(-0.1, 0.7))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`alpha` should be in [0.0, 1.0), but: 1.1",
+            lambda: RepairModel().setDomainThresholds(1.1, 0.7))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`beta` should be in [0.0, 1.0), but: -0.1",
+            lambda: RepairModel().setDomainThresholds(0.0, -0.1))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`beta` should be in [0.0, 1.0), but: 1.1",
+            lambda: RepairModel().setDomainThresholds(0.0, 1.1))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`alpha` should be greater than `beta`, but: 0.7 >= 0.0",
+            lambda: RepairModel().setDomainThresholds(0.7, 0.0))
 
     def test_exclusive_params(self):
         def _assert_exclusive_params(func):

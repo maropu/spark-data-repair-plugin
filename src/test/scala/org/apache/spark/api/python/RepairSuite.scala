@@ -136,7 +136,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         val jsonString = RepairApi.computeDomainSizes("t")
         val jsonObj = parse(jsonString)
         val data = jsonObj.asInstanceOf[JObject].values
-        assert(data("distinct_stats") === Map(s"$v0" -> 3, s"$v1" -> 8, s"$v2" -> 6, s"$v3" -> 9))
+        assert(data("domain_stats") === Map(s"$v0" -> 3, s"$v1" -> 8, s"$v2" -> 6, s"$v3" -> 9))
       }
     }
   }
@@ -152,8 +152,8 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       val discretizedTable = data("discretized_table").toString
       assert(discretizedTable.startsWith("discretized_table_"))
       val discretizedCols = spark.table(discretizedTable).columns
-      assert(discretizedCols.toSet === Set("HospitalType", "EmergencyService", "State"))
-      assert(data("distinct_stats") === Map(
+      assert(discretizedCols.toSet === Set("tid", "HospitalType", "EmergencyService", "State"))
+      assert(data("domain_stats") === Map(
         "HospitalOwner" -> 28,
         "MeasureName" -> 63,
         "Address2" -> 0,
@@ -194,8 +194,8 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       val discretizedTable = data("discretized_table").toString
       assert(discretizedTable.startsWith("discretized_table_"))
       val discretizedCols = spark.table(discretizedTable).columns
-      assert(discretizedCols.toSet === Set("c 0", "c 1", "c 2"))
-      assert(data("distinct_stats") === Map(
+      assert(discretizedCols.toSet === Set("t i d", "c 0", "c 1", "c 2"))
+      assert(data("domain_stats") === Map(
         "c 0" -> 2,
         "c 1" -> 2,
         "c 2" -> 5))
@@ -251,7 +251,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
              |  (9, "2", "test-2a")
            """.stripMargin)
 
-        val attrsToComputeFreqStats = Seq(Seq(s"$x"), Seq(s"$y"), Seq(s"$x", s"$y"), Seq(s"$y", s"$x"))
+        val attrsToComputeFreqStats = Seq(Seq(x), Seq(y), Seq(x, y))
         val df1 = RepairApi.computeFreqStats("tempView", attrsToComputeFreqStats, 1.0, 0.0)
         checkAnswer(df1, Seq(
           Row("1", "test-1", 3),
@@ -287,6 +287,53 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
   test("computePairwiseStats") {
     Seq(("tid", "xx", "yy"), ("t i d", "x x", "y y")).foreach { case (tid, x, y) =>
+      withTempView("tempView", "freqAttrStats") {
+        spark.sql(
+          s"""
+             |CREATE TEMPORARY VIEW tempView(`$tid`, `$x`, `$y`) AS SELECT * FROM VALUES
+             |  (1, "1", "test-1"),
+             |  (2, "2", "test-2"),
+             |  (3, "3", "test-3"),
+             |  (4, "2", "test-2"),
+             |  (5, "1", "test-1"),
+             |  (6, "1", "test-1"),
+             |  (7, "3", "test-3"),
+             |  (8, "3", "test-3"),
+             |  (9, "2", "test-2a")
+           """.stripMargin)
+
+        spark.sql(
+          s"""
+             |CREATE TEMPORARY VIEW freqAttrStats(`$x`, `$y`, cnt) AS SELECT * FROM VALUES
+             |  ("2", "test-2", 2),
+             |  ("2", "test-1", 2),
+             |  ("3", "test-1", 1),
+             |  ("1", "test-1", 1),
+             |  ("2", "test-2a", 1),
+             |  ("3", "test-3", 2),
+             |  (null, "test-2", 2),
+             |  ("3", null, 3),
+             |  ("2", null, 5),
+             |  (null, "test-1", 4),
+             |  (null, "test-2a", 1),
+             |  (null, "test-3", 2),
+             |  ("1", null, 1)
+             """.stripMargin)
+
+        val domainStatMap = Map(tid -> 9L, s"$x" -> 3L, s"$y" -> 4L)
+        val pairwiseStatMap = RepairApi.computePairwiseStats(
+          "tempView", 9, "freqAttrStats", Seq(s"$x", s"$y"), Seq((s"$x", s"$y"), (s"$y", s"$x")), domainStatMap)
+        assert(pairwiseStatMap.keySet === Set(s"$x", s"$y"))
+        assert(pairwiseStatMap(s"$x").map(_._1) === Seq(s"$y"))
+        assert(pairwiseStatMap(s"$x").head._2 > 0.0)
+        assert(pairwiseStatMap(s"$y").map(_._1) === Seq(s"$x"))
+        assert(pairwiseStatMap(s"$y").head._2 > 0.0)
+      }
+    }
+  }
+
+  test("computeAttrStats") {
+    Seq(("tid", "xx", "yy"), ("t i d", "x x", "y y")).foreach { case (tid, x, y) =>
       withTempView("tempView", "attrStatView") {
         spark.sql(
           s"""
@@ -302,20 +349,37 @@ class RepairSuite extends QueryTest with SharedSparkSession {
              |  (9, "2", "test-2a")
            """.stripMargin)
 
-        val statThreshold = 0.80
-        val attrsToComputeFreqStats = Seq(Seq(s"$x"), Seq(s"$y"), Seq(s"$x", s"$y"))
-        val df = RepairApi.computeFreqStats("tempView", attrsToComputeFreqStats, 1.0, statThreshold)
-        df.createOrReplaceTempView("attrStatView")
+        val statThreshold = 0.0
+        val domainStatMapAsJson = s"""{"$tid": 9,"$x": 3,"$y": 4}"""
+        val jsonString = RepairApi.computeAttrStats(
+          "tempView", tid, s"$x,$y", domainStatMapAsJson, 1.0, statThreshold)
 
-        val domainStatMap = RepairApi.computeAndGetTableStats("tempView").mapValues(_.distinctCount)
-        val pairwiseStatMap = RepairApi.computePairwiseStats(
-          "tempView", 9, "attrStatView", Seq(s"$x", s"$y"), Seq((s"$x", s"$y"), (s"$y", s"$x")), domainStatMap)
+        val jsonObj = parse(jsonString)
+        val data = jsonObj.asInstanceOf[JObject].values
+
+        val freqAttrStatView = data("freq_attr_stats").toString
+        checkAnswer(spark.table(freqAttrStatView), Seq(
+          Row("1", "test-1", 3),
+          Row("2", "test-2a", 1),
+          Row(null, "test-2a", 1),
+          Row("2", "test-2", 2),
+          Row(null, "test-2", 2),
+          Row("3", null, 3),
+          Row("3", "test-3", 3),
+          Row(null, "test-1", 3),
+          Row("2", null, 3),
+          Row(null, "test-3", 3),
+          Row("1", null, 3)
+        ))
+
+        val pairwiseStatMap = data("pairwise_attr_stats")
+          .asInstanceOf[Map[String, Seq[Seq[String]]]]
+          .mapValues(_.map { case Seq(attr, sv) => (attr, sv.toDouble) })
         assert(pairwiseStatMap.keySet === Set(s"$x", s"$y"))
-        assert(pairwiseStatMap(s"$x").map(_._1) === Seq(s"$y"))
+        assert(pairwiseStatMap(s"$x").head._1 === s"$y")
         assert(pairwiseStatMap(s"$x").head._2 > statThreshold)
-        assert(pairwiseStatMap(s"$y").map(_._1) === Seq(s"$x"))
+        assert(pairwiseStatMap(s"$y").head._1 === s"$x")
         assert(pairwiseStatMap(s"$y").head._2 > statThreshold)
-        assert(domainStatMap === Map(tid -> 9, s"$x" -> 3, s"$y" -> 4))
       }
     }
   }
@@ -328,19 +392,19 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
   test("computeDomainInErrorCells") {
     Seq(("tid", "xx", "yy", "zz"), ("t i d", "x x", "y y", "z z")).foreach { case (tid, x, y, z) =>
-      withTempView("inputView", "errCell") {
+      withTempView("inputView", "errCell", "freqAttrStats") {
         spark.sql(
           s"""
              |CREATE TEMPORARY VIEW inputView(`$tid`, `$x`, `$y`, `$z`) AS SELECT * FROM VALUES
-             |  (1, "2", "test-1", 1.0),
-             |  (2, "2", "test-2", 1.0),
-             |  (3, "3", "test-1", 3.0),
-             |  (4, "2", "test-2", 2.0),
-             |  (5, "1", "test-1", 1.0),
-             |  (6, "2", "test-1", 1.0),
-             |  (7, "3", "test-3", 2.0),
-             |  (8, "3", "test-3", 3.0),
-             |  (9, "2", "test-2a", 2.0)
+             |  (1, "2", "test-1", 1),
+             |  (2, "2", "test-2", 1),
+             |  (3, "3", "test-1", 3),
+             |  (4, "2", "test-2", 2),
+             |  (5, "1", "test-1", 1),
+             |  (6, "2", "test-1", 1),
+             |  (7, "3", "test-3", 2),
+             |  (8, "3", "test-3", 3),
+             |  (9, "2", "test-2a", 2)
            """.stripMargin)
 
         spark.sql(
@@ -351,23 +415,53 @@ class RepairSuite extends QueryTest with SharedSparkSession {
              |  (6, "$y", "test-2")
            """.stripMargin)
 
-        def testComputeDomain(minCorrThres: Double, domain_threshold_beta: Double, expected: Seq[Row]): Unit = {
-          val jsonString = RepairApi.computeDomainInErrorCells(
-            "inputView", "errCell", tid, s"$z", s"$x,$y", s"$x,$y", 9, 4, 1.0, 0.0, minCorrThres, 0.0, domain_threshold_beta)
-          val jsonObj = parse(jsonString)
-          val data = jsonObj.asInstanceOf[JObject].values
+        spark.sql(
+          s"""
+             |CREATE TEMPORARY VIEW freqAttrStats(`$x`, `$y`, `$z`, cnt) AS SELECT * FROM VALUES
+             |  ("2", null, 1, 3),
+             |  (null, "test-1", 1, 3),
+             |  ("2", null, 2, 2),
+             |  ("2", null, null, 5),
+             |  (null, "test-1", null, 4),
+             |  ("2", "test-2", null, 2),
+             |  (null, null, 3, 2),
+             |  (null, "test-1", 3, 1),
+             |  (null, "test-2", 1, 1),
+             |  ("3", null, null, 3),
+             |  (null, "test-2", 2, 1),
+             |  (null, null, 1, 4),
+             |  ("2", "test-1", null, 2),
+             |  (null, "test-2", null, 2),
+             |  ("3", "test-1", null, 1),
+             |  (null, null, 2, 3),
+             |  ("3", null, 3, 2),
+             |  ("1", "test-1", null, 1),
+             |  (null, "test-3", 2, 1),
+             |  (null, "test-3", 3, 1),
+             |  (null, "test-2a", 2, 1),
+             |  ("1", null, null, 1),
+             |  ("3", "test-3", null, 2),
+             |  (null, "test-2a", null, 1),
+             |  ("2", "test-2a", null, 1),
+             |  (null, "test-3", null, 2),
+             |  ("3", null, 2, 1),
+             |  ("1", null, 1, 1)
+           """.stripMargin)
 
-          val viewName = data("cell_domain").toString
-          assert(viewName.startsWith("cell_domain_"))
-          val domainDf = spark.table(viewName)
+        val pairwiseStatMapAsJson = s"""{"$x": [["$y","1.0"]], "$y": [["$x","0.846950694324252"]]}"""
+        val domainStatMapAsJson = s"""{"$tid": 9,"$x": 3,"$y": 4,"$z": 3}"""
+
+        def testComputeDomain(minCorrThres: Double, domain_threshold_beta: Double, expected: Seq[Row]): Unit = {
+          val domainDf = RepairApi.computeDomainInErrorCells(
+            "inputView", "errCell", tid, s"$z", s"$x,$y", "freqAttrStats", pairwiseStatMapAsJson, domainStatMapAsJson, 4, minCorrThres, 0.0, domain_threshold_beta)
           assert(domainDf.columns.toSet === Set(tid, "attribute", "current_value", "domain"))
-          val df = spark.table(viewName)
+          val df = domainDf
             .selectExpr("*", "inline(domain)")
             .selectExpr(s"`$tid`", "attribute", "current_value", "n")
           checkAnswer(df, expected)
         }
 
-        testComputeDomain(0.0, 0.0, Seq(
+        testComputeDomain(0.0, 0.01, Seq(
           Row(1, s"$x", "2", "1"),
           Row(1, s"$x", "2", "2"),
           Row(1, s"$x", "2", "3"),

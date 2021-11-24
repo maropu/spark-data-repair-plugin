@@ -35,7 +35,7 @@ private[python] case class JsonEncoder(v: Seq[(String, AnyRef)]) {
   }.mkString("{", ",", "}")
 }
 
-abstract class RepairBase extends LoggingBasedOnLevel {
+trait RepairBase extends LoggingBasedOnLevel {
 
   // TODO: Support boolean types
   protected val integralTypes = Set[DataType](ByteType, ShortType, IntegerType, LongType)
