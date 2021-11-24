@@ -454,8 +454,8 @@ class RepairModel():
         n: int
             the max number of training data (default: 10000).
         """
-        if n < 1000:
-            raise ValueError(f'`n` should be greater than and equal to 1000, got {n}')
+        if n < 10:
+            raise ValueError(f'`n` should be greater than and equal to 10, got {n}')
 
         self.max_training_row_num = n
         return self
@@ -472,8 +472,8 @@ class RepairModel():
         n: int
             the max number of columns (default: None).
         """
-        if n < 3:
-            raise ValueError(f'`n` should be greater than 2, got {n}')
+        if n < 2:
+            raise ValueError(f'`n` should be greater than 1, got {n}')
 
         self.max_training_column_num = n
         return self

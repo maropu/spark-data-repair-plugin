@@ -189,11 +189,11 @@ class RepairModelTests(ReusedSQLTestCase):
             lambda: RepairModel().setAttrStatThreshold(-1.0))
         self.assertRaisesRegexp(
             ValueError,
-            "`n` should be greater than and equal to 1000, got 999",
-            lambda: RepairModel().setMaxTrainingRowNum(999))
+            "`n` should be greater than and equal to 10, got 9",
+            lambda: RepairModel().setMaxTrainingRowNum(9))
         self.assertRaisesRegexp(
             ValueError,
-            "`n` should be greater than 2, got 0",
+            "`n` should be greater than 1, got 0",
             lambda: RepairModel().setMaxTrainingColumnNum(0))
         self.assertRaisesRegexp(
             ValueError,
