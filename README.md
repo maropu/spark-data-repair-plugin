@@ -309,7 +309,7 @@ delphi.repair
  - Supports Isolation Forest for error detection
  - Adds more examples for error detectors in `resources/examples`
 
-## Bug reports
+## Bug Reports
 
 If you hit some bugs and have requests, please leave some comments on [Issues](https://github.com/maropu/spark-data-repair-plugin/issues)
 or Twitter ([@maropu](http://twitter.com/#!/maropu)).
