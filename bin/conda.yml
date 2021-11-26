@@ -20,7 +20,7 @@ dependencies:
   - pydata-sphinx-theme=0.4.3
   - numpy=1.19.5
   - numpydoc=1.1.0
-  - mypy=0.790
+  - mypy=0.910
   - flake8=3.8.4
   - altair=4.1.0
   - altair_viewer=0.3.0
