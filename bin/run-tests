@@ -26,9 +26,9 @@ if [ -z "$CONDA_DISABLED" ]; then
   . ./bin/conda.sh && activate_conda_virtual_env "${FWDIR}"
 fi
 
-PYTHON_VERSION_CHECK=$(python3 -c 'import sys; print(sys.version_info < (3, 6, 0))')
+PYTHON_VERSION_CHECK=$(python3 -c 'import sys; print(sys.version_info < (3, 7, 0))')
 if [[ "$PYTHON_VERSION_CHECK" == "True" ]]; then
-  echo "Python versions prior to 3.6 are not supported."
+  echo "Python versions prior to 3.7 are not supported."
   exit -1
 fi
 
@@ -47,4 +47,3 @@ fi
 
 exec python3 -u ./bin/run-tests.py \
   --package=${PACKAGE_JAR} --module ${FWDIR}/python --data ${FWDIR}/bin/testdata "$@"
-
