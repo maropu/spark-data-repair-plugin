@@ -301,7 +301,8 @@ class RepairModel():
         detectors: list of :class:`ErrorDetector` derived classes
             specifies how to detect error cells. Available classes are as follows:
 
-            * :class:`NullErrorDetector`: detects error cells based on NULL cells.
+            * :class:`NullErrorDetector`: detects NULL cells for error cells.
+            * :class:`DomainValues`: detects error cells based on specified domain values.
             * :class:`RegExErrorDetector`: detects error cells based on a regular expresson.
             * :class:`OutlierErrorDetector`: detects error cells based on the Gaussian distribution.
             * :class:`ConstraintErrorDetector`: detects error cells based on integrity rules
