@@ -9,7 +9,7 @@ which is a parallel and distributed framework for large-scale data processing.
 Clean and consistent data is one of major interests for downstream analytics;
 clean data makes machine learning and BI reporting more accurate and
 consistent data with constraints (e.g., functional dependences) is important for efficient query plans.
-Therefore, data repairing is a first step for an reliable analytics pipeline.
+Therefore, data repairing is a first step for a reliable analytics pipeline.
 
 ## How to Repair Error Cells
 

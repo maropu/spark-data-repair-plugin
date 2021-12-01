@@ -698,6 +698,9 @@ class RepairModel():
 
     # TODO: Needs to implement an error detector based on edit distances
     def _detect_error_cells(self, input_table: str) -> DataFrame:
+        _logger.info('[Error Detection Phase] Used error detectors: {}'.format(
+            ','.join(list(map(lambda x: str(x), self.error_detectors)))))
+
         # Initializes the given error detectors with the input params
         for d in self.error_detectors:
             d.setUp(str(self.row_id), input_table, self.targets)  # type: ignore

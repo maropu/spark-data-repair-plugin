@@ -25,8 +25,7 @@ from pyspark.sql import DataFrame, SparkSession  # type: ignore
 
 class ErrorDetector(metaclass=ABCMeta):
 
-    def __init__(self, name: str) -> None:
-        self.name = name
+    def __init__(self) -> None:
         self.row_id: Optional[str] = None
         self.qualified_input_name: Optional[str] = None
         self.targets: List[str] = []
@@ -58,7 +57,10 @@ class ErrorDetector(metaclass=ABCMeta):
 class NullErrorDetector(ErrorDetector):
 
     def __init__(self) -> None:
-        ErrorDetector.__init__(self, 'NullErrorDetector')
+        ErrorDetector.__init__(self)
+
+    def __str__(self) -> str:
+        return self.__class__.__name__
 
     def _detect_impl(self) -> DataFrame:
         jdf = self._detector_api.detectNullCells(self.qualified_input_name, self.row_id, self._to_target_list())
@@ -68,11 +70,16 @@ class NullErrorDetector(ErrorDetector):
 class DomainValues(ErrorDetector):
 
     def __init__(self, attr: str, values: List[str] = [], autofill: bool = False, min_count_thres: int = 12) -> None:
-        ErrorDetector.__init__(self, 'DomainValues')
+        ErrorDetector.__init__(self)
         self.attr = attr
         self.values = values if not autofill else []
         self.autofill = autofill
         self.min_count_thres = min_count_thres
+
+    def __str__(self) -> str:
+        args = f'attr="{self.attr}",size={len(self.values)},autofill={self.autofill},' \
+            f'min_count_thres={self.min_count_thres}'
+        return f'{self.__class__.__name__}({args})'
 
     def _detect_impl(self) -> DataFrame:
         domain_values = self.values
@@ -94,9 +101,12 @@ class DomainValues(ErrorDetector):
 class RegExErrorDetector(ErrorDetector):
 
     def __init__(self, attr: str, regex: str) -> None:
-        ErrorDetector.__init__(self, 'RegExErrorDetector')
+        ErrorDetector.__init__(self)
         self.attr = attr
         self.regex = regex
+
+    def __str__(self) -> str:
+        return f'{self.__class__.__name__}(pattern="{self.regex}")'
 
     def _detect_impl(self) -> DataFrame:
         jdf = self._detector_api.detectErrorCellsFromRegEx(
@@ -107,8 +117,11 @@ class RegExErrorDetector(ErrorDetector):
 class ConstraintErrorDetector(ErrorDetector):
 
     def __init__(self, constraint_path: str) -> None:
-        ErrorDetector.__init__(self, 'ConstraintErrorDetector')
+        ErrorDetector.__init__(self)
         self.constraint_path = constraint_path
+
+    def __str__(self) -> str:
+        return f'{self.__class__.__name__}(path={self.constraint_path})'
 
     def _detect_impl(self) -> DataFrame:
         jdf = self._detector_api.detectErrorCellsFromConstraints(
@@ -119,8 +132,11 @@ class ConstraintErrorDetector(ErrorDetector):
 class OutlierErrorDetector(ErrorDetector):
 
     def __init__(self, approx_enabled: bool = False) -> None:
-        ErrorDetector.__init__(self, 'OutlierErrorDetector')
+        ErrorDetector.__init__(self)
         self.approx_enabled = approx_enabled
+
+    def __str__(self) -> str:
+        return f'{self.__class__.__name__}(approx_enabled={self.approx_enabled})'
 
     def _detect_impl(self) -> DataFrame:
         jdf = self._detector_api.detectErrorCellsFromOutliers(
