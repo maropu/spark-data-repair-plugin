@@ -156,7 +156,7 @@ object RepairApi extends RepairBase {
     val statMap = computeAndGetTableStats(qualifiedName).filterKeys(_ != rowId)
     val discreteDf = discretizeTable(qualifiedName, rowId, targetAttrs, statMap, discreteThres)
     val distinctStats = statMap.mapValues(_.distinctCount.toString)
-    val discretizedView = createAndCacheTempView(discreteDf, "discretized_table")
+    val discretizedView = createTempView(discreteDf, "discretized_table", cache = true)
     Seq("discretized_table" -> discretizedView,
       "domain_stats" -> distinctStats
     ).asJson
@@ -183,7 +183,7 @@ object RepairApi extends RepairBase {
          |GROUP BY `$rowId`
        """.stripMargin)
 
-    val repairBase = withTempView(errAttrDf) { errAttrView =>
+    val repairBase = withTempView(errAttrDf, "error_attrs") { errAttrView =>
       val cleanAttrs = spark.table(discretizedInputView).columns.map {
         case attr if attr == rowId =>
           s"$discretizedInputView.`$rowId`"
@@ -200,7 +200,7 @@ object RepairApi extends RepairBase {
            |ON $discretizedInputView.`$rowId` = $errAttrView.`$rowId`
          """.stripMargin)
     }
-    val repairBaseView = createAndCacheTempView(repairBase, "repair_base_cells")
+    val repairBaseView = createTempView(repairBase, "repair_base_cells")
     Seq("repair_base_cells" -> repairBaseView).asJson
   }
 
@@ -242,7 +242,7 @@ object RepairApi extends RepairBase {
     } else {
       spark.table(inputView)
     }
-    withTempView(inputDf) { inputView =>
+    withTempView(inputDf, "input_to_compute_freq_stats") { inputView =>
       val filterClauseOption = if (statThreshold > 0.0) {
         val cond = s"HAVING cnt > ${(inputDf.count * statThreshold).toInt}"
         logBasedOnLevel(s"Attributes stats filter enabled: $cond")
@@ -378,9 +378,10 @@ object RepairApi extends RepairBase {
         attrPairs.map { case (a1, a2) => Seq(a1, a2) }
     }
 
-    val freqAttrStatView = createAndCacheTempView(
+    val freqAttrStatView = createTempView(
       computeFreqStats(discretizedInputView, attrsToComputeFreqStats, statSampleRatio, statThreshold),
-      "freq_attr_stats")
+      "freq_attr_stats",
+      cache = true)
     val rowCount = spark.table(discretizedInputView).count()
     val pairwiseStatMap = computePairwiseStats(
       discretizedInputView, rowCount, freqAttrStatView, discretizedAttrs,
@@ -495,7 +496,7 @@ object RepairApi extends RepairBase {
         ""
       }
 
-      val rvDf = withTempView(repairCellDf) { repairCellView =>
+      val rvDf = withTempView(repairCellDf, "repair_cells") { repairCellView =>
         spark.sql(
           s"""
              |SELECT
@@ -507,7 +508,7 @@ object RepairApi extends RepairBase {
            """.stripMargin)
       }
 
-      withTempView(rvDf) { rvView =>
+      withTempView(rvDf, "rv", cache = true) { rvView =>
         val continousAttrs = SparkUtils.stringToSeq(continuousAttrList).toSet
         corrAttrMap.map { case (attribute, corrAttrsWithScores) =>
           // Adds an empty domain for initial state
@@ -525,7 +526,7 @@ object RepairApi extends RepairBase {
               s"attributes (${corrAttrs.mkString(",")})...")
 
             corrAttrs.foldLeft(initDomainDf) { case (df, attr) =>
-              withTempView(df) { domainSpaceView =>
+              withTempView(df, "domain_space") { domainSpaceView =>
                 val tau = {
                   // `tau` becomes a threshold on co-occurrence frequency
                   val productSpaceSize = domainStatMap(attr) * domainStatMap(attribute)
@@ -567,7 +568,7 @@ object RepairApi extends RepairBase {
           //   p(v_cur | v_init) = p(v_cur) * \prod_i (v_init_i | v_cur)
           // where v_init_i is the init value for corresponding to attribute i.
           val score = getRandomString(prefix="score")
-          val domainWithScoreDf = withTempView(domainDf) { domainView =>
+          val domainWithScoreDf = withTempView(domainDf, "domain") { domainView =>
             val discretizedAttrs = spark.table(discretizedInputView).columns.filter(_ != rowId)
             spark.sql(
               s"""
@@ -602,7 +603,7 @@ object RepairApi extends RepairBase {
                """.stripMargin)
           }
 
-          withTempView(domainWithScoreDf) { domainWithScoreView =>
+          withTempView(domainWithScoreDf, "domain_with_scores", cache = true) { domainWithScoreView =>
             val denom = getRandomString(prefix="denom")
             spark.sql(
               s"""

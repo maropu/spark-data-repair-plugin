@@ -111,7 +111,7 @@ abstract class ErrorDetector extends RepairBase {
     lazy val attrsToRepair = ArrayBuffer[String]()
 
     logBasedOnLevel({
-      withTempView(errCellDf) { errCellView =>
+      withTempView(errCellDf, "error_cells") { errCellView =>
         val errorNumOfEachAttribute = {
           val df = spark.sql(s"SELECT attribute, COUNT(1) FROM $errCellView GROUP BY attribute")
           df.collect.map { case Row(attribute: String, n: Long) =>
@@ -150,7 +150,7 @@ object NullErrorDetector extends ErrorDetector {
 
     val (inputDf, inputColumns) = getInput(qualifiedName, targetAttrs)
 
-    withTempView(inputDf, cache = true) { inputView =>
+    withTempView(inputDf, "null_err_detector_input", cache = true) { inputView =>
       // Detects error erroneous cells in a given table
       val sqls = inputColumns.filter(_ != rowId).map { attr =>
         s"""
@@ -182,7 +182,7 @@ object RegExErrorDetector extends ErrorDetector {
     if (!inputColumns.contains(targetColumn) || regex == null || regex.trim.isEmpty) {
       createEmptyResultDfFrom(inputDf, rowId)
     } else {
-      withTempView(inputDf) { inputView =>
+      withTempView(inputDf, "regex_err_detector_input") { inputView =>
         val errCellDf = spark.sql(
           s"""
              |SELECT `$rowId`, '$targetColumn' AS attribute
@@ -212,7 +212,7 @@ object ConstraintErrorDetector extends ErrorDetector {
     if (constraintFilePath == null || constraintFilePath.trim.isEmpty) {
       createEmptyResultDfFrom(inputDf, rowId)
     } else {
-      withTempView(inputDf, cache = true) { inputView =>
+      withTempView(inputDf, "constraint_err_detector_input", cache = true) { inputView =>
         // Loads all the denial constraints from a given file path
         var file: Source = null
         val constraints = try {

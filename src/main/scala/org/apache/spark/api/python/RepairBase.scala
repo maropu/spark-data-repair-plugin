@@ -77,19 +77,23 @@ trait RepairBase extends LoggingBasedOnLevel {
     }
   }
 
-  protected def createAndCacheTempView(df: DataFrame, name: String = "temp"): String = {
-    val viewName = getRandomString(prefix = name)
+  protected def createTempView(df: DataFrame, prefix: String, cache: Boolean = false): String = {
+    val viewName = getRandomString(prefix = s"${prefix}_")
     val numShufflePartitions = df.sparkSession.sessionState.conf.numShufflePartitions
-    df.coalesce(numShufflePartitions).cache.createOrReplaceTempView(viewName)
-    def timer(name: String)(computeRowCnt: => Long): Unit = {
-      val t0 = System.nanoTime()
-      val rowCnt = computeRowCnt
-      val t1 = System.nanoTime()
-      logBasedOnLevel(s"Elapsed time to compute '$viewName' with $rowCnt rows: " +
-        ((t1 - t0 + 0.0) / 1000000000.0) + "s")
-    }
-    timer(viewName) {
-      df.sparkSession.table(viewName).count()
+    if (cache) {
+      def timer(computeRowCnt: => Long): Unit = {
+        val t0 = System.nanoTime()
+        val rowCnt = computeRowCnt
+        val t1 = System.nanoTime()
+        logBasedOnLevel(s"Elapsed time to compute '$viewName' with $rowCnt rows: " +
+          ((t1 - t0 + 0.0) / 1000000000.0) + "s")
+      }
+      df.coalesce(numShufflePartitions).cache.createOrReplaceTempView(viewName)
+      timer {
+        df.sparkSession.table(viewName).count()
+      }
+    } else {
+      df.coalesce(numShufflePartitions).createOrReplaceTempView(viewName)
     }
     viewName
   }

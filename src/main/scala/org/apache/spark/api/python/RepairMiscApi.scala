@@ -215,8 +215,8 @@ object RepairMiscApi extends RepairBase {
          |  `$rowId`
        """.stripMargin)
 
-    withTempView(inputDf) { inputView =>
-      withTempView(repairDf) { repairView =>
+    withTempView(inputDf, "repair_input") { inputView =>
+      withTempView(repairDf, "repaired") { repairView =>
         val cleanAttrs = inputDf.schema.map {
           case f if f.name == rowId =>
             s"$inputView.`$rowId`"
@@ -284,7 +284,7 @@ object RepairMiscApi extends RepairBase {
       targetAttrSet.contains(f.name) && !continousTypes.contains(f.dataType)
     }
 
-    withTempView(inputDf) { inputView =>
+    withTempView(inputDf, "input_to_compute_hist") { inputView =>
       val sqls = inputDf.schema.filter(isTarget).map { f =>
         s"""
            |SELECT '${f.name}' attribute, collect_list(b) histogram
@@ -327,8 +327,8 @@ object RepairMiscApi extends RepairBase {
          |  `$rowId`
        """.stripMargin)
 
-    withTempView(inputDf) { inputView =>
-      withTempView(errorDf) { errorView =>
+    withTempView(inputDf, "input_to_build_err_map") { inputView =>
+      withTempView(errorDf, "errors") { errorView =>
         val errorBitmapExprs = inputDf.columns.flatMap {
           case attr if attrsToRepair.contains(attr) =>
             Some(s"IF(ISNOTNULL(errors['$attr']), '*', '-')")

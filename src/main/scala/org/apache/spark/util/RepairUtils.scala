@@ -34,9 +34,9 @@ object RepairUtils {
     ret
   }
 
-  def withTempView[T](df: DataFrame, cache: Boolean = false)(f: String => T): T = {
+  def withTempView[T](df: DataFrame, prefix: String, cache: Boolean = false)(f: String => T): T = {
     assert(SparkSession.getActiveSession.nonEmpty)
-    val tempView = getRandomString("temp_view_")
+    val tempView = getRandomString(s"${prefix}_")
     if (cache) df.cache()
     df.createOrReplaceTempView(tempView)
     val ret = f(tempView)

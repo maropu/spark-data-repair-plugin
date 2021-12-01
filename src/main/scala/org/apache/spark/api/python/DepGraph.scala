@@ -112,7 +112,7 @@ private[python] object DepGraph extends RepairBase {
     val nodeDefs = mutable.ArrayBuffer[String]()
     val edgeDefs = mutable.ArrayBuffer[String]()
 
-    withTempView(attrFreqStatDf, cache = true) { attrStatView =>
+    withTempView(attrFreqStatDf, "freq_attr_stats", cache = true) { attrStatView =>
       val targetAttrs = domainStatMap.keys.toSeq
       val targetAttrPairs = attrPairsToComputeDeps.map { case Seq(x, y) => (x, y) }
       val pairwiseStatMap = RepairApi.computePairwiseStats(

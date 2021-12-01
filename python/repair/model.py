@@ -641,6 +641,9 @@ class RepairModel():
             return wrapper
         return decorator
 
+    def _create_temp_name(self, prefix: str) -> str:
+        return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
+
     def _register_table(self, view_name: str) -> str:
         self._intermediate_views_on_runtime.append(view_name)
         return view_name
@@ -649,10 +652,14 @@ class RepairModel():
         self._intermediate_views_on_runtime.append(view_name)
         return self._spark.table(view_name)
 
-    def _create_temp_name(self, prefix: str = "temp") -> str:
-        return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
+    def _register_df(self, df: DataFrame, prefix: str) -> DataFrame:
+        assert isinstance(df, DataFrame)
+        temp_name = self._create_temp_name(prefix)
+        df.createOrReplaceTempView(temp_name)
+        self._intermediate_views_on_runtime.append(temp_name)
+        return self._spark.table(temp_name)
 
-    def _create_temp_view(self, df: Any, prefix: str = "temp") -> str:
+    def _create_temp_view(self, df: Any, prefix: str) -> str:
         assert isinstance(df, DataFrame)
         temp_name = self._create_temp_name(prefix)
         df.createOrReplaceTempView(temp_name)
@@ -807,7 +814,7 @@ class RepairModel():
             self.domain_threshold_beta)
 
         cell_domain_df = DataFrame(jdf, self._spark._wrapped)  # type: ignore
-        cell_domain = self._create_temp_view(cell_domain_df, "cell_domain")
+        cell_domain = self._create_temp_view(cell_domain_df.cache(), "cell_domain")
         return cell_domain
 
     def _extract_error_cells(self, input_table: str, noisy_cells_df: DataFrame,
@@ -900,7 +907,7 @@ class RepairModel():
 
     def _build_rule_model(self, train_df: DataFrame, target_columns: List[str], x: str, y: str) -> Any:
         # TODO: For attributes having large domain size, we need to rewrite it as a join query to repair data
-        input_view = self._create_temp_view(train_df)
+        input_view = self._create_temp_view(train_df, 'rule_model_input')
         func_deps = json.loads(self._repair_api.computeFunctionalDepMap(input_view, x, y))
         return FunctionalDepModel(x, func_deps)
 
@@ -908,7 +915,7 @@ class RepairModel():
         constraint_detectors = list(filter(lambda x: isinstance(x, ConstraintErrorDetector), self.error_detectors))
         # TODO: Supports the case where `self.error_detectors` has multiple `ConstraintErrorDetector`s
         if len(constraint_detectors) == 1:
-            input_view = self._create_temp_view(train_df)
+            input_view = self._create_temp_view(train_df, 'input_to_compute_fdeps')
             constraint_path = constraint_detectors[0].constraint_path  # type: ignore
             func_deps = json.loads(self._repair_api.computeFunctionalDeps(input_view, constraint_path))
             return func_deps
@@ -1323,13 +1330,13 @@ class RepairModel():
         # the likelihood benefits of the updates (likelihood benefit of an update, l).
         _logger.info(f"[Repairing Phase] Computing {error_cells_df.count()} repair updates in "
                      f"{dirty_rows_df.count()} rows...")
-        repaired_df = dirty_rows_df.groupBy(grouping_key).apply(repair).drop(grouping_key).cache()
+        repaired_df = dirty_rows_df.groupBy(grouping_key).apply(repair).drop(grouping_key)
         repaired_df.write.format("noop").mode("overwrite").save()
         return repaired_df
 
     def _compute_repair_pmf(self, repaired_df: DataFrame, error_cells_df: DataFrame,
                             continous_columns: List[str]) -> DataFrame:
-        repaired_df = self._flatten(self._create_temp_view(repaired_df)) \
+        repaired_df = self._flatten(self._create_temp_view(repaired_df, 'repaired')) \
             .join(error_cells_df, [str(self.row_id), "attribute"], "inner")
 
         broadcasted_cf = self._spark.sparkContext.broadcast(self.cf)
@@ -1550,7 +1557,7 @@ class RepairModel():
         # If `repair_data` is False, returns repair candidates whoes
         # value is the same with `current_value`.
         if not repair_data:
-            repair_candidates_df = self._flatten(self._create_temp_view(repaired_df)) \
+            repair_candidates_df = self._flatten(self._create_temp_view(repaired_df, 'repaired')) \
                 .join(error_cells_df, [str(self.row_id), "attribute"], "inner") \
                 .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "value repaired") \
                 .where("repaired IS NULL OR not(current_value <=> repaired)")
@@ -1558,11 +1565,11 @@ class RepairModel():
             if self.repair_validation_enabled:
                 return self._validate_repairs(repair_candidates_df, clean_rows_df)
 
-            return repair_candidates_df
+            return self._register_df(repair_candidates_df.cache(), 'output')
         else:
             clean_df = clean_rows_df.union(repaired_df)
             assert clean_df.count() == self._spark.table(input_table).count()
-            return clean_df
+            return self._register_df(clean_df.cache(), 'output')
 
     def run(self, detect_errors_only: bool = False, compute_repair_candidate_prob: bool = False,
             compute_repair_prob: bool = False, compute_repair_score: bool = False,
