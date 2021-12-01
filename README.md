@@ -307,7 +307,6 @@ delphi.repair
 ## TODO
 
  - Supports Isolation Forest for error detection
- - Adds more examples for error detectors in `resources/examples`
 
 ## Bug Reports
 

@@ -1,0 +1,150 @@
+Python 3.7.11 (default, Jul 27 2021, 07:03:16)
+
+Using Spark's default log4j profile: org/apache/spark/log4j-defaults.properties
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+Welcome to
+      ____              __
+     / __/__  ___ _____/ /__
+    _\ \/ _ \/ _ `/ __/  '_/
+   /__ / .__/\_,_/_/ /_/\_\   version 3.2.0
+      /_/
+
+Using Python version 3.7.11 (default, Jul 27 2021 07:03:16)
+SparkSession available as 'spark'.
+Delphi APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'delphi'.
+>>> # Loads input tables for the examples of the built-in error detectors
+>>> spark.read \
+...     .option("header", True) \
+...     .csv("./testdata/adult.csv") \
+...     .write \
+...     .saveAsTable("adult")
+>>>
+>>> spark.read \
+...     .option("header", True) \
+...     .csv("./testdata/hospital.csv") \
+...     .write \
+...     .saveAsTable("hospital")
+>>>
+>>> boston_schema = "tid int, CRIM double, ZN int, INDUS string, CHAS string, " \
+...     "NOX string, RM double, AGE string, DIS double, RAD string, TAX int, " \
+...     "PTRATIO string, B double, LSTAT double"
+>>> spark.read \
+...     .option("header", True) \
+...     .schema(boston_schema) \
+...     .csv("./testdata/boston.csv") \
+...     .write \
+...     .saveAsTable("boston")
+>>> 
+>>> # Imports all the built-in error detectors
+>>> from repair.detectors import *
+>>> 
+>>> # For `NullErrorDetector`
+>>> error_cells_df = delphi.repair \
+...     .setTableName("hospital") \
+...     .setRowId("tid") \
+...     .setErrorDetectors([NullErrorDetector()]) \
+...     .run(detect_errors_only=True)
+>>> 
+>>> error_cells_df.show(3)
++---+---------+-------------+
+|tid|attribute|current_value|
++---+---------+-------------+
+|  0| Address2|         null|
+|  0| Address3|         null|
+|  0|   Sample|         null|
++---+---------+-------------+
+only showing top 3 rows
+
+>>> # For `DomainValues`
+>>> error_cells_df = delphi.repair \
+...     .setTableName("adult") \
+...     .setRowId("tid") \
+...     .setErrorDetectors([DomainValues(attr='Sex', values=['Male', 'Female'])]) \
+...     .run(detect_errors_only=True)
+>>> 
+>>> error_cells_df.show(3)
++---+---------+-------------+
+|tid|attribute|current_value|
++---+---------+-------------+
+|  3|      Sex|         null|
+|  7|      Sex|         null|
+| 12|      Sex|         null|
++---+---------+-------------+
+
+>>> # A 'autofill' mode - we assume domain values tend to appear frequently against illegal values
+>>> target_columns = ['MeasureCode', 'ZipCode', 'City']
+>>> 
+>>> domain_value_error_detectors = []
+>>> for c in target_columns:
+...     domain_value_error_detectors.append(DomainValues(attr=c, autofill=True, min_count_thres=12))
+... 
+>>> error_cells_df = delphi.repair \
+...     .setTableName("hospital") \
+...     .setRowId("tid") \
+...     .setErrorDetectors(domain_value_error_detectors) \
+...     .run(detect_errors_only=True)
+>>> 
+>>> error_cells_df.show(3)
++---+-----------+-------------+
+|tid|  attribute|current_value|
++---+-----------+-------------+
+|120|MeasureCode|        axi-2|
+|398|MeasureCode|         hx-1|
+|865|MeasureCode|         px-4|
++---+-----------+-------------+
+only showing top 3 rows
+
+>>> # For `RegExErrorDetector`
+>>> error_cells_df = delphi.repair \
+...     .setTableName("hospital") \
+...     .setRowId("tid") \
+...     .setErrorDetectors([RegExErrorDetector(attr='ZipCode', regex='\d\d\d\d\d')]) \
+...     .run(detect_errors_only=True)
+>>>
+>>> error_cells_df.show(3)
++---+---------+-------------+
+|tid|attribute|current_value|
++---+---------+-------------+
+| 44|  ZipCode|        x5957|
+|157|  ZipCode|        3x640|
+|149|  ZipCode|        3x640|
++---+---------+-------------+
+only showing top 3 rows
+
+>>> # For `ConstraintErrorDetector`
+>>> target_columns = ['MeasureName', 'ZipCode', 'EmergencyService', 'CountyName']
+>>>
+>>> error_cells_df = delphi.repair \
+...     .setTableName("hospital") \
+...     .setRowId("tid") \
+...     .setTargets(target_columns) \
+...     .setErrorDetectors([ConstraintErrorDetector(constraint_path="./testdata/hospital_constraints.txt")]) \
+...     .run(detect_errors_only=True)
+>>>
+>>> error_cells_df.show(3)
++---+---------+-------------+
+|tid|attribute|current_value|
++---+---------+-------------+
+| 44|  ZipCode|        x5957|
+|290|  ZipCode|        x5007|
+|325|  ZipCode|        36x01|
++---+---------+-------------+
+only showing top 3 rows
+
+>>> # For `OutlierErrorDetector`
+>>> error_cells_df = delphi.repair \
+...     .setTableName("boston") \
+...     .setRowId("tid") \
+...     .setErrorDetectors([OutlierErrorDetector(approx_enabled=False)]) \
+...     .run(detect_errors_only=True)
+>>> 
+>>> error_cells_df.show(3)
++---+---------+-------------+
+|tid|attribute|current_value|
++---+---------+-------------+
+|409|     CRIM|      14.4383|
+|416|     CRIM|      10.8342|
+|436|     CRIM|      14.4208|
++---+---------+-------------+
+only showing top 3 rows
