@@ -32,7 +32,7 @@ from pyspark.sql.functions import col, expr  # type: ignore[import]
 from pyspark.sql.types import ByteType, IntegerType, LongType, ShortType, StructType  # type: ignore[import]
 
 from repair.costs import UpdateCostFunction, NoCost
-from repair.detectors import ConstraintErrorDetector, ErrorDetector, NullErrorDetector
+from repair.detectors import ConstraintErrorDetector, DomainValues, ErrorDetector, NullErrorDetector
 from repair.train import build_model, compute_class_nrow_stdv, rebalance_training_data
 from repair.utils import argtype_check, elapsed_time, setup_logger
 
@@ -115,7 +115,7 @@ class RepairModel():
         # Parameters for error detection
         self.error_cells: Optional[Union[str, DataFrame]] = None
         # To find error cells, the NULL detector is used by default
-        self.error_detectors: List[ErrorDetector] = [NullErrorDetector()]
+        self.error_detectors: List[ErrorDetector] = []
         self.discrete_thres: int = 80
         self.min_corr_thres: float = 0.70
         self.domain_threshold_alpha: float = 0.0
@@ -697,16 +697,29 @@ class RepairModel():
 
         return input_table, continous_columns if continous_columns != [""] else []
 
+    def _get_default_error_detectors(self, input_table: str) -> List[ErrorDetector]:
+        error_detectors: List[ErrorDetector] = [NullErrorDetector()]
+        targets = self.targets if self.targets else \
+            [c for c in self._spark.table(input_table).columns if c != self.row_id]
+        for c in targets:
+            error_detectors.append(DomainValues(attr=c, autofill=True, min_corr_thres=4))
+
+        return error_detectors
+
     # TODO: Needs to implement an error detector based on edit distances
     def _detect_error_cells(self, input_table: str) -> DataFrame:
+        error_detectors = self.error_detectors
+        if not error_detectors:
+            error_detectors = self._get_default_error_detectors(input_table)
+
         _logger.info('[Error Detection Phase] Used error detectors: {}'.format(
-            ','.join(list(map(lambda x: str(x), self.error_detectors)))))
+            ','.join(list(map(lambda x: str(x), error_detectors)))))
 
         # Initializes the given error detectors with the input params
-        for d in self.error_detectors:
+        for d in error_detectors:
             d.setUp(str(self.row_id), input_table, self.targets)  # type: ignore
 
-        error_cells_dfs = [d.detect() for d in self.error_detectors]
+        error_cells_dfs = [d.detect() for d in error_detectors]
         err_cells_df = functools.reduce(lambda x, y: x.union(y), error_cells_dfs)
         return err_cells_df.distinct().cache()
 
