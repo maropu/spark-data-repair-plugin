@@ -64,7 +64,13 @@ Delphi APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'delphi'.
 
 # Runs a job to compute repair updates for the seven NULL cells above in `dirty_df`
 # A `repaired` column represents proposed updates to repiar them
->>> repair_updates_df = delphi.repair.setInput("adult").setRowId("tid").run()
+>>> from repair.detectors import NullErrorDetector
+>>> repair_updates_df = delphi.repair \
+...   .setInput("adult") \
+...   .setRowId("tid") \
+...   .setErrorDetectors([NullErrorDetector()]) \
+...   .run()
+
 >>> repair_updates_df.show()
 +---+---------+-------------+-----------+
 |tid|attribute|current_value|   repaired|
@@ -79,7 +85,12 @@ Delphi APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'delphi'.
 +---+---------+-------------+-----------+
 
 # You need to set `True` to `repair_data` for getting repaired data directly
->>> clean_df = delphi.repair.setInput("adult").setRowId("tid").run(repair_data=True)
+>>> clean_df = delphi.repair \
+...   .setInput("adult") \
+...   .setRowId("tid") \
+...   .setErrorDetectors([NullErrorDetector()]) \
+...   .run(repair_data=True)
+
 >>> clean_df.show()
 +---+-----+------------+-----------------+-------------+------+-------------+-----------+
 |tid|  Age|   Education|       Occupation| Relationship|   Sex|      Country|     Income|
