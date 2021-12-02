@@ -34,15 +34,20 @@ class ErrorDetector(metaclass=ABCMeta):
         self._spark = SparkSession.builder.getOrCreate()
         self._detector_api = self._spark.sparkContext._active_spark_context._jvm.ErrorDetectorApi  # type: ignore
 
-    def setUp(self, row_id: str, qualified_input_name: str, targets: List[str]) -> "ErrorDetector":
+    def setUp(self, row_id: str, qualified_input_name: str,
+              continous_cols: List[str], targets: List[str]) -> "ErrorDetector":
         self.row_id = row_id
         self.qualified_input_name = qualified_input_name
+        self.continous_cols = continous_cols
         self.targets = targets
         return self
 
     @abstractmethod
     def _detect_impl(self) -> DataFrame:
         pass
+
+    def _to_continous_col_list(self) -> str:
+        return ','.join(self.continous_cols) if self.continous_cols else ''
 
     def _to_target_list(self) -> str:
         return ','.join(self.targets) if self.targets else ''
@@ -60,7 +65,7 @@ class NullErrorDetector(ErrorDetector):
         ErrorDetector.__init__(self)
 
     def __str__(self) -> str:
-        return self.__class__.__name__
+        return f'{self.__class__.__name__}()'
 
     def _detect_impl(self) -> DataFrame:
         jdf = self._detector_api.detectNullCells(self.qualified_input_name, self.row_id, self._to_target_list())
@@ -140,5 +145,6 @@ class OutlierErrorDetector(ErrorDetector):
 
     def _detect_impl(self) -> DataFrame:
         jdf = self._detector_api.detectErrorCellsFromOutliers(
-            self.qualified_input_name, self.row_id, self._to_target_list(), self.approx_enabled)
+            self.qualified_input_name, self.row_id, self._to_continous_col_list(),
+            self._to_target_list(), self.approx_enabled)
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore

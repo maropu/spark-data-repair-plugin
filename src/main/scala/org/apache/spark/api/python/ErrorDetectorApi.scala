@@ -64,12 +64,13 @@ object ErrorDetectorApi extends LoggingBasedOnLevel {
   def detectErrorCellsFromOutliers(
       qualifiedName: String,
       rowId: String,
+      continousAttrs: String,
       targetAttrList: String,
       approxEnabled: Boolean = false): DataFrame = {
     logBasedOnLevel(s"detectErrorCellsFromOutliers called with: qualifiedName=$qualifiedName " +
       s"rowId=$rowId targetAttrList=$targetAttrList approxEnabled=$approxEnabled")
     GaussianOutlierErrorDetector.detect(qualifiedName, rowId, SparkUtils.stringToSeq(targetAttrList),
-      Map("approxEnabled" -> approxEnabled))
+      Map("continousAttrs" -> continousAttrs, "approxEnabled" -> approxEnabled))
   }
 }
 
@@ -280,10 +281,10 @@ object GaussianOutlierErrorDetector extends ErrorDetector {
       options: Map[String, Any] = Map.empty): DataFrame = {
 
     val (inputDf, inputColumns) = getInput(qualifiedName, targetAttrs)
-
-    val continousAttrs = inputDf.schema.filter { f =>
-      inputColumns.contains(f.name) && continousTypes.contains(f.dataType)
-    }.map(_.name)
+    val continousAttrs = {
+      val attrs = SparkUtils.stringToSeq(getOptionValue[String]("continousAttrs", options))
+      attrs.filter(inputColumns.contains)
+    }
 
     if (continousAttrs.isEmpty) {
       createEmptyResultDfFrom(inputDf, rowId)

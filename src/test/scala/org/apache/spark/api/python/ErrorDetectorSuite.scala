@@ -41,7 +41,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
     Seq[String => DataFrame](ErrorDetectorApi.detectNullCells(_, "tid", ""),
       ErrorDetectorApi.detectErrorCellsFromRegEx(_, "tid", "", "v", null),
       ErrorDetectorApi.detectErrorCellsFromConstraints(_, "tid", "", null),
-      ErrorDetectorApi.detectErrorCellsFromOutliers(_, "tid", "")
+      ErrorDetectorApi.detectErrorCellsFromOutliers(_, "tid", "", "")
     ).foreach { f =>
       val errMsg = intercept[AnalysisException] { f("nonexistent") }.getMessage()
       assert(errMsg.contains("Table or view not found: nonexistent"))
@@ -220,7 +220,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
       val df2 = spark.range(1).selectExpr("1000L AS tid", "double(0.0) AS value")
       df1.union(df2).createOrReplaceTempView("t")
       def test(targetAttrList: String, approxEnabled: Boolean, expected: Seq[Row]): Unit = {
-        val resultDf = ErrorDetectorApi.detectErrorCellsFromOutliers("t", "tid", targetAttrList, approxEnabled)
+        val resultDf = ErrorDetectorApi.detectErrorCellsFromOutliers("t", "tid", "value", targetAttrList, approxEnabled)
         checkAnswer(resultDf, Row(1000L, "value"))
       }
       Seq(false, true).foreach { approxEnabled =>

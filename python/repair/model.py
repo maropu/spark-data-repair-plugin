@@ -697,7 +697,7 @@ class RepairModel():
         return error_detectors
 
     # TODO: Needs to implement an error detector based on edit distances
-    def _detect_error_cells(self, input_table: str) -> DataFrame:
+    def _detect_error_cells(self, input_table: str, continous_columns: List[str]) -> DataFrame:
         error_detectors = self.error_detectors
         if not error_detectors:
             error_detectors = self._get_default_error_detectors(input_table)
@@ -707,7 +707,7 @@ class RepairModel():
 
         # Initializes the given error detectors with the input params
         for d in error_detectors:
-            d.setUp(str(self.row_id), input_table, self.targets)  # type: ignore
+            d.setUp(str(self.row_id), input_table, continous_columns, self.targets)  # type: ignore
 
         error_cells_dfs = [d.detect() for d in error_detectors]
         err_cells_df = functools.reduce(lambda x, y: x.union(y), error_cells_dfs)
@@ -724,7 +724,7 @@ class RepairModel():
             "NOT IN" if negate else "IN", ",".join(map(lambda x: f"'{x}'", targets))))
 
     @_spark_job_group(name="error detection")
-    def _detect_errors(self, input_table: str) -> Tuple[DataFrame, List[str]]:
+    def _detect_errors(self, input_table: str, continous_columns: List[str]) -> Tuple[DataFrame, List[str]]:
         # If `self.error_cells` provided, just uses it
         if self.error_cells is not None:
             # TODO: Even in this case, we need to use a NULL detector because
@@ -741,7 +741,7 @@ class RepairModel():
                 noisy_cells_df = self._filter_columns_from(noisy_cells_df, self.targets)
         else:
             # Applies error detectors to get noisy cells
-            noisy_cells_df = self._detect_error_cells(input_table)
+            noisy_cells_df = self._detect_error_cells(input_table, continous_columns)
 
         noisy_columns: List[str] = []
         num_noisy_cells = noisy_cells_df.count()
@@ -1442,7 +1442,7 @@ class RepairModel():
 
     def _do_error_detection(self, input_table: str, continous_columns: List[str]) -> Tuple[DataFrame, Any, Any, Any]:
         # If no error found, we don't need to do nothing
-        noisy_cells_df, noisy_columns = self._detect_errors(input_table)
+        noisy_cells_df, noisy_columns = self._detect_errors(input_table, continous_columns)
         if noisy_cells_df.count() == 0:  # type: ignore
             return noisy_cells_df, [], {}, {}
 
