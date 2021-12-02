@@ -702,7 +702,7 @@ class RepairModel():
         targets = self.targets if self.targets else \
             [c for c in self._spark.table(input_table).columns if c != self.row_id]
         for c in targets:
-            error_detectors.append(DomainValues(attr=c, autofill=True, min_corr_thres=4))
+            error_detectors.append(DomainValues(attr=c, autofill=True, min_count_thres=4))
 
         return error_detectors
 
