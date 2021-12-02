@@ -37,7 +37,8 @@ python_test_goals = [
     "repair.tests.test_detectors",
     "repair.tests.test_misc",
     "repair.tests.test_model",
-    "repair.tests.test_model_perf"
+    "repair.tests.test_model_perf",
+    "repair.tests.test_utils"
 ]
 
 

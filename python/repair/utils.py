@@ -24,6 +24,51 @@ import typing
 from typing import Any
 
 
+def _to_pretty_type_name(v: Any) -> str:
+    if hasattr(v, "__origin__") and v.__origin__ is list:
+        request_elem_type = v.__args__[0]
+        return f'list[{_to_pretty_type_name(request_elem_type)}]'
+
+    elif hasattr(v, "__origin__") and v.__origin__ is dict:
+        request_key_type, request_value_type = v.__args__
+        return f'dict[{_to_pretty_type_name(request_key_type)},{_to_pretty_type_name(request_value_type)}]'
+
+    return v.__name__ if hasattr(v, "__name__") else str(v)
+
+
+# TODO: Makes this method more general
+def _compare_type(v: Any, annot: Any) -> bool:
+    if hasattr(annot, "__origin__") and annot.__origin__ is list:
+        if type(v) is not list:
+            return False
+
+        request_elem_type = annot.__args__[0]
+        unmathed_elem_types = list(filter(lambda x: not _compare_type(x, request_elem_type), v))
+        if len(unmathed_elem_types) > 0:
+            return False
+
+        return True
+
+    elif hasattr(annot, "__origin__") and annot.__origin__ is dict:
+        request_key_type, request_value_type = annot.__args__
+        if type(v) is not dict:
+            return False
+
+        unmathed_key_types = \
+            list(filter(lambda x: not _compare_type(x, request_key_type), v.keys()))
+        if len(unmathed_key_types) > 0:
+            return False
+
+        unmathed_value_types = \
+            list(filter(lambda x: not _compare_type(x, request_value_type), v.values()))
+        if len(unmathed_value_types) > 0:
+            return False
+
+        return True
+
+    return type(v) is annot or isinstance(v, annot)
+
+
 def argtype_check(f):  # type: ignore
     @functools.wraps(f)
     def wrapper(self, *args, **kwargs):  # type: ignore
@@ -33,74 +78,64 @@ def argtype_check(f):  # type: ignore
 
             # Union case
             if hasattr(annot, "__origin__") and annot.__origin__ is typing.Union:
-                if type(v) not in annot.__args__:
+                matched_types = list(filter(lambda t: _compare_type(v, t), annot.__args__))
+                if not matched_types:
                     msg = "`{}` should be provided as {}, got {}"
-                    request_types = "/".join(map(lambda x: x.__name__, annot.__args__))
+                    request_types = "/".join(map(lambda x: _to_pretty_type_name(x), annot.__args__))
                     raise TypeError(msg.format(k, request_types, type(v).__name__))
 
             # List case
-            #
-            # NOTE: `typing.List[x].__origin__` is `typing.List` in Python 3.6,
-            # but it is `list` in Python 3.7+
-            elif hasattr(annot, "__origin__") and \
-                    annot.__origin__ in (list, typing.List):
+            elif hasattr(annot, "__origin__") and annot.__origin__ is list:
                 request_elem_type = annot.__args__[0]
                 if type(v) is not list:
-                    msg = "`{}` should be provided as list[{}], got {}"
-                    raise TypeError(msg.format(k, request_elem_type.__name__, type(v).__name__))
+                    raise TypeError("`{}` should be provided as list[{}], got {}".format(
+                        k, _to_pretty_type_name(request_elem_type), type(v).__name__))
 
-                if request_elem_type is not typing.Any:
-                    unmathed_elem_types = \
-                        list(filter(lambda x: type(x) is not request_elem_type, v))
-                    if len(unmathed_elem_types) > 0:
-                        msg = "`{}` should be provided as list[{}], got {} in elements"
-                        raise TypeError(msg.format(
-                            k, request_elem_type.__name__,
-                            type(unmathed_elem_types[0]).__name__))
+                unmathed_elem_types = list(filter(lambda x: not _compare_type(x, request_elem_type), v))
+                if len(unmathed_elem_types) > 0:
+                    msg = "`{}` should be provided as list[{}], got {} in elements"
+                    raise TypeError(msg.format(
+                        k, _to_pretty_type_name(request_elem_type),
+                        type(unmathed_elem_types[0]).__name__))
 
             # Dict case
-            #
-            # NOTE: `typing.Dict[k, v].__origin__` is `typing.Dict` in Python 3.6,
-            # but it is `dict` in Python 3.7+
-            elif hasattr(annot, "__origin__") and \
-                    annot.__origin__ in (dict, typing.Dict):
+            elif hasattr(annot, "__origin__") and annot.__origin__ is dict:
                 request_key_type, request_value_type = annot.__args__
                 if type(v) is not dict:
                     msg = "`{}` should be provided as dict[{},{}], got {}"
                     raise TypeError(msg.format(
-                        k, request_key_type.__name__,
-                        request_value_type.__name__,
+                        k, _to_pretty_type_name(request_key_type),
+                        _to_pretty_type_name(request_value_type),
                         type(v).__name__))
 
-                if request_key_type is not typing.Any:
-                    unmathed_key_types = \
-                        list(filter(lambda x: type(x) is not request_key_type, v.keys()))
-                    if len(unmathed_key_types) > 0:
-                        msg = "`{}` should be provided as dict[{},{}], got {} in keys"
-                        raise TypeError(msg.format(
-                            k, request_key_type.__name__,
-                            request_value_type.__name__,
-                            type(unmathed_key_types[0]).__name__))
+                unmathed_key_types = list(filter(lambda x: not _compare_type(x, request_key_type), v.keys()))
+                if len(unmathed_key_types) > 0:
+                    msg = "`{}` should be provided as dict[{},{}], got {} in keys"
+                    raise TypeError(msg.format(
+                        k, _to_pretty_type_name(request_key_type),
+                        _to_pretty_type_name(request_value_type),
+                        type(unmathed_key_types[0]).__name__))
 
-                if request_key_type is not typing.Any:
-                    unmathed_value_types = \
-                        list(filter(lambda x: type(x) is not request_value_type, v.values()))
-                    if len(unmathed_value_types) > 0:
-                        msg = "`{}` should be provided as dict[{},{}], got {} in values"
-                        raise TypeError(msg.format(
-                            k, request_key_type.__name__,
-                            request_value_type.__name__,
-                            type(unmathed_value_types[0]).__name__))
+                unmathed_value_types = list(filter(lambda x: not _compare_type(x, request_value_type), v.values()))
+                if len(unmathed_value_types) > 0:
+                    msg = "`{}` should be provided as dict[{},{}], got {} in values"
+                    raise TypeError(msg.format(
+                        k, _to_pretty_type_name(request_key_type),
+                        _to_pretty_type_name(request_value_type),
+                        type(unmathed_value_types[0]).__name__))
+
+            # TODO: Supports more types, e.g., typing.Tuple
 
             # Other regular cases
             elif annot is not inspect._empty:
                 assert not hasattr(annot, "__origin__"), \
                     "generics are not expected to reach this path"
-                if annot not in [type(v), typing.Any] and not isinstance(v, annot):
+                if not _compare_type(v, annot):
                     msg = "`{}` should be provided as {}, got {}"
-                    raise TypeError(msg.format(k, annot.__name__, type(v).__name__))
+                    raise TypeError(msg.format(k, _to_pretty_type_name(annot), type(v).__name__))
 
         return f(self, *args, **kwargs)
+
     return wrapper
 
 

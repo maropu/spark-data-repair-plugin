@@ -289,7 +289,7 @@ class RepairModel():
         return self
 
     @argtype_check  # type: ignore
-    def setErrorDetectors(self, detectors: List[Any]) -> "RepairModel":
+    def setErrorDetectors(self, detectors: List[ErrorDetector]) -> "RepairModel":
         """
         Specifies the list of :class:`ErrorDetector` derived classes to implement
         a logic to detect error cells.
@@ -308,12 +308,6 @@ class RepairModel():
             * :class:`ConstraintErrorDetector`: detects error cells based on integrity rules
               defined by denial constraints.
         """
-        # TODO: Removes this if `argtype_check` can handle this
-        unknown_detectors = list(filter(lambda d: not isinstance(d, ErrorDetector), detectors))
-        if len(unknown_detectors) > 0:
-            raise TypeError("`detectors` should be provided as list[ErrorDetector], "
-                            f"got {type(unknown_detectors[0]).__name__} in elements")
-
         self.error_detectors = detectors
         return self
 
@@ -581,10 +575,6 @@ class RepairModel():
         ----------
         cf: derived class of :class:`UpdateCostFunction`.
         """
-        # TODO: Removes this if `argtype_check` can handle this
-        if not isinstance(cf, UpdateCostFunction):
-            raise TypeError(f"`cf` should be provided as UpdateCostFunction, got {type(cf)}")
-
         self.cf = cf
         return self
 

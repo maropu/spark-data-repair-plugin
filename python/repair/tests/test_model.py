@@ -16,6 +16,7 @@
 #
 
 import os
+import re
 import tempfile
 import unittest
 import pandas as pd  # type: ignore[import]
@@ -203,6 +204,10 @@ class RepairModelTests(ReusedSQLTestCase):
             ValueError,
             "Repair delta should be positive, got -1",
             lambda: RepairModel().setRepairDelta(-1))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`error_cells` should have at least charactor",
+            lambda: RepairModel().setErrorCells(''))
 
     def test_exclusive_params(self):
         def _assert_exclusive_params(func):
@@ -221,50 +226,54 @@ class RepairModelTests(ReusedSQLTestCase):
             lambda: api.run(compute_repair_candidate_prob=True, compute_repair_score=True))
 
     def test_argtype_check(self):
-        self.assertRaises(
+        self.assertRaisesRegexp(
             TypeError,
             "`db_name` should be provided as str, got int",
             lambda: RepairModel().setDbName(1))
-        self.assertRaises(
+        self.assertRaisesRegexp(
             TypeError,
             "`table_name` should be provided as str, got int",
             lambda: RepairModel().setTableName(1))
-        self.assertRaises(
+        self.assertRaisesRegexp(
             TypeError,
             "`thres` should be provided as int, got str",
             lambda: RepairModel().setDiscreteThreshold("a"))
-        self.assertRaises(
+        self.assertRaisesRegexp(
             TypeError,
             "`thres` should be provided as float, got int",
             lambda: RepairModel().setMinCorrThreshold(1))
-        self.assertRaises(
+        self.assertRaisesRegexp(
             TypeError,
             "`beta` should be provided as float, got int",
             lambda: RepairModel().setDomainThresholds(1.0, 1))
-        self.assertRaises(
+        self.assertRaisesRegexp(
             TypeError,
             "`input` should be provided as str/DataFrame, got int",
             lambda: RepairModel().setInput(1))
-        self.assertRaises(
+        self.assertRaisesRegexp(
             TypeError,
-            "`attrs` should be provided as list[str], got int",
+            re.escape("`attrs` should be provided as list[str], got int"),
             lambda: RepairModel().setTargets(1))
-        self.assertRaises(
+        self.assertRaisesRegexp(
             TypeError,
-            "`attrs` should be provided as list[str], got int in elements",
+            re.escape("`attrs` should be provided as list[str], got int in elements"),
             lambda: RepairModel().setTargets(["a", 1]))
-        self.assertRaises(
+        self.assertRaisesRegexp(
             TypeError,
-            "`detectors` should be provided as list[ErrorDetector], got int in elements",
+            re.escape("`detectors` should be provided as list[ErrorDetector], got int"),
+            lambda: RepairModel().setErrorDetectors(1))
+        self.assertRaisesRegexp(
+            TypeError,
+            re.escape("`detectors` should be provided as list[ErrorDetector], got int in elements"),
             lambda: RepairModel().setErrorDetectors([1]))
-        self.assertRaises(
+        self.assertRaisesRegexp(
             TypeError,
             "`cf` should be provided as UpdateCostFunction, got int",
-            lambda: RepairModel().setUpdateCostFunction([1]))
-        self.assertRaises(
+            lambda: RepairModel().setUpdateCostFunction(1))
+        self.assertRaisesRegexp(
             TypeError,
-            "`error_cells` should have at least charactor",
-            lambda: RepairModel().setErrorCells(''))
+            "`cf` should be provided as UpdateCostFunction, got list",
+            lambda: RepairModel().setUpdateCostFunction([1]))
 
     def test_invalid_running_modes(self):
         test_model = RepairModel() \
@@ -282,7 +291,9 @@ class RepairModelTests(ReusedSQLTestCase):
     # TODO: We fix a seed for building a repair model, but inferred values fluctuate run-by-run.
     # So, to avoid it, we set 1 to `hp.max_evals` for now.
     def _build_model(self):
-        return RepairModel().option("hp.max_evals", "1")
+        return RepairModel() \
+            .setErrorDetectors([NullErrorDetector()]) \
+            .option("hp.max_evals", "1")
 
     def test_multiple_run(self):
         # Checks if auto-generated views are dropped finally
@@ -364,6 +375,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 .orderBy("tid", "attribute")
             expected_result = error_cells_df \
                 .where("attribute IN ({})".format(",".join(map(lambda x: f"'{x}'", targets)))) \
+                .orderBy("tid", "attribute") \
                 .collect()
             self.assertEqual(
                 actual_result.collect(),
@@ -374,8 +386,9 @@ class RepairModelTests(ReusedSQLTestCase):
         _test_setTargets(["Age", "Sex"])
         _test_setTargets(["Non-Existent", "Age"])
 
-        self.assertRaises(
+        self.assertRaisesRegexp(
             ValueError,
+            'Target attributes not found in adult: Non-Existent',
             lambda: self._build_model().setInput("adult").setRowId("tid").setTargets(["Non-Existent"]).run())
 
     def test_setErrorCells(self):
@@ -636,7 +649,10 @@ class RepairModelTests(ReusedSQLTestCase):
             test_model = self._build_model() \
                 .setTableName("inputView") \
                 .setRowId("tid")
-            self.assertRaises(AnalysisException, lambda: test_model.run())
+            self.assertRaisesRegexp(
+                AnalysisException,
+                'Supported types are tinyint,float,smallint,string,double,int,bigint, but unsupported ones found: date',
+                lambda: test_model.run())
 
     def test_table_has_no_enough_columns(self):
         with self.tempView("inputView"):
@@ -650,7 +666,10 @@ class RepairModelTests(ReusedSQLTestCase):
             test_model = self._build_model() \
                 .setTableName("inputView") \
                 .setRowId("tid")
-            self.assertRaises(AnalysisException, lambda: test_model.run())
+            self.assertRaisesRegexp(
+                AnalysisException,
+                re.escape("A least three columns (`tid` columns + two more ones) in table 'inputView'"),
+                lambda: test_model.run())
 
     def test_rowid_uniqueness(self):
         with self.tempView("inputView"):
@@ -664,7 +683,11 @@ class RepairModelTests(ReusedSQLTestCase):
             test_model = self._build_model() \
                 .setTableName("inputView") \
                 .setRowId("tid")
-            self.assertRaises(AnalysisException, lambda: test_model.run())
+            self.assertRaisesRegexp(
+                AnalysisException,
+                re.escape("Uniqueness does not hold in column 'tid' of table 'inputView' "
+                          "(# of distinct 'tid': 1, # of rows: 3)"),
+                lambda: test_model.run())
 
     def test_no_valid_discrete_feature_exists_1(self):
         with self.tempView("inputView"):
