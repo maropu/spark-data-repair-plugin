@@ -78,11 +78,20 @@ error_cells_df = delphi.repair \
 
 error_cells_df.show(3)
 
-# For `OutlierErrorDetector`
+# For `GaussianOutlierErrorDetector`
 error_cells_df = delphi.repair \
     .setTableName("boston") \
     .setRowId("tid") \
-    .setErrorDetectors([OutlierErrorDetector(approx_enabled=False)]) \
+    .setErrorDetectors([GaussianOutlierErrorDetector(approx_enabled=False)]) \
+    .run(detect_errors_only=True)
+
+error_cells_df.show(3)
+
+# For `LOFOutlierErrorDetector`
+error_cells_df = delphi.repair \
+    .setTableName("boston") \
+    .setRowId("tid") \
+    .setErrorDetectors([LOFOutlierErrorDetector()]) \
     .run(detect_errors_only=True)
 
 error_cells_df.show(3)

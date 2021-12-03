@@ -19,6 +19,7 @@
 
 import datetime
 import functools
+import numpy as np
 import pandas as pd
 from abc import ABCMeta, abstractmethod
 from typing import Any, List, Optional
@@ -147,7 +148,7 @@ class ConstraintErrorDetector(ErrorDetector):
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
 
-class OutlierErrorDetector(ErrorDetector):
+class GaussianOutlierErrorDetector(ErrorDetector):
 
     def __init__(self, approx_enabled: bool = False) -> None:
         ErrorDetector.__init__(self)
@@ -196,7 +197,10 @@ class ScikitLearnBasedErrorDetector(ErrorDetector):
 
             sdfs: List[DataFrame] = []
             for c in columns:
-                predicted = outlier_detectors[c].fit_predict(pdf[[c]])
+                # Since we assume a specified outlier detector cannot handle NaN cells,
+                # we fill them with median values before detecting errors..
+                median = np.median(pdf[[c]].dropna())
+                predicted = outlier_detectors[c].fit_predict(pdf[[c]].fillna(median))
                 error_cells = row_ids[predicted < 0]
                 if len(error_cells) > 0:
                     sdf = self._spark.createDataFrame(pd.DataFrame(error_cells, columns=[self.row_id]))
@@ -220,7 +224,10 @@ class ScikitLearnBasedErrorDetector(ErrorDetector):
 
             _pdf = pdf[[row_id]]
             for c in columns:
-                _pdf[c] = clfs[c].fit_predict(pdf[[c]])
+                # Since we assume a specified outlier detector cannot handle NaN cells,
+                # we fill them with median values before detecting errors..
+                median = np.median(pdf[[c]].dropna())
+                _pdf[c] = clfs[c].fit_predict(pdf[[c]].fillna(median))
 
             return _pdf
 

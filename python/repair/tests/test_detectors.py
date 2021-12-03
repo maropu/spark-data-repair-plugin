@@ -22,7 +22,7 @@ from pyspark import SparkConf
 from pyspark.sql import Row
 
 from repair.detectors import ConstraintErrorDetector, DomainValues, NullErrorDetector, \
-    LOFOutlierErrorDetector, OutlierErrorDetector, RegExErrorDetector
+    LOFOutlierErrorDetector, GaussianOutlierErrorDetector, RegExErrorDetector
 from repair.tests.testutils import ReusedSQLTestCase, load_testdata
 
 
@@ -170,22 +170,22 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 Row(tid=4, attribute="Sex"),
                 Row(tid=11, attribute="Sex")])
 
-    def test_OutlierErrorDetector(self):
+    def test_GaussianOutlierErrorDetector(self):
         with self.tempView("tempView"):
-            self.spark.createDataFrame([(1, 1.0), (2, 1.0), (3, 1.0), (4, 1000.0)], ["tid", "v"]) \
+            self.spark.createDataFrame([(1, 1.0), (2, 1.0), (3, 1.0), (4, 1000.0), (5, None)], ["tid", "v"]) \
                 .createOrReplaceTempView("tempView")
             for approx_enabled in [True, False]:
-                errors = OutlierErrorDetector(approx_enabled) \
+                errors = GaussianOutlierErrorDetector(approx_enabled) \
                     .setUp("tid", "tempView", ["v"], []).detect()
                 self.assertEqual(
                     errors.orderBy("tid", "attribute").collect(),
                     [Row(tid=4, attribute="v")])
-                errors = OutlierErrorDetector(approx_enabled) \
+                errors = GaussianOutlierErrorDetector(approx_enabled) \
                     .setUp("tid", "tempView", ["v"], ["v"]).detect()
                 self.assertEqual(
                     errors.orderBy("tid", "attribute").collect(),
                     [Row(tid=4, attribute="v")])
-                errors = OutlierErrorDetector(approx_enabled) \
+                errors = GaussianOutlierErrorDetector(approx_enabled) \
                     .setUp("tid", "tempView", ["v"], ["Unknown", "v"]).detect()
                 self.assertEqual(
                     errors.orderBy("tid", "attribute").collect(),
@@ -195,7 +195,7 @@ class ErrorDetectorTests(ReusedSQLTestCase):
         def _test(input_nrows: int, parallel_mode_threshold: int):
             with self.tempView("tempView"):
                 normal_df = self.spark.range(input_nrows).selectExpr('id', 'id % 2 v1', 'id % 3 v2')
-                dirty_data = [(1000000, 1, 1000), (1000001, 1000, 1)]
+                dirty_data = [(1000000, 1, 1000), (1000001, 1000, 1), (1000002, None, None)]
                 dirty_df = self.spark.createDataFrame(dirty_data, ["id", "v1", "v2"])
                 normal_df.union(dirty_df).createOrReplaceTempView("tempView")
 
