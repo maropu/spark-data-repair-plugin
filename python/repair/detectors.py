@@ -244,6 +244,24 @@ class ScikitLearnBasedErrorDetector(ErrorDetector):
         return functools.reduce(lambda x, y: x.union(y), sdfs)
 
 
+class ScikitLearnBackedErrorDetector(ScikitLearnBasedErrorDetector):
+
+    def __init__(self, error_detector_cls: Any, parallel_mode_threshold: int = 10000) -> None:
+        ScikitLearnBasedErrorDetector.__init__(self, parallel_mode_threshold)
+        self.error_detector_cls = error_detector_cls
+
+        if not hasattr(self.error_detector_cls, "__call__"):
+            raise ValueError('`error_detector_cls` should be callable')
+        if not hasattr(self.error_detector_cls(), "fit_predict"):
+            raise ValueError('An instance that `error_detector_cls` returns should have a `fit_predict` method')
+
+    def __str__(self) -> str:
+        return f'{self.__class__.__name__}()'
+
+    def _outlier_detector_impl(self) -> Any:
+        return self.error_detector_cls()
+
+
 class LOFOutlierErrorDetector(ScikitLearnBasedErrorDetector):
 
     def __init__(self, parallel_mode_threshold: int = 10000) -> None:

@@ -95,3 +95,13 @@ error_cells_df = delphi.repair \
     .run(detect_errors_only=True)
 
 error_cells_df.show(3)
+
+# For `ScikitLearnBackedErrorDetector`
+from sklearn.neighbors import LocalOutlierFactor
+error_cells_df = delphi.repair \
+    .setTableName("boston") \
+    .setRowId("tid") \
+    .setErrorDetectors([ScikitLearnBackedErrorDetector(lambda: LocalOutlierFactor(novelty=False))]) \
+    .run(detect_errors_only=True)
+
+error_cells_df.show(3)

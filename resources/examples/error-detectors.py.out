@@ -165,3 +165,21 @@ only showing top 3 rows
 |323|     CRIM|      0.28392|
 +---+---------+-------------+
 only showing top 3 rows
+
+>>> # For `ScikitLearnBackedErrorDetector`
+>>> from sklearn.neighbors import LocalOutlierFactor
+>>> error_cells_df = delphi.repair \
+...     .setTableName("boston") \
+...     .setRowId("tid") \
+...     .setErrorDetectors([ScikitLearnBackedErrorDetector(lambda: LocalOutlierFactor(novelty=False))]) \
+...     .run(detect_errors_only=True)
+>>> 
+>>> error_cells_df.show(3)
++---+---------+-------------+
+|tid|attribute|current_value|
++---+---------+-------------+
+|214|     CRIM|      0.28955|
+|140|     CRIM|       0.2909|
+|323|     CRIM|      0.28392|
++---+---------+-------------+
+only showing top 3 rows
