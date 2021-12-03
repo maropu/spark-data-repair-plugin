@@ -315,10 +315,6 @@ delphi.repair
  - [15] El Kindi Rezig et al., Horizon: Scalable Dependency-driven Data Cleaning, Proceedings of the VLDB Endowment, vol.14, no.11, 2021.
  - [16] Peng Li et al., CleanML: A Study for Evaluating the Impact of Data Cleaning on ML Classification Tasks, Proceedings of ICDE, pp.13-24, 2021.
 
-## TODO
-
- - Supports Isolation Forest for error detection
-
 ## Bug Reports
 
 If you hit some bugs and have requests, please leave some comments on [Issues](https://github.com/maropu/spark-data-repair-plugin/issues)

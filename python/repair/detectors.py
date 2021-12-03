@@ -17,10 +17,14 @@
 # limitations under the License.
 #
 
+import datetime
+import functools
+import pandas as pd
 from abc import ABCMeta, abstractmethod
-from typing import List, Optional
+from typing import Any, List, Optional
 
-from pyspark.sql import DataFrame, SparkSession  # type: ignore
+from pyspark.sql import DataFrame, SparkSession, functions  # type: ignore
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
 
 
 class ErrorDetector(metaclass=ABCMeta):
@@ -148,3 +152,96 @@ class OutlierErrorDetector(ErrorDetector):
             self.qualified_input_name, self.row_id, self._to_continous_col_list(),
             self._to_target_list(), self.approx_enabled)
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
+
+
+class ScikitLearnBasedErrorDetector(ErrorDetector):
+
+    def __init__(self, parallel_mode_threshold: int = 10000) -> None:
+        ErrorDetector.__init__(self)
+        self.parallel_mode_threshold = parallel_mode_threshold
+
+    def __str__(self) -> str:
+        return f'{self.__class__.__name__}()'
+
+    # NOTE: XXX
+    @abstractmethod
+    def _outlier_detector_impl(self) -> Any:
+        pass
+
+    def _emptyDataFrame(self) -> DataFrame:
+        input_schema = self._spark.table(str(self.qualified_input_name)).schema
+        row_id_field = input_schema[str(self.row_id)]
+        schema = StructType([row_id_field, StructField("attribute", StringType())])
+        return self._spark.createDataFrame(self._spark.sparkContext.emptyRDD(), schema)
+
+    def _create_temp_name(self, prefix: str) -> str:
+        return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
+
+    def _detect_impl(self) -> DataFrame:
+        columns = list(filter(lambda c: c in self.targets, self.continous_cols)) if self.targets \
+            else self.continous_cols
+        if not columns:
+            return self._emptyDataFrame()
+
+        outlier_detectors = {c: self._outlier_detector_impl() for c in columns}
+        input_df = self._spark.table(str(self.qualified_input_name))
+        num_rows = input_df.count()
+
+        if num_rows < self.parallel_mode_threshold:
+            pdf = input_df.toPandas()
+            row_ids = pdf[self.row_id]
+
+            sdfs: List[DataFrame] = []
+            for c in columns:
+                predicted = outlier_detectors[c].fit_predict(pdf[[c]])
+                error_cells = row_ids[predicted < 0]
+                if len(error_cells) > 0:
+                    sdf = self._spark.createDataFrame(pd.DataFrame(error_cells, columns=[self.row_id]))
+                    sdfs.append(sdf.selectExpr(f'{self.row_id}', f'"{c}" attribute'))
+
+            return functools.reduce(lambda x, y: x.union(y), sdfs) if sdfs \
+                else self._emptyDataFrame()
+
+        predicted_fields = [StructField(c, IntegerType()) for c in columns]
+        output_schema = StructType([input_df.schema[str(self.row_id)]] + predicted_fields)
+
+        broadcasted_row_id = self._spark.sparkContext.broadcast(str(self.row_id))
+        broadcasted_columns = self._spark.sparkContext.broadcast(columns)
+        broadcasted_clfs = self._spark.sparkContext.broadcast(outlier_detectors)
+
+        @functions.pandas_udf(output_schema, functions.PandasUDFType.GROUPED_MAP)
+        def predict(pdf: pd.DataFrame) -> pd.DataFrame:
+            row_id = broadcasted_row_id.value
+            columns = broadcasted_columns.value
+            clfs = broadcasted_clfs.value
+
+            _pdf = pdf[[row_id]]
+            for c in columns:
+                _pdf[c] = clfs[c].fit_predict(pdf[[c]])
+
+            return _pdf
+
+        # Sets a grouping key for inference
+        num_parallelism = self._spark.sparkContext.defaultParallelism
+        grouping_key = self._create_temp_name("grouping_key")
+        input_df = input_df.withColumn(grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
+        predicted_df = input_df.groupBy(grouping_key).apply(predict)
+
+        def _extract_err_cells(col: str) -> Any:
+            return predicted_df.where(f'{col} < 0').selectExpr(f'{self.row_id}', f'"{col}" attribute')
+
+        sdfs = list(map(lambda c: _extract_err_cells(c), columns))
+        return functools.reduce(lambda x, y: x.union(y), sdfs)
+
+
+class LOFOutlierErrorDetector(ScikitLearnBasedErrorDetector):
+
+    def __init__(self, parallel_mode_threshold: int = 10000) -> None:
+        ScikitLearnBasedErrorDetector.__init__(self, parallel_mode_threshold)
+
+    def __str__(self) -> str:
+        return f'{self.__class__.__name__}()'
+
+    def _outlier_detector_impl(self) -> Any:
+        from sklearn.neighbors import LocalOutlierFactor
+        return LocalOutlierFactor(novelty=False)

@@ -1467,7 +1467,7 @@ class RepairModel():
 
         return noisy_cells_df, target_columns, {}, domain_stats
 
-    def _emptyDf(self, schema: StructType) -> DataFrame:
+    def _emptyDataFrame(self, schema: StructType) -> DataFrame:
         return self._spark.createDataFrame(self._spark.sparkContext.emptyRDD(), schema)
 
     @elapsed_time  # type: ignore
@@ -1492,7 +1492,7 @@ class RepairModel():
         if error_cells_df.count() == 0:  # type: ignore
             _logger.info("Any error cell not found, so the input data is already clean")
             return self._spark.table(input_table) if repair_data \
-                else self._emptyDf(error_cells_df.schema)
+                else self._emptyDataFrame(error_cells_df.schema)
 
         if len(target_columns) == 0:
             raise ValueError("At least one valid discretizable feature is needed to repair error cells, "

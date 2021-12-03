@@ -22,7 +22,7 @@ from pyspark import SparkConf
 from pyspark.sql import Row
 
 from repair.detectors import ConstraintErrorDetector, DomainValues, NullErrorDetector, \
-    OutlierErrorDetector, RegExErrorDetector
+    LOFOutlierErrorDetector, OutlierErrorDetector, RegExErrorDetector
 from repair.tests.testutils import ReusedSQLTestCase, load_testdata
 
 
@@ -190,6 +190,33 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 self.assertEqual(
                     errors.orderBy("tid", "attribute").collect(),
                     [Row(tid=4, attribute="v")])
+
+    def test_LOFOutlierErrorDetector(self):
+        def _test(input_nrows: int, parallel_mode_threshold: int):
+            with self.tempView("tempView"):
+                normal_df = self.spark.range(input_nrows).selectExpr('id', 'id % 2 v1', 'id % 3 v2')
+                dirty_data = [(1000000, 1, 1000), (1000001, 1000, 1)]
+                dirty_df = self.spark.createDataFrame(dirty_data, ["id", "v1", "v2"])
+                normal_df.union(dirty_df).createOrReplaceTempView("tempView")
+
+                errors = LOFOutlierErrorDetector(parallel_mode_threshold) \
+                    .setUp("id", "tempView", ["v1", "v2"], []).detect()
+                self.assertEqual(
+                    errors.orderBy("id", "attribute").collect(),
+                    [Row(id=1000000, attribute='v2'), Row(id=1000001, attribute='v1')])
+                errors = LOFOutlierErrorDetector(parallel_mode_threshold) \
+                    .setUp("id", "tempView", ["v1", "v2"], ["v1"]).detect()
+                self.assertEqual(
+                    errors.orderBy("id", "attribute").collect(),
+                    [Row(id=1000001, attribute='v1')])
+                errors = LOFOutlierErrorDetector(parallel_mode_threshold) \
+                    .setUp("id", "tempView", ["v1", "v2"], ["Unknown", "v1"]).detect()
+                self.assertEqual(
+                    errors.orderBy("id", "attribute").collect(),
+                    [Row(id=1000001, attribute='v1')])
+
+        _test(input_nrows=3000, parallel_mode_threshold=5000)
+        _test(input_nrows=10000, parallel_mode_threshold=5000)
 
 
 if __name__ == "__main__":
