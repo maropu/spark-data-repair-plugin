@@ -56,6 +56,12 @@ class ErrorDetector(metaclass=ABCMeta):
     def _to_target_list(self) -> str:
         return ','.join(self.targets) if self.targets else ''
 
+    def _emptyDataFrame(self) -> DataFrame:
+        input_schema = self._spark.table(str(self.qualified_input_name)).schema
+        row_id_field = input_schema[str(self.row_id)]
+        schema = StructType([row_id_field, StructField("attribute", StringType())])
+        return self._spark.createDataFrame(self._spark.sparkContext.emptyRDD(), schema)
+
     def detect(self) -> DataFrame:
         assert self.row_id is not None and self.qualified_input_name is not None
         dirty_df = self._detect_impl()
@@ -91,6 +97,9 @@ class DomainValues(ErrorDetector):
         return f'{self.__class__.__name__}({args})'
 
     def _detect_impl(self) -> DataFrame:
+        if self.attr in self.continous_cols:
+            return self._emptyDataFrame()
+
         domain_values = self.values
         if self.autofill:
             domain_value_df = self._spark.table(str(self.qualified_input_name)) \
@@ -99,7 +108,7 @@ class DomainValues(ErrorDetector):
                 .selectExpr(self.attr)
 
             if domain_value_df.count() > 0:
-                domain_values = [r[0] for r in domain_value_df.collect()]
+                domain_values = [str(r[0]) for r in domain_value_df.collect()]
 
         regex = '({})'.format('|'.join(domain_values)) if domain_values else '$^'
         jdf = self._detector_api.detectErrorCellsFromRegEx(
@@ -167,12 +176,6 @@ class ScikitLearnBasedErrorDetector(ErrorDetector):
     @abstractmethod
     def _outlier_detector_impl(self) -> Any:
         pass
-
-    def _emptyDataFrame(self) -> DataFrame:
-        input_schema = self._spark.table(str(self.qualified_input_name)).schema
-        row_id_field = input_schema[str(self.row_id)]
-        schema = StructType([row_id_field, StructField("attribute", StringType())])
-        return self._spark.createDataFrame(self._spark.sparkContext.emptyRDD(), schema)
 
     def _create_temp_name(self, prefix: str) -> str:
         return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'

@@ -532,13 +532,13 @@ class RepairModelTests(ReusedSQLTestCase):
             DomainValues("Country", ["United-States"]),
             DomainValues("Income", ["LessThan50K", "MoreThan50K"])
         ]
-        regex_errors = self._build_model() \
+        domain_value_errors = self._build_model() \
             .setInput("adult") \
             .setRowId("tid") \
             .setErrorDetectors(error_detectors) \
             .run(detect_errors_only=True)
         self.assertEqual(
-            regex_errors.orderBy("tid", "attribute").collect(), [
+            domain_value_errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=5, attribute="Income", current_value=None),
                 Row(tid=7, attribute="Country", current_value="India"),
                 Row(tid=16, attribute="Income", current_value=None),
@@ -579,6 +579,35 @@ class RepairModelTests(ReusedSQLTestCase):
                 Row(tid=4, attribute="Sex", current_value="Female"),
                 Row(tid=11, attribute="Relationship", current_value="Husband"),
                 Row(tid=11, attribute="Sex", current_value="Female")])
+
+    def test_DomainValues_against_continous_values(self):
+        with self.tempView("inputView"):
+            rows = [
+                (1, 1.0, 1.0, 1.0),
+                (2, 1.1, 1.1, 1.1),
+                (3, 1.0, 1.0, None),
+                (4, 1.1, 1.0, 1.0),
+                (5, 1.1, 1.1, 1.1),
+                (6, 1.0, 1.0, None)
+            ]
+            self.spark.createDataFrame(rows, ["tid", "x", "y", "z"]) \
+                .createOrReplaceTempView("inputView")
+
+            error_detectors = [
+                DomainValues('x', autofill=True, min_count_thres=2),
+                DomainValues('y', autofill=True, min_count_thres=2),
+                DomainValues('z', autofill=True, min_count_thres=2),
+                NullErrorDetector()
+            ]
+            domain_value_errors = self._build_model() \
+                .setInput("inputView") \
+                .setRowId("tid") \
+                .setErrorDetectors(error_detectors) \
+                .run(detect_errors_only=True)
+            self.assertEqual(
+                domain_value_errors.orderBy("tid", "attribute").collect(), [
+                    Row(tid=3, attribute="z", current_value=None),
+                    Row(tid=6, attribute="z", current_value=None)])
 
     def test_repair_data(self):
         test_model = self._build_model() \

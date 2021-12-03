@@ -21,6 +21,7 @@ import unittest
 from pyspark import SparkConf
 
 from repair.model import RepairModel
+from repair.detectors import NullErrorDetector
 from repair.tests.requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
 from repair.tests.testutils import ReusedSQLTestCase, load_testdata
@@ -91,6 +92,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         return RepairModel() \
             .setInput(input) \
             .setRowId("tid") \
+            .setErrorDetectors([NullErrorDetector()]) \
             .option("hp.no_progress_loss", "150")
 
     def _compute_rmse(self, repaired_df, expected):
