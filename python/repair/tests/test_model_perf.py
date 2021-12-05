@@ -149,8 +149,8 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         test_params = [
             ("CRIM", "RAD", 3.871610580555785),
             ("RAD", "TAX", 56.96715426988806),
-            ("TAX", "LSTAT", 25.609682659648715),
-            ("LSTAT", "CRIM", 4.331436969817621)
+            ("TAX", "LSTAT", 26.66078638300166),
+            ("LSTAT", "CRIM", 4.510643438749042)
         ]
         for target1, target2, ulimit in test_params:
             with self.subTest(f"target:boston({target1},{target2})"):
@@ -160,51 +160,60 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 self.assertLess(rmse, ulimit + 0.10)
 
     def test_perf_hospital(self):
-        repair_targets = [
-            "City",
-            "HospitalName",
-            "ZipCode",
-            # All the values of "Score" column is NULL, so ignores it
-            # "Score",
-            "ProviderNumber",
-            "Sample",
-            "Address1",
-            "HospitalType",
-            "HospitalOwner",
-            "PhoneNumber",
-            "EmergencyService",
-            "State",
-            "Stateavg",
-            "CountyName",
-            "MeasureCode",
-            "MeasureName",
-            "Condition"
-        ]
-        repaired_df = self._build_model("hospital") \
-            .setErrorCells("hospital_error_cells") \
-            .setDiscreteThreshold(100) \
-            .setTargets(repair_targets) \
-            .run()
+        def build_and_eval_model(ident, f=lambda m: m):
+            repair_targets = [
+                "City",
+                "HospitalName",
+                "ZipCode",
+                "Score",
+                "ProviderNumber",
+                "Sample",
+                "Address1",
+                "HospitalType",
+                "HospitalOwner",
+                "PhoneNumber",
+                "EmergencyService",
+                "State",
+                "Stateavg",
+                "CountyName",
+                "MeasureCode",
+                "MeasureName",
+                "Condition"
+            ]
 
-        repair_targets_set = ",".join(map(lambda x: f"'{x}'", repair_targets))
-        pdf = repaired_df.join(
-            self.spark.table("hospital_clean").where(f"attribute IN ({repair_targets_set})"),
-            ["tid", "attribute"], "inner")
-        rdf = repaired_df.join(
-            self.spark.table("hospital_error_cells").where(f"attribute IN ({repair_targets_set})"),
-            ["tid", "attribute"], "right_outer")
+            # Sets basic params for a hospital repair model
+            model = self._build_model("hospital") \
+                .setErrorCells("hospital_error_cells") \
+                .setDiscreteThreshold(100) \
+                .setTargets(repair_targets)
 
-        # Computes performance numbers (precision & recall)
-        #  - Precision: the fraction of correct repairs, i.e., repairs that match
-        #    the ground truth, over the total number of repairs performed
-        #  - Recall: correct repairs over the total number of errors
-        precision = pdf.where("repaired <=> correct_val").count() / pdf.count()
-        recall = rdf.where("repaired <=> correct_val").count() / rdf.count()
-        f1 = (2.0 * precision * recall) / (precision + recall)
+            # Applys more more model configurations and runs a job to repair data
+            repaired_df = f(model).run()
 
-        msg = f"target:hospital precision:{precision} recall:{recall} f1:{f1}"
-        _perf_logger.info(msg)
-        self.assertTrue(precision > 0.90 and recall > 0.90 and f1 > 0.90, msg=msg)
+            repair_targets_set = ",".join(map(lambda x: f"'{x}'", repair_targets))
+            pdf = repaired_df.join(
+                self.spark.table("hospital_clean").where(f"attribute IN ({repair_targets_set})"),
+                ["tid", "attribute"], "inner")
+            rdf = repaired_df.join(
+                self.spark.table("hospital_error_cells").where(f"attribute IN ({repair_targets_set})"),
+                ["tid", "attribute"], "right_outer")
+
+            # Computes performance numbers (precision & recall)
+            #  - Precision: the fraction of correct repairs, i.e., repairs that match
+            #    the ground truth, over the total number of repairs performed
+            #  - Recall: correct repairs over the total number of errors
+            #
+            # NOTE: Since some correct values are NULL in the 'Score' column, we ignore them here
+            precision = pdf.where("correct_val IS NULL OR repaired <=> correct_val").count() / pdf.count()
+            recall = rdf.where("correct_val IS NULL OR repaired <=> correct_val").count() / rdf.count()
+            f1 = (2.0 * precision * recall) / (precision + recall)
+
+            msg = f"target:hospital({ident}) precision:{precision} recall:{recall} f1:{f1}"
+            _perf_logger.info(msg)
+            self.assertTrue(precision > 0.90 and recall > 0.85 and f1 > 0.85, msg=msg)
+
+        build_and_eval_model('stats', lambda m: m.setRuleBasedModelEnabled(False))
+        # build_and_eval_model('rules', lambda m: m.setRuleBasedModelEnabled(True))
 
 
 if __name__ == "__main__":

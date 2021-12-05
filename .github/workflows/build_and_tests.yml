@@ -62,7 +62,7 @@ jobs:
           name: test-results-jdk${{ matrix.java }}-python${{ matrix.python}}
           path: "./target/surefire-reports/*.xml"
       - name: Upload model performance evaluation metrics to report
-        if: success()
+        if: always()
         uses: actions/upload-artifact@v2
         with:
           name: test-model-perf-jdk${{ matrix.java }}-python${{ matrix.python}}
