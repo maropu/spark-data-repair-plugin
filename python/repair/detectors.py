@@ -166,14 +166,24 @@ class GaussianOutlierErrorDetector(ErrorDetector):
 
 class ScikitLearnBasedErrorDetector(ErrorDetector):
 
-    def __init__(self, parallel_mode_threshold: int = 10000) -> None:
+    def __init__(self, parallel_mode_threshold: int = 10000, num_parallelism: Optional[int] = None) -> None:
         ErrorDetector.__init__(self)
         self.parallel_mode_threshold = parallel_mode_threshold
+        self.num_parallelism = num_parallelism
+        if num_parallelism is not None and int(num_parallelism) <= 0:
+            raise ValueError(f'`num_parallelism` must be positive, got {num_parallelism}')
 
     def __str__(self) -> str:
         return f'{self.__class__.__name__}()'
 
-    # NOTE: XXX
+    @property
+    def _num_parallelism(self) -> int:
+        return int(self.num_parallelism) if self.num_parallelism \
+            else self._spark.sparkContext.defaultParallelism
+
+    # NOTE: An overrode method must return an instance having a scikit-learn-like `fit_predict(X)` method;
+    # the method fits a model to the training set X and return labels.
+    # The predicted labels are 1(inlier) or -1(outlier) of X.
     @abstractmethod
     def _outlier_detector_impl(self) -> Any:
         pass
@@ -232,9 +242,9 @@ class ScikitLearnBasedErrorDetector(ErrorDetector):
             return _pdf
 
         # Sets a grouping key for inference
-        num_parallelism = self._spark.sparkContext.defaultParallelism
         grouping_key = self._create_temp_name("grouping_key")
-        input_df = input_df.withColumn(grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
+        grouping_key_expr = functions.rand() * functions.lit(self._num_parallelism)
+        input_df = input_df.withColumn(grouping_key, grouping_key_expr.cast("int"))
         predicted_df = input_df.groupBy(grouping_key).apply(predict)
 
         def _extract_err_cells(col: str) -> Any:
@@ -246,8 +256,9 @@ class ScikitLearnBasedErrorDetector(ErrorDetector):
 
 class ScikitLearnBackedErrorDetector(ScikitLearnBasedErrorDetector):
 
-    def __init__(self, error_detector_cls: Any, parallel_mode_threshold: int = 10000) -> None:
-        ScikitLearnBasedErrorDetector.__init__(self, parallel_mode_threshold)
+    def __init__(self, error_detector_cls: Any, parallel_mode_threshold: int = 10000,
+                 num_parallelism: Optional[int] = None) -> None:
+        ScikitLearnBasedErrorDetector.__init__(self, parallel_mode_threshold, num_parallelism)
         self.error_detector_cls = error_detector_cls
 
         if not hasattr(self.error_detector_cls, "__call__"):
@@ -264,8 +275,8 @@ class ScikitLearnBackedErrorDetector(ScikitLearnBasedErrorDetector):
 
 class LOFOutlierErrorDetector(ScikitLearnBasedErrorDetector):
 
-    def __init__(self, parallel_mode_threshold: int = 10000) -> None:
-        ScikitLearnBasedErrorDetector.__init__(self, parallel_mode_threshold)
+    def __init__(self, parallel_mode_threshold: int = 10000, num_parallelism: Optional[int] = None) -> None:
+        ScikitLearnBasedErrorDetector.__init__(self, parallel_mode_threshold, num_parallelism)
 
     def __str__(self) -> str:
         return f'{self.__class__.__name__}()'

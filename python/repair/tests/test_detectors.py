@@ -199,17 +199,22 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 dirty_df = self.spark.createDataFrame(dirty_data, ["id", "v1", "v2"])
                 normal_df.union(dirty_df).createOrReplaceTempView("tempView")
 
-                errors = LOFOutlierErrorDetector(parallel_mode_threshold) \
+                self.assertRaisesRegexp(
+                    ValueError,
+                    "`num_parallelism` must be positive, got 0",
+                    lambda: LOFOutlierErrorDetector(parallel_mode_threshold, num_parallelism=0))
+
+                errors = LOFOutlierErrorDetector(parallel_mode_threshold, num_parallelism=1) \
                     .setUp("id", "tempView", ["v1", "v2"], []).detect()
                 self.assertEqual(
                     errors.orderBy("id", "attribute").collect(),
                     [Row(id=1000000, attribute='v2'), Row(id=1000001, attribute='v1')])
-                errors = LOFOutlierErrorDetector(parallel_mode_threshold) \
+                errors = LOFOutlierErrorDetector(parallel_mode_threshold, num_parallelism=1) \
                     .setUp("id", "tempView", ["v1", "v2"], ["v1"]).detect()
                 self.assertEqual(
                     errors.orderBy("id", "attribute").collect(),
                     [Row(id=1000001, attribute='v1')])
-                errors = LOFOutlierErrorDetector(parallel_mode_threshold) \
+                errors = LOFOutlierErrorDetector(parallel_mode_threshold, num_parallelism=1) \
                     .setUp("id", "tempView", ["v1", "v2"], ["Unknown", "v1"]).detect()
                 self.assertEqual(
                     errors.orderBy("id", "attribute").collect(),
@@ -229,17 +234,53 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 normal_df.union(dirty_df).createOrReplaceTempView("tempView")
 
                 error_detector_cls = lambda: LocalOutlierFactor(novelty=False)
-                errors = ScikitLearnBackedErrorDetector(error_detector_cls, parallel_mode_threshold) \
+
+                bad_params = {
+                    'error_detector_cls': 1,
+                    'parallel_mode_threshold': parallel_mode_threshold,
+                    'num_parallelism': 1
+                }
+                self.assertRaisesRegexp(
+                    ValueError,
+                    "`error_detector_cls` should be callable",
+                    lambda: ScikitLearnBackedErrorDetector(**bad_params))
+
+                bad_params = {
+                    'error_detector_cls': lambda: 1,
+                    'parallel_mode_threshold': parallel_mode_threshold,
+                    'num_parallelism': 1
+                }
+                self.assertRaisesRegexp(
+                    ValueError,
+                    "An instance that `error_detector_cls` returns should have a `fit_predict` method",
+                    lambda: ScikitLearnBackedErrorDetector(**bad_params))
+
+                bad_params = {
+                    'error_detector_cls': error_detector_cls,
+                    'parallel_mode_threshold': parallel_mode_threshold,
+                    'num_parallelism': 0
+                }
+                self.assertRaisesRegexp(
+                    ValueError,
+                    "`num_parallelism` must be positive, got 0",
+                    lambda: ScikitLearnBackedErrorDetector(**bad_params))
+
+                params = {
+                    'error_detector_cls': error_detector_cls,
+                    'parallel_mode_threshold': parallel_mode_threshold,
+                    'num_parallelism': 1
+                }
+                errors = ScikitLearnBackedErrorDetector(**params) \
                     .setUp("id", "tempView", ["v1", "v2"], []).detect()
                 self.assertEqual(
                     errors.orderBy("id", "attribute").collect(),
                     [Row(id=1000000, attribute='v2'), Row(id=1000001, attribute='v1')])
-                errors = ScikitLearnBackedErrorDetector(error_detector_cls, parallel_mode_threshold) \
+                errors = ScikitLearnBackedErrorDetector(**params) \
                     .setUp("id", "tempView", ["v1", "v2"], ["v1"]).detect()
                 self.assertEqual(
                     errors.orderBy("id", "attribute").collect(),
                     [Row(id=1000001, attribute='v1')])
-                errors = ScikitLearnBackedErrorDetector(error_detector_cls, parallel_mode_threshold) \
+                errors = ScikitLearnBackedErrorDetector(**params) \
                     .setUp("id", "tempView", ["v1", "v2"], ["Unknown", "v1"]).detect()
                 self.assertEqual(
                     errors.orderBy("id", "attribute").collect(),
