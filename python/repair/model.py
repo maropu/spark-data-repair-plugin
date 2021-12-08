@@ -807,8 +807,6 @@ class RepairModel():
 
         # Target repairable(discretizable) columns
         target_columns = list(filter(lambda c: c in discretized_columns, noisy_columns))
-        _logger.info(f"Repairable target columns are {','.join(target_columns)} "
-                     f"in noisy columns ({','.join(noisy_columns)})")
 
         # Defines true error cells based on the result of domain analysis
         if len(target_columns) > 0 and len(discretized_columns) > 1:
