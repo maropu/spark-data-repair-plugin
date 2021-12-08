@@ -31,7 +31,7 @@ from pyspark.sql import DataFrame, SparkSession, functions  # type: ignore[impor
 from pyspark.sql.functions import col, expr  # type: ignore[import]
 from pyspark.sql.types import ByteType, IntegerType, LongType, ShortType, StructType  # type: ignore[import]
 
-from repair.costs import UpdateCostFunction, NoCost
+from repair.costs import UpdateCostFunction
 from repair.detectors import ConstraintErrorDetector, DomainValues, ErrorDetector, NullErrorDetector
 from repair.train import build_model, compute_class_nrow_stdv, rebalance_training_data
 from repair.utils import argtype_check, elapsed_time, setup_logger
@@ -146,7 +146,7 @@ class RepairModel():
         # policies (i.e., distribution over those data transformation).
         # This model might be able to represent this cost. For more details, see the section 5,
         # 'DATA AUGMENTATION LEARNING', in the paper.
-        self.cf: UpdateCostFunction = NoCost()  # `NoCost` or `Levenshtein`
+        self.cf: Optional[UpdateCostFunction] = None
 
         # Options for internal behaviours
         self.opts: Dict[str, str] = {}
@@ -1341,10 +1341,8 @@ class RepairModel():
         repaired_df.write.format("noop").mode("overwrite").save()
         return repaired_df
 
-    def _compute_repair_pmf(self, repaired_df: DataFrame, error_cells_df: DataFrame,
-                            continous_columns: List[str]) -> DataFrame:
-        repaired_df = self._flatten(self._create_temp_view(repaired_df, 'repaired')) \
-            .join(error_cells_df, [str(self.row_id), "attribute"], "inner")
+    def _compute_weighted_probs(self, pmf_df: DataFrame) -> DataFrame:
+        assert self.cf is not None
 
         broadcasted_cf = self._spark.sparkContext.broadcast(self.cf)
 
@@ -1359,31 +1357,62 @@ class RepairModel():
         def _pmf_weight() -> float:
             return float(self._get_option("pmf.cost_weight", "0.1"))
 
-        parse_pmf_json_expr = "from_json(value, 'classes array<string>, probs array<double>') pmf"
-        slice_probs = "slice(pmf.probs, 1, size(pmf.classes)) probs"
         to_weighted_probs = f"zip_with(probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * c))) probs"
         sum_probs = "aggregate(probs, double(0.0), (acc, x) -> acc + x) norm"
-        to_pmf_expr = "filter(arrays_zip(c, p), x -> x.p > 0.01) pmf"
-        normalize_probs = "transform(probs, p -> p / norm) p"
-        to_current_expr = "named_struct('value', current_value, 'prob', " \
-            "coalesce(p[array_position(c, current_value) - 1], 0.0)) current"
-        sorted_pmf_expr = "array_sort(pmf, (left, right) -> if(left.p < right.p, 1, -1)) pmf"
-        discrete_repaired_df = repaired_df if len(continous_columns) == 0 \
-            else self._filter_columns_from(repaired_df, continous_columns, negate=True)
-        pmf_df = discrete_repaired_df \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", parse_pmf_json_expr) \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "pmf.classes classes", slice_probs) \
-            .withColumn("costs", cost_func(col("current_value"), col("classes"))) \
+        normalize_probs = "transform(probs, p -> p / norm) probs"
+        weighted_pmf_df = pmf_df.withColumn("costs", cost_func(col("current_value"), col("classes"))) \
             .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes", to_weighted_probs) \
             .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes", "probs", sum_probs) \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes c", normalize_probs) \
-            .selectExpr(f"`{self.row_id}`", "attribute", to_current_expr, to_pmf_expr) \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current", sorted_pmf_expr)
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes", normalize_probs)
 
+        return weighted_pmf_df
+
+    def _compute_repair_pmf(self, repaired_df: DataFrame, error_cells_df: DataFrame,
+                            continous_columns: List[str]) -> DataFrame:
+        # Extracts predicted cells from `repaired_df`
+        repaired_df = self._flatten(self._create_temp_view(repaired_df, 'repaired')) \
+            .join(error_cells_df, [str(self.row_id), "attribute"], "inner")
+
+        # Since we cannot compute pmfs for continouos values, their columns need
+        # to be filtered out first.
+        discrete_repaired_df = repaired_df if len(continous_columns) == 0 \
+            else self._filter_columns_from(repaired_df, continous_columns, negate=True)
+
+        parse_pmf_json_expr = "from_json(value, 'classes array<string>, probs array<double>') pmf"
+        slice_probs = "slice(pmf.probs, 1, size(pmf.classes)) probs"
+        pmf_df = discrete_repaired_df \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", parse_pmf_json_expr) \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "pmf.classes classes", slice_probs)
+
+        # If `self.cf` defined, computes weighted probs using it
+        if self.cf is not None:
+            pmf_df = self._compute_weighted_probs(pmf_df)
+
+        # Concatenates `classes` and `probs` for pmfs then sorts pmfs by their probs
+        to_current_expr = "named_struct('value', current_value, 'prob', " \
+            "coalesce(prob[array_position(class, current_value) - 1], 0.0)) current_value"
+        sorted_pmf_expr = "array_sort(pmf, (left, right) -> if(left.prob < right.prob, 1, -1)) pmf"
+        pmf_df = pmf_df.selectExpr(f"`{self.row_id}`", "attribute", 'current_value', 'classes class', 'probs prob') \
+            .selectExpr(f"`{self.row_id}`", "attribute", to_current_expr, 'arrays_zip(class, prob) pmf') \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", sorted_pmf_expr)
+
+        def _pmf_threshold() -> float:
+            return float(self._get_option("pmf.prob_threshold", "0.01"))
+
+        def _pmf_top_k() -> int:
+            return int(self._get_option("pmf.top_k", str(self.discrete_thres)))
+
+        # Filters less-confident candidates in `pmf`
+        filtered_prob_expr = f"slice(filter(pmf, x -> x.prob > {_pmf_threshold()}), 1, {_pmf_top_k()}) pmf"
+        pmf_df = pmf_df.selectExpr(
+            f"`{self.row_id}`", "attribute", "current_value",
+            filtered_prob_expr)
+
+        # Appends rows for continous values if necessary
         if len(continous_columns) > 0:
             continous_repaired_df = self._filter_columns_from(repaired_df, continous_columns, negate=False)
-            continous_to_pmf_expr = "array(named_struct('c', value, 'p', 1.0D)) pmf"
-            to_current_expr = "named_struct('value', current_value, 'prob', 0.0D) current"
+            continous_to_pmf_expr = "array(named_struct('class', value, 'prob', 1.0D)) pmf"
+            to_current_expr = "named_struct('value', current_value, 'prob', 0.0D) current_value"
             continous_pmf_df = continous_repaired_df \
                 .selectExpr(f"`{self.row_id}`", "attribute", to_current_expr, continous_to_pmf_expr)
             pmf_df = pmf_df.union(continous_pmf_df)
@@ -1392,6 +1421,8 @@ class RepairModel():
         return pmf_df
 
     def _compute_score(self, pmf_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
+        assert self.cf is not None
+
         broadcasted_cf = self._spark.sparkContext.broadcast(self.cf)
 
         @functions.pandas_udf("double")  # type: ignore
@@ -1400,14 +1431,14 @@ class RepairModel():
             dists = [cf.compute(x, y) for x, y in zip(xs, ys)]
             return pd.Series(dists)
 
-        maximal_likelihood_repair_expr = "named_struct('value', pmf[0].c, 'prob', pmf[0].p) repaired"
-        current_expr = "IF(ISNOTNULL(current.value), current.value, repaired.value)"
-        score_expr = "ln(repaired.prob / IF(current.prob > 0.0, current.prob, 1e-6)) " \
+        maximal_likelihood_repair_expr = "named_struct('value', pmf[0].class, 'prob', pmf[0].prob) repaired"
+        current_expr = "IF(ISNOTNULL(current_value.value), current_value.value, repaired.value)"
+        score_expr = "ln(repaired.prob / IF(current_value.prob > 0.0, current_value.prob, 1e-6)) " \
             "* (1.0 / (1.0 + cost)) score"
         score_df = pmf_df \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current", maximal_likelihood_repair_expr) \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", maximal_likelihood_repair_expr) \
             .withColumn("cost", cost_func(expr(current_expr), col("repaired.value"))) \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current.value current_value",
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value.value current_value",
                         "repaired.value repaired", score_expr)
 
         return score_df
@@ -1529,15 +1560,15 @@ class RepairModel():
         # of repair candidates.
         if compute_repair_candidate_prob and not self.maximal_likelihood_repair_enabled:
             pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df, continous_columns)
-            pmf_df = pmf_df.selectExpr(f"`{self.row_id}`", "attribute", "current.value AS current_value", "pmf")
+            pmf_df = pmf_df.selectExpr(f"`{self.row_id}`", "attribute", "current_value.value AS current_value", "pmf")
 
             # If `compute_repair_prob` is true, returns a predicted repair with
             # the highest probability only.
             if compute_repair_prob:
                 return pmf_df.selectExpr(
                     f"`{self.row_id}`", "attribute", "current_value",
-                    "pmf[0].c AS repaired",
-                    "pmf[0].p AS prob")
+                    "pmf[0].class AS repaired",
+                    "pmf[0].prob AS prob")
 
             return pmf_df
 
@@ -1633,7 +1664,10 @@ class RepairModel():
         if self.input is None or self.row_id is None:
             raise ValueError("`setInput` and `setRowId` should be called before repairing")
         if self.maximal_likelihood_repair_enabled and self.repair_delta is None:
-            raise ValueError("`setRepairDelta` should be called before "
+            raise ValueError("`setRepairDelta` should be set when enabling "
+                             "maximal likelihood repairing")
+        if self.maximal_likelihood_repair_enabled and self.cf is None:
+            raise ValueError("`setUpdateCostFunction` should be set when enabling "
                              "maximal likelihood repairing")
 
         exclusive_param_list = [

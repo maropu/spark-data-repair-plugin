@@ -36,15 +36,6 @@ class UpdateCostFunction(metaclass=ABCMeta):
         return cost
 
 
-class NoCost(UpdateCostFunction):
-
-    def __init__(self) -> None:
-        UpdateCostFunction.__init__(self, 'NoCost')
-
-    def _compute_impl(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
-        return 0.0
-
-
 class Levenshtein(UpdateCostFunction):
 
     def __init__(self) -> None:

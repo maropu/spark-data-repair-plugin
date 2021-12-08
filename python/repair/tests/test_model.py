@@ -116,14 +116,19 @@ class RepairModelTests(ReusedSQLTestCase):
             .setDbName("default").run())
         self.assertRaisesRegexp(
             ValueError,
-            "`setRepairDelta` should be called before maximal likelihood repairing",
+            "`setRepairDelta` should be set when enabling maximal likelihood repairing",
             lambda: RepairModel().setTableName("dummyTab").setRowId("dummyId")
             .setMaximalLikelihoodRepairEnabled(True).run())
         self.assertRaisesRegexp(
             ValueError,
-            "`setRepairDelta` should be called before maximal likelihood repairing",
+            "`setRepairDelta` should be set when enabling maximal likelihood repairing",
             lambda: RepairModel().setInput("dummyTab").setRowId("dummyId")
             .setMaximalLikelihoodRepairEnabled(True).run())
+        self.assertRaisesRegexp(
+            ValueError,
+            "`setUpdateCostFunction` should be set when enabling maximal likelihood repairing",
+            lambda: RepairModel().setInput("dummyTab").setRowId("dummyId")
+            .setMaximalLikelihoodRepairEnabled(True).setRepairDelta(3).run())
         self.assertRaisesRegexp(
             ValueError,
             "`attrs` should have at least one attribute",
@@ -283,10 +288,14 @@ class RepairModelTests(ReusedSQLTestCase):
             ValueError,
             "Cannot compute repair scores when the maximal likelihood repair mode disabled",
             lambda: test_model.run(compute_repair_score=True))
+
+        test_model = test_model.setMaximalLikelihoodRepairEnabled(True) \
+            .setRepairDelta(1) \
+            .setUpdateCostFunction(Levenshtein())
         self.assertRaisesRegexp(
             ValueError,
             "Cannot enable the maximal likelihood repair mode when continous attributes found",
-            lambda: test_model.setMaximalLikelihoodRepairEnabled(True).setRepairDelta(1).run())
+            lambda: test_model.run())
 
     # TODO: We fix a seed for building a repair model, but inferred values fluctuate run-by-run.
     # So, to avoid it, we set 1 to `hp.max_evals` for now.
@@ -887,7 +896,7 @@ class RepairModelTests(ReusedSQLTestCase):
         self._check_adult_repair_prob_and_score(
             repaired_df,
             "struct<tid:int,attribute:string,current_value:string,"
-            "pmf:array<struct<c:string,p:double>>>")
+            "pmf:array<struct<class:string,prob:double>>>")
 
     def test_compute_repair_prob(self):
         repaired_df = test_model = self._build_model() \
@@ -928,27 +937,28 @@ class RepairModelTests(ReusedSQLTestCase):
                 Row(tid=12, attribute="Sex", current_value=None, repaired="Male")])
 
     def test_compute_repair_prob_for_continouos_values(self):
-        test_model = test_model = self._build_model() \
-            .setTableName("mixed_input") \
-            .setRowId("tid")
+        def run_test(f=lambda m: m):
+            def _test(df, expected_schema):
+                self.assertEqual(
+                    df.schema.simpleString(),
+                    expected_schema)
+                self.assertEqual(
+                    df.selectExpr("tid", "attribute", "current_value").orderBy("tid", "attribute").collect(), [
+                        Row(tid=3, attribute="v3", current_value=None),
+                        Row(tid=7, attribute="v2", current_value=None),
+                        Row(tid=10, attribute="v1", current_value=None),
+                        Row(tid=14, attribute="v4", current_value=None)])
 
-        def _test(df, expected_schema):
-            self.assertEqual(
-                df.schema.simpleString(),
-                expected_schema)
-            self.assertEqual(
-                df.selectExpr("tid", "attribute", "current_value").orderBy("tid", "attribute").collect(), [
-                    Row(tid=3, attribute="v3", current_value=None),
-                    Row(tid=7, attribute="v2", current_value=None),
-                    Row(tid=10, attribute="v1", current_value=None),
-                    Row(tid=14, attribute="v4", current_value=None)])
+            test_model = f(self._build_model().setTableName("mixed_input").setRowId("tid"))
+            _test(test_model.run(compute_repair_candidate_prob=True),
+                  "struct<tid:bigint,attribute:string,current_value:string,"
+                  "pmf:array<struct<class:string,prob:double>>>")
+            _test(test_model.run(compute_repair_prob=True),
+                  "struct<tid:bigint,attribute:string,current_value:string,"
+                  "repaired:string,prob:double>")
 
-        _test(test_model.run(compute_repair_candidate_prob=True),
-              "struct<tid:bigint,attribute:string,current_value:string,"
-              "pmf:array<struct<c:string,p:double>>>")
-        _test(test_model.run(compute_repair_prob=True),
-              "struct<tid:bigint,attribute:string,current_value:string,"
-              "repaired:string,prob:double>")
+        run_test()
+        run_test(lambda m: m.setUpdateCostFunction(Levenshtein()))
 
     def test_integer_input(self):
         with self.tempView("int_input"):
