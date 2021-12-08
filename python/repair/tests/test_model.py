@@ -671,6 +671,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setRowId("t i d") \
                 .setDiscreteThreshold(10) \
                 .setMaximalLikelihoodRepairEnabled(True) \
+                .setUpdateCostFunction(Levenshtein()) \
                 .setRepairDelta(3)
             df = test_model \
                 .run(compute_repair_score=True) \
@@ -914,6 +915,7 @@ class RepairModelTests(ReusedSQLTestCase):
             .setTableName("adult") \
             .setRowId("tid") \
             .setMaximalLikelihoodRepairEnabled(True) \
+            .setUpdateCostFunction(Levenshtein()) \
             .setRepairDelta(1) \
             .run(compute_repair_score=True)
 
@@ -927,8 +929,8 @@ class RepairModelTests(ReusedSQLTestCase):
             .setTableName("adult") \
             .setRowId("tid") \
             .setMaximalLikelihoodRepairEnabled(True) \
-            .setRepairDelta(3) \
             .setUpdateCostFunction(Levenshtein()) \
+            .setRepairDelta(3) \
             .run()
         self.assertEqual(
             repaired_df.orderBy("tid", "attribute").collect(), [

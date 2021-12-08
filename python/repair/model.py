@@ -1270,6 +1270,12 @@ class RepairModel():
         cols = map(lambda f: (f.name, _to_np_types(f.dataType)), schema.fields)
         return dict(filter(lambda f: f[1] is not None, cols))
 
+    def _group_apply(self, df: DataFrame, udf: Any) -> DataFrame:
+        num_parallelism = self._spark.sparkContext.defaultParallelism
+        grouping_key = self._create_temp_name("grouping_key")
+        return df.withColumn(grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int")) \
+            .groupBy(grouping_key).apply(udf)
+
     # TODO: What is the best way to repair appended new data if we have already
     # clean (or repaired) data?
     @_spark_job_group(name="repairing")
@@ -1277,6 +1283,7 @@ class RepairModel():
                 dirty_rows_df: DataFrame, error_cells_df: DataFrame,
                 compute_repair_candidate_prob: bool) -> pd.DataFrame:
         # Shares all the variables for the learnt models in a Spark cluster
+        broadcasted_columns = self._spark.sparkContext.broadcast(dirty_rows_df.columns)
         broadcasted_continous_columns = self._spark.sparkContext.broadcast(continous_columns)
         broadcasted_models = self._spark.sparkContext.broadcast(models)
         broadcasted_compute_repair_candidate_prob = \
@@ -1288,15 +1295,10 @@ class RepairModel():
         integral_column_map = self._create_integral_column_map(dirty_rows_df.schema)
         broadcasted_integral_column_map = self._spark.sparkContext.broadcast(integral_column_map)
 
-        # Sets a grouping key for inference
-        num_parallelism = self._spark.sparkContext.defaultParallelism
-        grouping_key = self._create_temp_name("grouping_key")
-        dirty_rows_df = dirty_rows_df.withColumn(
-            grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int"))
-
         # TODO: Runs the `repair` UDF based on checkpoint files
         @functions.pandas_udf(dirty_rows_df.schema, functions.PandasUDFType.GROUPED_MAP)
         def repair(pdf: pd.DataFrame) -> pd.DataFrame:
+            columns = broadcasted_columns.value
             continous_columns = broadcasted_continous_columns.value
             integral_column_map = broadcasted_integral_column_map.value
             models = broadcasted_models.value
@@ -1330,15 +1332,14 @@ class RepairModel():
                         else np.round(predicted).astype(integral_column_map[y])
                     pdf[y] = pdf[y].where(pdf[y].notna(), predicted)
 
-            return pdf
+            return pdf[columns]
 
         # Predicts the remaining error cells based on the trained models.
         # TODO: Might need to compare repair costs (cost of an update, c) to
         # the likelihood benefits of the updates (likelihood benefit of an update, l).
         _logger.info(f"[Repairing Phase] Computing {error_cells_df.count()} repair updates in "
                      f"{dirty_rows_df.count()} rows...")
-        repaired_df = dirty_rows_df.groupBy(grouping_key).apply(repair).drop(grouping_key)
-        repaired_df.write.format("noop").mode("overwrite").save()
+        repaired_df = self._group_apply(dirty_rows_df, repair)
         return repaired_df
 
     def _compute_weighted_probs(self, pmf_df: DataFrame) -> DataFrame:
@@ -1346,13 +1347,18 @@ class RepairModel():
 
         broadcasted_cf = self._spark.sparkContext.broadcast(self.cf)
 
-        @functions.udf("array<double>")
-        def cost_func(s1: str, s2: List[str]) -> List[float]:
-            if s1 is not None:
-                cf = broadcasted_cf.value
-                return [cf.compute(s1, s) for s in s2]
-            else:
-                return [0.0] * len(s2)
+        @functions.pandas_udf("array<double>", functions.PandasUDFType.SCALAR)
+        def cost_func(s1: pd.Series, s2: pd.Series) -> pd.Series:
+            cf = broadcasted_cf.value
+
+            result: List[List[float]] = []
+            for target, candidates in zip(s1, s2):
+                if target is not None:
+                    result.append([cf.compute(target, c) for c in candidates])
+                else:
+                    result.append([0.0] * len(candidates))
+
+            return pd.Series(result)
 
         def _pmf_weight() -> float:
             return float(self._get_option("pmf.cost_weight", "0.1"))
