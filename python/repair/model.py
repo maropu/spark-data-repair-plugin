@@ -604,14 +604,6 @@ class RepairModel():
     def _get_option(self, key: str, default_value: Optional[str]) -> Any:
         return self.opts[str(key)] if str(key) in self.opts else default_value
 
-    def _num_cores_per_executor(self) -> int:
-        try:
-            num_parallelism = self._spark.sparkContext.defaultParallelism
-            num_executors = self._spark._jsc.sc().getExecutorMemoryStatus().size()  # type: ignore
-            return max(1, num_parallelism / num_executors)
-        except:
-            return 1
-
     def _clear_job_group(self) -> None:
         # TODO: Uses `SparkContext.clearJobGroup()` instead
         self._spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)  # type: ignore
@@ -635,6 +627,13 @@ class RepairModel():
     def _create_temp_name(self, prefix: str) -> str:
         return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
 
+    def _create_temp_view(self, df: Any, prefix: str) -> str:
+        assert isinstance(df, DataFrame)
+        temp_name = self._create_temp_name(prefix)
+        df.createOrReplaceTempView(temp_name)
+        self._intermediate_views_on_runtime.append(temp_name)
+        return temp_name
+
     def _register_table(self, view_name: str) -> str:
         self._intermediate_views_on_runtime.append(view_name)
         return view_name
@@ -650,25 +649,8 @@ class RepairModel():
         self._intermediate_views_on_runtime.append(temp_name)
         return self._spark.table(temp_name)
 
-    def _create_temp_view(self, df: Any, prefix: str) -> str:
-        assert isinstance(df, DataFrame)
-        temp_name = self._create_temp_name(prefix)
-        df.createOrReplaceTempView(temp_name)
-        self._intermediate_views_on_runtime.append(temp_name)
-        return temp_name
-
-    def _repair_attrs(self, repair_updates: Union[str, DataFrame], base_table: Union[str, DataFrame]) -> DataFrame:
-        repair_updates = self._create_temp_view(repair_updates, "repair_updates") \
-            if type(repair_updates) is DataFrame else repair_updates
-        base_table = self._create_temp_view(base_table, "base_table") \
-            if type(base_table) is DataFrame else base_table
-        jdf = self._jvm.RepairMiscApi.repairAttrsFrom(
-            repair_updates, "", base_table, str(self.row_id))
-        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
-
-    def _flatten(self, input_table: str) -> DataFrame:
-        jdf = self._jvm.RepairMiscApi.flattenTable("", input_table, str(self.row_id))
-        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
+    def _empty_dataframe(self, schema: StructType) -> DataFrame:
+        return self._spark.createDataFrame(self._spark.sparkContext.emptyRDD(), schema)
 
     def _release_resources(self) -> None:
         while self._intermediate_views_on_runtime:
@@ -755,50 +737,6 @@ class RepairModel():
 
         return noisy_cells_df, noisy_columns
 
-    def _prepare_repair_base_cells(
-            self, input_table: str, noisy_cells_df: DataFrame, target_columns: List[str]) -> DataFrame:
-        # Sets NULL at the detected noisy cells
-        input_df = self._spark.table(input_table)
-        num_input_rows = input_df.count()
-        num_attrs = len(input_df.columns) - 1
-        _logger.debug("{}/{} noisy cells found, then converts them into NULL cells...".format(
-            noisy_cells_df.count(), num_input_rows * num_attrs))
-        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v2")
-        ret_as_json = json.loads(self._repair_api.convertErrorCellsToNull(
-            input_table, noisy_cells, str(self.row_id), ",".join(target_columns)))
-
-        return self._register_and_get_df(ret_as_json["repair_base_cells"])
-
-    # Checks if attributes are discrete or not, and discretizes continous ones
-    def _discretize_attrs(self, input_table: str) -> Tuple[str, Dict[str, int]]:
-        # Filters out attributes having large domains and makes continous values
-        # discrete if necessary.
-        ret_as_json = json.loads(self._repair_api.convertToDiscretizedTable(
-            input_table, str(self.row_id), self.discrete_thres))
-        discretized_table = self._register_table(ret_as_json["discretized_table"])
-        domain_stats = {k: int(v) for k, v in ret_as_json["domain_stats"].items()}
-        return discretized_table, domain_stats
-
-    def _compute_attr_stats(self, discretized_table: str, target_columns: List[str],
-                            domain_stats: Dict[str, int]) -> Tuple[str, Dict[str, Any]]:
-        # Computes attribute statistics to calculate domains with posteriori probability
-        # based on naïve independence assumptions.
-        _logger.debug("Collecting and sampling attribute stats (ratio={} threshold={}) "
-                      "before computing error domains...".format(
-                          self.attr_stat_sample_ratio,
-                          self.attr_stat_threshold))
-
-        ret_as_json = json.loads(self._repair_api.computeAttrStats(
-            discretized_table,
-            str(self.row_id),
-            ','.join(target_columns),
-            json.dumps(domain_stats),
-            self.attr_stat_sample_ratio,
-            self.attr_stat_threshold))
-
-        return self._register_table(ret_as_json['freq_attr_stats']), \
-            ret_as_json['pairwise_attr_stats']
-
     @_spark_job_group(name="cell domain analysis")
     def _analyze_error_cell_domain(
             self, discretized_table: str, noisy_cells_df: DataFrame,
@@ -851,6 +789,77 @@ class RepairModel():
                      '{} error cells remaining...'.format(weak_labeled_cells_df.count(), error_cells_df.count()))
 
         return error_cells_df, pairwise_attr_stats
+
+    def _do_error_detection(self, input_table: str, continous_columns: List[str]) -> Tuple[DataFrame, Any, Any, Any]:
+        # If no error found, we don't need to do nothing
+        noisy_cells_df, noisy_columns = self._detect_errors(input_table, continous_columns)
+        if noisy_cells_df.count() == 0:  # type: ignore
+            return noisy_cells_df, [], {}, {}
+
+        discretized_table, domain_stats = self._discretize_attrs(input_table)
+        discretized_columns = self._spark.table(discretized_table).columns
+        if len(discretized_columns) == 0:
+            return noisy_cells_df, [], {}, {}
+
+        # Target repairable(discretizable) columns
+        target_columns = list(filter(lambda c: c in discretized_columns, noisy_columns))
+        _logger.info(f"Repairable target columns are {','.join(target_columns)} "
+                     f"in noisy columns ({','.join(noisy_columns)})")
+
+        # Defines true error cells based on the result of domain analysis
+        if len(target_columns) > 0 and len(discretized_columns) > 1:
+            error_cells_df, pairwise_attr_stats = self._extract_error_cells(
+                input_table, noisy_cells_df, discretized_table,
+                continous_columns, target_columns,
+                domain_stats)
+
+            return error_cells_df, target_columns, pairwise_attr_stats, domain_stats
+
+        return noisy_cells_df, target_columns, {}, domain_stats
+
+    def _prepare_repair_base_cells(
+            self, input_table: str, noisy_cells_df: DataFrame, target_columns: List[str]) -> DataFrame:
+        # Sets NULL at the detected noisy cells
+        input_df = self._spark.table(input_table)
+        num_input_rows = input_df.count()
+        num_attrs = len(input_df.columns) - 1
+        _logger.debug("{}/{} noisy cells found, then converts them into NULL cells...".format(
+            noisy_cells_df.count(), num_input_rows * num_attrs))
+        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v2")
+        ret_as_json = json.loads(self._repair_api.convertErrorCellsToNull(
+            input_table, noisy_cells, str(self.row_id), ",".join(target_columns)))
+
+        return self._register_and_get_df(ret_as_json["repair_base_cells"])
+
+    # Checks if attributes are discrete or not, and discretizes continous ones
+    def _discretize_attrs(self, input_table: str) -> Tuple[str, Dict[str, int]]:
+        # Filters out attributes having large domains and makes continous values
+        # discrete if necessary.
+        ret_as_json = json.loads(self._repair_api.convertToDiscretizedTable(
+            input_table, str(self.row_id), self.discrete_thres))
+        discretized_table = self._register_table(ret_as_json["discretized_table"])
+        domain_stats = {k: int(v) for k, v in ret_as_json["domain_stats"].items()}
+        return discretized_table, domain_stats
+
+    def _compute_attr_stats(self, discretized_table: str, target_columns: List[str],
+                            domain_stats: Dict[str, int]) -> Tuple[str, Dict[str, Any]]:
+        # Computes attribute statistics to calculate domains with posteriori probability
+        # based on naïve independence assumptions.
+        _logger.debug("Collecting and sampling attribute stats (ratio={} threshold={}) "
+                      "before computing error domains...".format(
+                          self.attr_stat_sample_ratio,
+                          self.attr_stat_threshold))
+
+        ret_as_json = json.loads(self._repair_api.computeAttrStats(
+            discretized_table,
+            str(self.row_id),
+            ','.join(target_columns),
+            json.dumps(domain_stats),
+            self.attr_stat_sample_ratio,
+            self.attr_stat_threshold))
+
+        return self._register_table(ret_as_json['freq_attr_stats']), \
+            ret_as_json['pairwise_attr_stats']
 
     def _split_clean_and_dirty_rows(
             self, repair_base_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame]:
@@ -1053,7 +1062,15 @@ class RepairModel():
             return []
 
         # TODO: A larger `training_n_jobs` value can cause high pressure on executors
-        training_n_jobs = max(1, int(self._num_cores_per_executor() / num_tasks))
+        def _num_cores_per_executor() -> int:
+            try:
+                num_parallelism = self._spark.sparkContext.defaultParallelism
+                num_executors = self._spark._jsc.sc().getExecutorMemoryStatus().size()  # type: ignore
+                return max(1, num_parallelism / num_executors)
+            except:
+                return 1
+
+        training_n_jobs = max(1, int(_num_cores_per_executor() / num_tasks))
         _logger.debug(f"Setting {training_n_jobs} to `n_jobs` for training in parallel")
 
         broadcasted_target_column = self._spark.sparkContext.broadcast(target_column)
@@ -1255,21 +1272,6 @@ class RepairModel():
 
         return list(models.items())
 
-    def _create_integral_column_map(self, schema) -> Dict[str, Any]:  # type: ignore
-        def _to_np_types(dt):  # type: ignore
-            if dt == ByteType():
-                return np.int8
-            elif dt == ShortType():
-                return np.int16
-            elif dt == IntegerType():
-                return np.int32
-            elif dt == LongType():
-                return np.int64
-            return None
-
-        cols = map(lambda f: (f.name, _to_np_types(f.dataType)), schema.fields)
-        return dict(filter(lambda f: f[1] is not None, cols))
-
     def _group_apply(self, df: DataFrame, udf: Any) -> DataFrame:
         num_parallelism = self._spark.sparkContext.defaultParallelism
         grouping_key = self._create_temp_name("grouping_key")
@@ -1292,7 +1294,22 @@ class RepairModel():
             self._spark.sparkContext.broadcast(self.maximal_likelihood_repair_enabled)
 
         # Creates a dict that checks if a column's type is integral or not
-        integral_column_map = self._create_integral_column_map(dirty_rows_df.schema)
+        def _create_integral_column_map(schema) -> Dict[str, Any]:  # type: ignore
+            def _to_np_types(dt):  # type: ignore
+                if dt == ByteType():
+                    return np.int8
+                elif dt == ShortType():
+                    return np.int16
+                elif dt == IntegerType():
+                    return np.int32
+                elif dt == LongType():
+                    return np.int64
+                return None
+
+            cols = map(lambda f: (f.name, _to_np_types(f.dataType)), schema.fields)
+            return dict(filter(lambda f: f[1] is not None, cols))
+
+        integral_column_map = _create_integral_column_map(dirty_rows_df.schema)
         broadcasted_integral_column_map = self._spark.sparkContext.broadcast(integral_column_map)
 
         # TODO: Runs the `repair` UDF based on checkpoint files
@@ -1373,6 +1390,10 @@ class RepairModel():
 
         return weighted_pmf_df
 
+    def _flatten(self, input_table: str) -> DataFrame:
+        jdf = self._jvm.RepairMiscApi.flattenTable("", input_table, str(self.row_id))
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
+
     def _compute_repair_pmf(self, repaired_df: DataFrame, error_cells_df: DataFrame,
                             continous_columns: List[str]) -> DataFrame:
         # Extracts predicted cells from `repaired_df`
@@ -1449,6 +1470,15 @@ class RepairModel():
 
         return score_df
 
+    def _repair_attrs(self, repair_updates: Union[str, DataFrame], base_table: Union[str, DataFrame]) -> DataFrame:
+        repair_updates = self._create_temp_view(repair_updates, "repair_updates") \
+            if type(repair_updates) is DataFrame else repair_updates
+        base_table = self._create_temp_view(base_table, "base_table") \
+            if type(base_table) is DataFrame else base_table
+        jdf = self._jvm.RepairMiscApi.repairAttrsFrom(
+            repair_updates, "", base_table, str(self.row_id))
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
+
     def _maximal_likelihood_repair(self, score_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
         # A “Maximal Likelihood Repair” problem defined in the SCARE [2] paper is as follows;
         # Given a scalar \delta and a database D = D_{e} \cup D_{c}, the problem is to
@@ -1477,36 +1507,6 @@ class RepairModel():
         # TODO: Implements a logic to check if constraints hold on the repair candidates
         return repair_candidates
 
-    def _do_error_detection(self, input_table: str, continous_columns: List[str]) -> Tuple[DataFrame, Any, Any, Any]:
-        # If no error found, we don't need to do nothing
-        noisy_cells_df, noisy_columns = self._detect_errors(input_table, continous_columns)
-        if noisy_cells_df.count() == 0:  # type: ignore
-            return noisy_cells_df, [], {}, {}
-
-        discretized_table, domain_stats = self._discretize_attrs(input_table)
-        discretized_columns = self._spark.table(discretized_table).columns
-        if len(discretized_columns) == 0:
-            return noisy_cells_df, [], {}, {}
-
-        # Target repairable(discretizable) columns
-        target_columns = list(filter(lambda c: c in discretized_columns, noisy_columns))
-        _logger.info(f"Repairable target columns are {','.join(target_columns)} "
-                     f"in noisy columns ({','.join(noisy_columns)})")
-
-        # Defines true error cells based on the result of domain analysis
-        if len(target_columns) > 0 and len(discretized_columns) > 1:
-            error_cells_df, pairwise_attr_stats = self._extract_error_cells(
-                input_table, noisy_cells_df, discretized_table,
-                continous_columns, target_columns,
-                domain_stats)
-
-            return error_cells_df, target_columns, pairwise_attr_stats, domain_stats
-
-        return noisy_cells_df, target_columns, {}, domain_stats
-
-    def _emptyDataFrame(self, schema: StructType) -> DataFrame:
-        return self._spark.createDataFrame(self._spark.sparkContext.emptyRDD(), schema)
-
     @elapsed_time  # type: ignore
     def _run(self, input_table: str, continous_columns: List[str], detect_errors_only: bool,
              compute_repair_candidate_prob: bool,
@@ -1529,7 +1529,7 @@ class RepairModel():
         if error_cells_df.count() == 0:  # type: ignore
             _logger.info("Any error cell not found, so the input data is already clean")
             return self._spark.table(input_table) if repair_data \
-                else self._emptyDataFrame(error_cells_df.schema)
+                else self._empty_dataframe(error_cells_df.schema)
 
         if len(target_columns) == 0:
             raise ValueError("At least one valid discretizable feature is needed to repair error cells, "
@@ -1594,9 +1594,9 @@ class RepairModel():
                 return top_delta_repairs_df
 
             # If `repair_data` is True, applys the selected repair updates into `dirty_rows`
-            top_delta_repairs = self._create_temp_view(top_delta_repairs_df, "top_delta_repairs")
-            dirty_rows = self._create_temp_view(dirty_rows_df, "dirty_rows")
-            repaired_df = self._repair_attrs(top_delta_repairs, dirty_rows)
+            repaired_df = self._repair_attrs(
+                self._create_temp_view(top_delta_repairs_df, "top_delta_repairs"),
+                self._create_temp_view(dirty_rows_df, "dirty_rows"))
 
         # If `repair_data` is False, returns repair candidates whoes
         # value is the same with `current_value`.

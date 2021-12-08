@@ -57,7 +57,7 @@ class ErrorDetector(metaclass=ABCMeta):
     def _to_target_list(self) -> str:
         return ','.join(self.targets) if self.targets else ''
 
-    def _emptyDataFrame(self) -> DataFrame:
+    def _empty_dataframe(self) -> DataFrame:
         input_schema = self._spark.table(str(self.qualified_input_name)).schema
         row_id_field = input_schema[str(self.row_id)]
         schema = StructType([row_id_field, StructField("attribute", StringType())])
@@ -99,7 +99,7 @@ class DomainValues(ErrorDetector):
 
     def _detect_impl(self) -> DataFrame:
         if self.attr in self.continous_cols:
-            return self._emptyDataFrame()
+            return self._empty_dataframe()
 
         domain_values = self.values
         if self.autofill:
@@ -195,7 +195,7 @@ class ScikitLearnBasedErrorDetector(ErrorDetector):
         columns = list(filter(lambda c: c in self.targets, self.continous_cols)) if self.targets \
             else self.continous_cols
         if not columns:
-            return self._emptyDataFrame()
+            return self._empty_dataframe()
 
         outlier_detectors = {c: self._outlier_detector_impl() for c in columns}
         input_df = self._spark.table(str(self.qualified_input_name))
@@ -217,7 +217,7 @@ class ScikitLearnBasedErrorDetector(ErrorDetector):
                     sdfs.append(sdf.selectExpr(f'{self.row_id}', f'"{c}" attribute'))
 
             return functools.reduce(lambda x, y: x.union(y), sdfs) if sdfs \
-                else self._emptyDataFrame()
+                else self._empty_dataframe()
 
         predicted_fields = [StructField(c, IntegerType()) for c in columns]
         output_schema = StructType([input_df.schema[str(self.row_id)]] + predicted_fields)
