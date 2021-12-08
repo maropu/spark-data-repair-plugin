@@ -70,7 +70,7 @@ class FunctionalDepModel():
 
     def __init__(self, x: str, fd_map: Dict[str, str]) -> None:
         self.fd_map = fd_map
-        self.classes = list(fd_map.values())
+        self.classes = list(set(fd_map.values()))
         self.x = x
 
         # Creates a var to map keys into their indexes on `fd_map.keys()`
@@ -88,10 +88,14 @@ class FunctionalDepModel():
     def predict_proba(self, X: pd.DataFrame) -> Any:
         pmf = []
         for x in X[self.x]:
-            probs = np.zeros(len(self.classes))
             if x in self.fd_map.keys():
+                probs = np.zeros(len(self.classes))
                 probs[self.fd_keypos_map[self.fd_map[x]]] = 1.0
-            pmf.append(probs)
+                pmf.append(probs)
+            else:
+                _logger.warning(f'Unknown "{self.x}" domain value found: {x}')
+                pmf.append(None)
+
         return pmf
 
 
@@ -1340,7 +1344,12 @@ class RepairModel():
                 if need_to_compute_pmf and y not in continous_columns:
                     # TODO: Filters out top-k values to reduce the amount of data
                     predicted = model.predict_proba(X)
-                    pmf = map(lambda p: {"classes": model.classes_.tolist(), "probs": p.tolist()}, predicted)
+
+                    def _to_dict(probs):  # type: ignore
+                        return {"classes": model.classes_.tolist(), "probs": probs.tolist()} if probs is not None \
+                            else {"classes": [], "probs": []}
+
+                    pmf = map(lambda p: _to_dict(p), predicted)
                     pmf = map(lambda p: json.dumps(p), pmf)  # type: ignore
                     pdf[y] = pdf[y].where(pdf[y].notna(), list(pmf))
                 else:
@@ -1424,7 +1433,7 @@ class RepairModel():
             .selectExpr(f"`{self.row_id}`", "attribute", "current_value", sorted_pmf_expr)
 
         def _pmf_threshold() -> float:
-            return float(self._get_option("pmf.prob_threshold", "0.01"))
+            return float(self._get_option("pmf.prob_threshold", "0.0"))
 
         def _pmf_top_k() -> int:
             return int(self._get_option("pmf.top_k", str(self.discrete_thres)))

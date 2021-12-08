@@ -990,16 +990,16 @@ class RepairModelTests(ReusedSQLTestCase):
                     Row(tid=9, attribute="v4", current_value=None, repaired="1")])
 
     def test_rule_based_model(self):
-        model = FunctionalDepModel("x", {1: "test-1", 2: "test-2", 3: "test-3"})
+        model = FunctionalDepModel("x", {1: "test-1", 2: "test-1", 3: "test-2"})
         pdf = pd.DataFrame([[3], [1], [2], [4]], columns=["x"])
-        self.assertEqual(model.classes_.tolist(), ["test-1", "test-2", "test-3"])
-        self.assertEqual(model.predict(pdf), ["test-3", "test-1", "test-2", None])
+        self.assertEqual(model.classes_.tolist(), ["test-1", "test-2"])
+        self.assertEqual(model.predict(pdf), ["test-2", "test-1", "test-1", None])
         pmf = model.predict_proba(pdf)
         self.assertEqual(len(pmf), 4)
-        self.assertEqual(pmf[0].tolist(), [0.0, 0.0, 1.0])
-        self.assertEqual(pmf[1].tolist(), [1.0, 0.0, 0.0])
-        self.assertEqual(pmf[2].tolist(), [0.0, 1.0, 0.0])
-        self.assertEqual(pmf[3].tolist(), [0.0, 0.0, 0.0])
+        self.assertEqual(pmf[0].tolist(), [0.0, 1.0])
+        self.assertEqual(pmf[1].tolist(), [1.0, 0.0])
+        self.assertEqual(pmf[2].tolist(), [1.0, 0.0])
+        self.assertIsNone(pmf[3])
 
     def test_PoorModel(self):
         model = PoorModel(None)
