@@ -187,7 +187,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setDiscreteThreshold(400) \
             .setTargets(repair_targets) \
             .setUpdateCostFunction(Levenshtein()) \
-            .option("pmf.cost_weight", "1.0") \
+            .option("pmf.cost_weight", "3.0") \
             .run()
 
         repair_targets_set = ",".join(map(lambda x: f"'{x}'", repair_targets))
