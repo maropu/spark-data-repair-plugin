@@ -354,13 +354,17 @@ object RepairMiscApi extends RepairBase {
       targetAttrList: String,
       maxDomainSize: Int,
       maxAttrValueNum: Int,
+      maxAttrValueLength: Int,
       samplingRatio: Double,
       minCorrThres: Double,
-      edgeLabel: Boolean): Unit = {
+      edgeLabel: Boolean,
+      filenamePrefix: String,
+      overwrite: Boolean): Unit = {
     logBasedOnLevel(s"generateDepGraph called with: path=$path dbName=$dbName tableName=$tableName " +
       s"format=$format targetAttrList=${if (targetAttrList.nonEmpty) targetAttrList else "<none>"} " +
-      s"maxDomainSize=$maxDomainSize maxAttrValueNum=$maxAttrValueNum " +
-      s"samplingRatio=$samplingRatio minCorrThres=$minCorrThres edgeLabel=$edgeLabel")
+      s"maxDomainSize=$maxDomainSize maxAttrValueNum=$maxAttrValueNum maxAttrValueLength=$maxAttrValueLength " +
+      s"samplingRatio=$samplingRatio minCorrThres=$minCorrThres edgeLabel=$edgeLabel " +
+      s"filenamePrefix=$filenamePrefix overwrite=$overwrite")
 
     val (inputDf, inputTable) = checkAndGetQualifiedInputName(dbName, tableName)
     val targetAttrs = if (targetAttrList.nonEmpty) {
@@ -369,7 +373,7 @@ object RepairMiscApi extends RepairBase {
       inputDf.columns.toSeq
     }
     DepGraph.generateDepGraph(
-      path, inputTable, format, targetAttrs, maxDomainSize, maxAttrValueNum,
-      samplingRatio, minCorrThres, edgeLabel)
+      path, inputTable, format, targetAttrs, maxDomainSize, maxAttrValueNum, maxAttrValueLength,
+      samplingRatio, minCorrThres, edgeLabel, filenamePrefix, overwrite)
   }
 }

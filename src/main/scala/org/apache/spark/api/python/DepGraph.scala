@@ -27,6 +27,9 @@ import scala.io.Source
 import scala.sys.process.{Process, ProcessLogger}
 import scala.util.Try
 
+import org.apache.commons.io.FileUtils
+
+import org.apache.spark.SparkException
 import org.apache.spark.python.DenialConstraints
 import org.apache.spark.sql.ExceptionUtils.AnalysisException
 import org.apache.spark.sql._
@@ -41,16 +44,16 @@ private[python] object DepGraph extends RepairBase {
     if (nodes.nonEmpty) {
       s"""
          |digraph {
-         |  graph [pad="0.5", nodesep="0.5", ranksep="2", fontname="Helvetica"];
-         |  node [shape=plain]
-         |  rankdir=LR;
+         |  graph [pad="0.5" nodesep="1.0" ranksep="4" fontname="Helvetica" rankdir=LR];
+         |  node [shape=plaintext]
          |
          |  ${nodes.sorted.mkString("\n")}
          |  ${edges.sorted.mkString("\n")}
          |}
        """.stripMargin
     } else {
-      ""
+      throw new SparkException("Failed to a generate dependency graph because " +
+        "no correlated attribute found")
     }
   }
 
@@ -60,16 +63,23 @@ private[python] object DepGraph extends RepairBase {
       .replaceAll(">", "&gt;")
   }
 
-  private def generateNodeString(nodeName: String, valuesWithIndex: Seq[(String, Int)]) = {
+  private def trimString(s: String, maxLength: Int): String = {
+    if (s.length > maxLength) s"${s.substring(0, maxLength)}..." else s
+  }
+
+  private def generateNodeString(
+      nodeName: String,
+      valuesWithIndex: Seq[(String, Int)],
+      maxStringLength: Int) = {
     val entries = valuesWithIndex.map { case (v, i) =>
-      s"""<tr><td port="$i">${normalizeForHtml(v)}</td></tr>"""
+      s"""<tr><td port="$i">${normalizeForHtml(trimString(v, maxStringLength))}</td></tr>"""
     }
     s"""
-       |"$nodeName" [label=<
-       |<table border="1" cellborder="0" cellspacing="0">
-       |  <tr><td bgcolor="lightgray" port="nodeName"><i>$nodeName</i></td></tr>
-       |  ${entries.mkString("\n")}
-       |</table>>];
+       |"$nodeName" [color="black" label=<
+       |  <table>
+       |    <tr><td bgcolor="black" port="nodeName"><i><font color="white">$nodeName</font></i></td></tr>
+       |    ${entries.mkString("\n")}
+       |  </table>>];
      """.stripMargin
   }
 
@@ -80,6 +90,7 @@ private[python] object DepGraph extends RepairBase {
       targetAttrs: Seq[String],
       maxDomainSize: Int,
       maxAttrValueNum: Int,
+      maxAttrValueLength: Int,
       samplingRatio: Double,
       minCorrThres: Double,
       edgeLabel: Boolean): String = {
@@ -147,9 +158,11 @@ private[python] object DepGraph extends RepairBase {
 
         def genNode(nodeName: String, values: Seq[String]): (String, Map[String, Int]) = {
           val nn = s"${nodeName}_${nextNodeId.getAndIncrement()}"
-          val valuesWithIndex = values.zipWithIndex
+          val valuesWithIndex = {
+            if (truncate) values.zipWithIndex :+ ("...", -1) else values.zipWithIndex
+          }
           hubNodes += ((nn, nodeName))
-          nodeDefs += generateNodeString(nn, if (truncate) valuesWithIndex :+ ("...", -1) else valuesWithIndex)
+          nodeDefs += generateNodeString(nn, valuesWithIndex, maxAttrValueLength)
           (nn, valuesWithIndex.toMap)
         }
         if (edgeCands.nonEmpty) {
@@ -158,7 +171,7 @@ private[python] object DepGraph extends RepairBase {
 
           def genEdge(from: String, to: String, cnt: Long, totalCnt: Long, label: Boolean): String = {
             val p = (cnt + 0.0) / totalCnt
-            val w = 0.1 + Math.log(cnt) / Math.log((rowCount + 0.0) / valueToIndexMapX.size)
+            val w = 0.1 + Math.log(cnt) / (0.1 + Math.log((rowCount + 0.0) / valueToIndexMapX.size))
             val c = s"gray${(100.0 * (1.0 - p)).toInt}"
             val labelOpt = if (label) s"""label="$cnt/$totalCnt"""" else ""
             s""""$xNodeName":${valueToIndexMapX(from)} -> "$yNodeName":${valueToIndexMapY(to)} """ +
@@ -178,7 +191,7 @@ private[python] object DepGraph extends RepairBase {
     // Add entries for hub nodes
     hubNodes.foreach { case (n, h) =>
       nodeDefs += s""""$h" [ shape="box" ];"""
-      edgeDefs += s""""$n":nodeName -> "$h" [ arrowhead="none" penwidth="2.0" ];"""
+      edgeDefs += s""""$h" -> "$n":nodeName [ arrowhead="diamond" penwidth="1.0" ];"""
     }
 
     generateGraphString(nodeDefs, edgeDefs)
@@ -201,35 +214,45 @@ private[python] object DepGraph extends RepairBase {
         val commands = Seq("bash", "-c", s"dot -T$format $src > $dst")
         BlockingLineStream(commands)
       } catch {
-        case _ => // Do nothing
+        case _: Throwable =>
+          logWarning("Cannot generate image file because `dot` command not installed.")
       }
     }
   }
 
   def generateDepGraph(
-      path: String,
+      outputDirPath: String,
       inputView: String,
       format: String,
       targetAttrs: Seq[String],
       maxDomainSize: Int,
       maxAttrValueNum: Int,
+      maxAttrValueLength: Int,
       samplingRatio: Double,
       minCorrThres: Double,
-      edgeLabel: Boolean): Unit = {
+      edgeLabel: Boolean,
+      filenamePrefix: String,
+      overwrite: Boolean): Unit = {
     val graphString = computeDepGraph(
-      inputView, targetAttrs, maxDomainSize, maxAttrValueNum,
+      inputView, targetAttrs, maxDomainSize, maxAttrValueNum, maxAttrValueLength,
       samplingRatio, minCorrThres, edgeLabel)
     if (!validImageFormatSet.contains(format.toLowerCase(Locale.ROOT))) {
       throw AnalysisException(s"Invalid image format: $format")
     }
-    val outputDir = new File(path)
-    if (!outputDir.mkdir()) {
-      throw AnalysisException(s"path file:$path already exists")
+    val outputDir = new File(outputDirPath)
+    if (overwrite) {
+      FileUtils.deleteDirectory(outputDir)
     }
-    val filePrefix = "depgraph"
-    val dotFile = stringToFile(new File(outputDir, s"$filePrefix.dot"), graphString)
+    if (!outputDir.mkdir()) {
+      throw AnalysisException(if (overwrite) {
+        s"`overwrite` is set to true, but could not remove output dir path '$outputDirPath'"
+      } else {
+        s"output dir path '$outputDirPath' already exists"
+      })
+    }
+    val dotFile = stringToFile(new File(outputDir, s"$filenamePrefix.dot"), graphString)
     val srcFile = dotFile.getAbsolutePath
-    val dstFile = new File(outputDir, s"$filePrefix.$format").getAbsolutePath
+    val dstFile = new File(outputDir, s"$filenamePrefix.$format").getAbsolutePath
     tryGenerateImageFile(format, srcFile, dstFile)
   }
 

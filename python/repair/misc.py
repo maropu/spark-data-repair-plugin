@@ -352,9 +352,14 @@ class RepairMisc():
         self._check_required_options(["path", "table_name"])
         param_max_domain_size = self._parse_option("max_domain_size", "100")
         param_max_attr_value_num = self._parse_option("max_attr_value_num", "30")
+        param_max_attr_value_length = self._parse_option("max_attr_value_length", "70")
         param_min_corr_thres = self._parse_option("min_corr_thres", "0.7")
         param_edge_label = len(self._parse_option("edge_label", "")) > 0
+        param_filename_prefix = self._parse_option("filename_prefix", "depgraph")
+        param_overwrite = len(self._parse_option("overwrite", "")) > 0
         jdf = self._misc_api_.generateDepGraph(
             self.opts["path"], self._db_name, self.opts["table_name"],
-            "svg", self._target_attr_list, int(param_max_domain_size), int(param_max_attr_value_num),
-            1.0, float(param_min_corr_thres), param_edge_label)
+            "svg", self._target_attr_list, int(param_max_domain_size),
+            int(param_max_attr_value_num), int(param_max_attr_value_length),
+            1.0, float(param_min_corr_thres), param_edge_label,
+            param_filename_prefix, param_overwrite)
