@@ -42,7 +42,7 @@ def _setup_logger(logfile: str):
 
 
 # Logger to dump evaluation metrics
-_perf_logger = _setup_logger(f"{os.getenv('REPAIR_TESTDATA')}/test-model-perf.log")
+_logger = _setup_logger(f"{os.getenv('REPAIR_TESTDATA')}/test-model-perf.log")
 
 
 @unittest.skipIf(
@@ -115,7 +115,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             with self.subTest(f"target:iris({target})"):
                 repaired_df = self._build_model("iris").setTargets([target]).run()
                 rmse = self._compute_rmse(repaired_df, "iris_clean")
-                _perf_logger.info(f"target:iris({target}) RMSE:{rmse}")
+                _logger.info(f"target:iris({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
     def test_perf_iris_target_num_2(self):
@@ -129,7 +129,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             with self.subTest(f"target:iris({target1},{target2})"):
                 repaired_df = self._build_model("iris").setTargets([target1, target2]).run()
                 rmse = self._compute_rmse(repaired_df, "iris_clean")
-                _perf_logger.info(f"target:iris({target1},{target2}) RMSE:{rmse}")
+                _logger.info(f"target:iris({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
     def test_perf_boston_target_num_1(self):
@@ -143,7 +143,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             with self.subTest(f"target:boston({target})"):
                 repaired_df = self._build_model("boston").setTargets([target]).run()
                 rmse = self._compute_rmse(repaired_df, "boston_clean")
-                _perf_logger.info(f"target:boston({target}) RMSE:{rmse}")
+                _logger.info(f"target:boston({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
     def test_perf_boston_target_num_2(self):
@@ -157,7 +157,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             with self.subTest(f"target:boston({target1},{target2})"):
                 repaired_df = self._build_model("boston").setTargets([target1, target2]).run()
                 rmse = self._compute_rmse(repaired_df, "boston_clean")
-                _perf_logger.info(f"target:boston({target1},{target2}) RMSE:{rmse}")
+                _logger.info(f"target:boston({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
     def test_perf_hospital(self):
@@ -187,7 +187,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setDiscreteThreshold(400) \
             .setTargets(repair_targets) \
             .setUpdateCostFunction(Levenshtein()) \
-            .option("pmf.cost_weight", "3.0") \
+            .option("pmf.cost_weight", "1.0") \
             .run()
 
         repair_targets_set = ",".join(map(lambda x: f"'{x}'", repair_targets))
@@ -208,8 +208,13 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         recall = rdf.where("correct_val IS NULL OR repaired <=> correct_val").count() / rdf.count()
         f1 = (2.0 * precision * recall) / (precision + recall)
 
-        msg = f"target:hospital precision:{precision} recall:{recall} f1:{f1}"
-        _perf_logger.info(msg)
+        def hospital_incorrect_cell_hist(rdf: DataFrame) -> str:
+            rows = rdf.where('NOT(repaired <=> correct_val)').groupBy('attribute').count().collect()
+            return ', '.join(map(lambda r: f'{r.attribute}:{r.count}', rows))
+
+        msg = f"target:hospital precision:{precision} recall:{recall} f1:{f1} "
+              f"stats:{hospital_incorrect_cell_hist(rdf)}"
+        _logger.info(msg)
         self.assertTrue(precision > 0.90 and recall > 0.90 and f1 > 0.90, msg=msg)
 
 
