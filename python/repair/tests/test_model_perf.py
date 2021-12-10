@@ -187,7 +187,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setDiscreteThreshold(400) \
             .setTargets(repair_targets) \
             .setUpdateCostFunction(Levenshtein()) \
-            .option("pmf.cost_weight", "1.0") \
+            .option("pmf.cost_weight", "0.1") \
             .run()
 
         repair_targets_set = ",".join(map(lambda x: f"'{x}'", repair_targets))
@@ -208,12 +208,12 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         recall = rdf.where("correct_val IS NULL OR repaired <=> correct_val").count() / rdf.count()
         f1 = (2.0 * precision * recall) / (precision + recall)
 
-        def hospital_incorrect_cell_hist(rdf: DataFrame) -> str:
-            rows = rdf.where('NOT(repaired <=> correct_val)').groupBy('attribute').count().collect()
-            return ', '.join(map(lambda r: f'{r.attribute}:{r.count}', rows))
+        def hospital_incorrect_cell_hist(rdf) -> str:
+            pdf = rdf.where('NOT(repaired <=> correct_val)').groupBy('attribute').count().toPandas()
+            return ', '.join(map(lambda r: f'{r.attribute}:{r.count}', pdf.itertuples()))
 
-        msg = f"target:hospital precision:{precision} recall:{recall} f1:{f1} "
-              f"stats:{hospital_incorrect_cell_hist(rdf)}"
+        msg = f"target:hospital precision:{precision} recall:{recall} f1:{f1} " \
+            f"stats:{hospital_incorrect_cell_hist(rdf)}"
         _logger.info(msg)
         self.assertTrue(precision > 0.90 and recall > 0.90 and f1 > 0.90, msg=msg)
 
