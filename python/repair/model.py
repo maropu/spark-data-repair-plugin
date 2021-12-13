@@ -692,7 +692,7 @@ class RepairModel():
             ','.join(list(map(lambda x: str(x), error_detectors)))))
 
         # Computes target attributes for error detection
-        target_attrs = map(lambda c: c != self.row_id, self._spark.table(input_table).columns)
+        target_attrs = filter(lambda c: c != self.row_id, self._spark.table(input_table).columns)
         if self.targets:
             target_attrs = list(set(self.targets) & set(target_attrs))  # type: ignore
 

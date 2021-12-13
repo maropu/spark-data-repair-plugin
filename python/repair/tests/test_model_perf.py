@@ -181,11 +181,29 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             "Condition"
         ]
 
+        rule_based_model_targets = [
+            "EmergencyService",
+            "Condition",
+            "City",
+            "MeasureCode",
+            "HospitalName",
+            "ZipCode",
+            "Address1",
+            "HospitalOwner",
+            "ProviderNumber",
+            "CountyName",
+            "MeasureName"
+        ]
+
         # Sets params for a hospital repair model
+        from repair.detectors import ConstraintErrorDetector
+        constraint_path = "{}/hospital_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
         repaired_df = self._build_model("hospital") \
             .setErrorCells("hospital_error_cells") \
             .setDiscreteThreshold(400) \
             .setTargets(repair_targets) \
+            .setErrorDetectors([ConstraintErrorDetector(constraint_path, targets=rule_based_model_targets)]) \
+            .setRuleBasedModelEnabled(True) \
             .setUpdateCostFunction(Levenshtein()) \
             .option("pmf.cost_weight", "0.1") \
             .run()
