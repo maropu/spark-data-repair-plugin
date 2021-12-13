@@ -256,7 +256,7 @@ private[python] object DepGraph extends RepairBase {
     tryGenerateImageFile(format, srcFile, dstFile)
   }
 
-  def computeFunctionalDeps(inputView: String, constraintFilePath: String): String = {
+  def computeFunctionalDeps(inputView: String, constraintFilePath: String, targetAttrs: Seq[String]): String = {
     val (inputDf, qualifiedName) = checkAndGetQualifiedInputName("", inputView)
     var file: Source = null
     val constraints = try {
@@ -304,7 +304,7 @@ private[python] object DepGraph extends RepairBase {
     }
 
     // TODO: We need a smarter way to convert Scala data to a json string
-    fdMap.map { case (k, values) =>
+    fdMap.filterKeys(targetAttrs.contains).map { case (k, values) =>
       s""""$k": [${values.toSeq.sorted.map { v => s""""$v"""" }.mkString(",")}]"""
     }.mkString("{", ",", "}")
   }

@@ -163,6 +163,12 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 Row(tid=4, attribute="Sex"),
                 Row(tid=11, attribute="Relationship"),
                 Row(tid=11, attribute="Sex")])
+        errors = ConstraintErrorDetector(constraint_path, targets=["Relationship"]) \
+            .setUp("tid", "adult", [], ["Relationship", "Sex"]).detect()
+        self.assertEqual(
+            errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=4, attribute="Relationship"),
+                Row(tid=11, attribute="Relationship")])
         errors = ConstraintErrorDetector(constraint_path) \
             .setUp("tid", "adult", [], ["Relationship"]).detect()
         self.assertEqual(

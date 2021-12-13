@@ -940,7 +940,8 @@ class RepairModel():
         if len(constraint_detectors) == 1:
             input_view = self._create_temp_view(train_df, 'input_to_compute_fdeps')
             constraint_path = constraint_detectors[0].constraint_path  # type: ignore
-            func_deps = json.loads(self._repair_api.computeFunctionalDeps(input_view, constraint_path))
+            target_attrs = ",".join(constraint_detectors[0].targets)  # type: ignore
+            func_deps = json.loads(self._repair_api.computeFunctionalDeps(input_view, constraint_path, target_attrs))
             return func_deps
         else:
             return None

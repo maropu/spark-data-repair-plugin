@@ -30,10 +30,11 @@ from pyspark.sql.types import StructType, StructField, StringType, IntegerType
 
 class ErrorDetector(metaclass=ABCMeta):
 
-    def __init__(self) -> None:
+    def __init__(self, targets: List[str] = []) -> None:
         self.row_id: Optional[str] = None
         self.qualified_input_name: Optional[str] = None
-        self.targets: List[str] = []
+        self.continous_cols: List[str] = []
+        self.targets: List[str] = targets
 
         # For Spark/JVM interactions
         self._spark = SparkSession.builder.getOrCreate()
@@ -44,7 +45,11 @@ class ErrorDetector(metaclass=ABCMeta):
         self.row_id = row_id
         self.qualified_input_name = qualified_input_name
         self.continous_cols = continous_cols
-        self.targets = targets
+        if self.targets:
+            self.targets = list(set(self.targets) & set(targets))
+        else:
+            self.targets = targets
+
         return self
 
     @abstractmethod
@@ -135,8 +140,8 @@ class RegExErrorDetector(ErrorDetector):
 
 class ConstraintErrorDetector(ErrorDetector):
 
-    def __init__(self, constraint_path: str) -> None:
-        ErrorDetector.__init__(self)
+    def __init__(self, constraint_path: str, targets: List[str] = []) -> None:
+        ErrorDetector.__init__(self, targets)
         self.constraint_path = constraint_path
 
     def __str__(self) -> str:

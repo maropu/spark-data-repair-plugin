@@ -588,6 +588,19 @@ class RepairModelTests(ReusedSQLTestCase):
                 Row(tid=4, attribute="Sex", current_value="Female"),
                 Row(tid=11, attribute="Relationship", current_value="Husband"),
                 Row(tid=11, attribute="Sex", current_value="Female")])
+        error_detectors = [
+            ConstraintErrorDetector(constraint_path, targets=["Sex"])
+        ]
+        constraint_errors = self._build_model() \
+            .setInput("adult") \
+            .setRowId("tid") \
+            .setTargets(["Sex", "Relationship"]) \
+            .setErrorDetectors(error_detectors) \
+            .run(detect_errors_only=True)
+        self.assertEqual(
+            constraint_errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=4, attribute="Sex", current_value="Female"),
+                Row(tid=11, attribute="Sex", current_value="Female")])
 
     def test_DomainValues_against_continous_values(self):
         with self.tempView("inputView"):
