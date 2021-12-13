@@ -78,6 +78,10 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 Row(tid=5, attribute="Income"),
                 Row(tid=16, attribute="Income")])
 
+    def test_NullErrorDetector_empty_result(self):
+        errors = NullErrorDetector().setUp("tid", "adult", [], ["Non-existent"]).detect()
+        self.assertEqual(errors.collect(), [])
+
     def test_DomainValues(self):
         errors = DomainValues("Country", []) \
             .setUp("tid", "adult", [], []).detect()
@@ -111,6 +115,11 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 Row(tid=5, attribute="Income"),
                 Row(tid=16, attribute="Income")])
 
+    def test_DomainValues_empty_result(self):
+        errors = DomainValues("Country", []) \
+            .setUp("tid", "adult", [], ['Non-existent']).detect()
+        self.assertEqual(errors.collect(), [])
+
     def test_RegExErrorDetector(self):
         errors = RegExErrorDetector("Country", "United-States") \
             .setUp("tid", "adult", [], []).detect()
@@ -138,6 +147,11 @@ class ErrorDetectorTests(ReusedSQLTestCase):
             self.assertEqual(
                 errors.orderBy("tid", "attribute").collect(),
                 [Row(tid=1, attribute="v"), Row(tid=2, attribute="v")])
+
+    def test_RegExErrorDetector_empty_result(self):
+        errors = RegExErrorDetector("Country", "United-States") \
+            .setUp("tid", "adult", [], ['Non-existent']).detect()
+        self.assertEqual(errors.collect(), [])
 
     def test_ConstraintErrorDetector(self):
         constraint_path = "{}/adult_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
@@ -170,6 +184,15 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 Row(tid=4, attribute="Sex"),
                 Row(tid=11, attribute="Sex")])
 
+    def test_ConstraintErrorDetector_empty_result(self):
+        constraint_path = "{}/adult_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
+        errors = ConstraintErrorDetector(constraint_path) \
+            .setUp("tid", "adult", [], ['Non-existent']).detect()
+        self.assertEqual(errors.collect(), [])
+        errors = ConstraintErrorDetector(constraint_path) \
+            .setUp("tid", "adult", [], ['Income']).detect()
+        self.assertEqual(errors.collect(), [])
+
     def test_GaussianOutlierErrorDetector(self):
         with self.tempView("tempView"):
             self.spark.createDataFrame([(1, 1.0), (2, 1.0), (3, 1.0), (4, 1000.0), (5, None)], ["tid", "v"]) \
@@ -190,6 +213,15 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 self.assertEqual(
                     errors.orderBy("tid", "attribute").collect(),
                     [Row(tid=4, attribute="v")])
+
+    def test_GaussianOutlierErrorDetector_empty_result(self):
+        with self.tempView("tempView"):
+            self.spark.createDataFrame([(1, 1.0), (2, 1.0), (3, 1.0), (4, 1000.0), (5, None)], ["tid", "v"]) \
+                .createOrReplaceTempView("tempView")
+            for approx_enabled in [True, False]:
+                errors = GaussianOutlierErrorDetector(approx_enabled) \
+                    .setUp("tid", "tempView", ["v"], ["Non-existent"]).detect()
+                self.assertEqual(errors.collect(), [])
 
     def test_LOFOutlierErrorDetector(self):
         def _test(input_nrows: int, parallel_mode_threshold: int):
@@ -219,6 +251,10 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 self.assertEqual(
                     errors.orderBy("id", "attribute").collect(),
                     [Row(id=1000001, attribute='v1')])
+
+                errors = LOFOutlierErrorDetector(parallel_mode_threshold, num_parallelism=1) \
+                    .setUp("id", "tempView", ["v1", "v2"], ["Non-existent"]).detect()
+                self.assertEqual(errors.collect(), [])
 
         _test(input_nrows=3000, parallel_mode_threshold=5000)
         _test(input_nrows=10000, parallel_mode_threshold=5000)
@@ -285,6 +321,10 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 self.assertEqual(
                     errors.orderBy("id", "attribute").collect(),
                     [Row(id=1000001, attribute='v1')])
+
+                errors = ScikitLearnBackedErrorDetector(**params) \
+                    .setUp("id", "tempView", ["v1", "v2"], ["Non-existent"]).detect()
+                self.assertEqual(errors.collect(), [])
 
         _test(input_nrows=3000, parallel_mode_threshold=5000)
         _test(input_nrows=10000, parallel_mode_threshold=5000)

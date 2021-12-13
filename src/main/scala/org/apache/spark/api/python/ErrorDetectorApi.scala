@@ -91,7 +91,7 @@ abstract class ErrorDetector extends RepairBase {
     val df = spark.table(qualifiedName)
     val targetColumns = if (targetAttrs.nonEmpty) {
       val filteredColumns = df.columns.filter(targetAttrs.contains)
-      assert(filteredColumns.nonEmpty, s"Target attributes not found in $qualifiedName: ${targetAttrs.mkString(",")}")
+      logWarning(s"Target attributes not found in $qualifiedName: ${targetAttrs.mkString(",")}")
       filteredColumns
     } else {
       df.columns
@@ -161,9 +161,13 @@ object NullErrorDetector extends ErrorDetector {
          """.stripMargin
       }
 
-      val errCellDf = spark.sql(sqls.mkString(" UNION ALL "))
-      loggingErrorStats("NULL-based error detector", qualifiedName, errCellDf)
-      errCellDf
+      if (sqls.isEmpty) {
+        createEmptyResultDfFrom(inputDf, rowId)
+      } else {
+        val errCellDf = spark.sql(sqls.mkString(" UNION ALL "))
+        loggingErrorStats("NULL-based error detector", qualifiedName, errCellDf)
+        errCellDf
+      }
     }
   }
 }
@@ -260,9 +264,13 @@ object ConstraintErrorDetector extends ErrorDetector {
             }
           }
 
-          val errCellDf = spark.sql(sqls.mkString(" UNION ALL "))
-          loggingErrorStats("Constraint-based error detector", qualifiedName, errCellDf)
-          errCellDf
+          if (sqls.isEmpty) {
+            createEmptyResultDfFrom(inputDf, rowId)
+          } else {
+            val errCellDf = spark.sql(sqls.mkString(" UNION ALL "))
+            loggingErrorStats("Constraint-based error detector", qualifiedName, errCellDf)
+            errCellDf
+          }
         }
       }
     }
