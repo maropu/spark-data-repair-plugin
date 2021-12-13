@@ -23,9 +23,7 @@ import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 
 import org.apache.spark.python.DenialConstraints
-import org.apache.spark.sql.ExceptionUtils.AnalysisException
 import org.apache.spark.sql._
-import org.apache.spark.sql.types.StringType
 import org.apache.spark.util.LoggingBasedOnLevel
 import org.apache.spark.util.RepairUtils._
 import org.apache.spark.util.{Utils => SparkUtils}
@@ -87,18 +85,6 @@ abstract class ErrorDetector extends RepairBase {
     createEmptyTable(s"`$rowId` $rowIdType, attribute STRING")
   }
 
-  protected def getInput(qualifiedName: String, targetAttrs: Seq[String]): (DataFrame, Seq[String]) = {
-    val df = spark.table(qualifiedName)
-    val targetColumns = if (targetAttrs.nonEmpty) {
-      val filteredColumns = df.columns.filter(targetAttrs.contains)
-      logWarning(s"Target attributes not found in $qualifiedName: ${targetAttrs.mkString(",")}")
-      filteredColumns
-    } else {
-      df.columns
-    }
-    (df, targetColumns.toSeq)
-  }
-
   protected def getOptionValue[T](key: String, options: Map[String, Any]): T = {
     assert(options.contains(key))
     options(key).asInstanceOf[T]
@@ -149,11 +135,11 @@ object NullErrorDetector extends ErrorDetector {
       targetAttrs: Seq[String],
       options: Map[String, Any] = Map.empty): DataFrame = {
 
-    val (inputDf, inputColumns) = getInput(qualifiedName, targetAttrs)
+    val inputDf = spark.table(qualifiedName)
 
     withTempView(inputDf, "null_err_detector_input", cache = true) { inputView =>
       // Detects error erroneous cells in a given table
-      val sqls = inputColumns.filter(_ != rowId).map { attr =>
+      val sqls = inputDf.columns.filter { c => c != rowId && targetAttrs.contains(c) }.map { attr =>
         s"""
            |SELECT `$rowId`, '$attr' AS attribute
            |FROM $inputView
@@ -180,11 +166,11 @@ object RegExErrorDetector extends ErrorDetector {
       targetAttrs: Seq[String],
       options: Map[String, Any] = Map.empty): DataFrame = {
 
-    val (inputDf, inputColumns) = getInput(qualifiedName, targetAttrs)
+    val inputDf = spark.table(qualifiedName)
 
     val targetColumn = getOptionValue[String]("attr", options)
     val regex = getOptionValue[String]("regex", options)
-    if (!inputColumns.contains(targetColumn) || regex == null || regex.trim.isEmpty) {
+    if (!targetAttrs.contains(targetColumn) || regex == null || regex.trim.isEmpty) {
       createEmptyResultDfFrom(inputDf, rowId)
     } else {
       withTempView(inputDf, "regex_err_detector_input") { inputView =>
@@ -210,7 +196,7 @@ object ConstraintErrorDetector extends ErrorDetector {
       targetAttrs: Seq[String],
       options: Map[String, Any] = Map.empty): DataFrame = {
 
-    val (inputDf, inputColumns) = getInput(qualifiedName, targetAttrs)
+    val inputDf = spark.table(qualifiedName)
 
     // If `constraintFilePath` not given, just returns an empty table
     val constraintFilePath = getOptionValue[String]("constraintFilePath", options)
@@ -246,7 +232,7 @@ object ConstraintErrorDetector extends ErrorDetector {
           // Detects error erroneous cells in a given table
           val sqls = constraints.predicates.flatMap { preds =>
             import DenialConstraints._
-            val attrs = preds.flatMap(_.references).filter(inputColumns.contains).distinct
+            val attrs = preds.flatMap(_.references).filter(targetAttrs.contains).distinct
             if (attrs.nonEmpty) {
               // TODO: Needs to look for a more smart logic to filter error cells
               Some(s"""
@@ -288,10 +274,10 @@ object GaussianOutlierErrorDetector extends ErrorDetector {
       targetAttrs: Seq[String],
       options: Map[String, Any] = Map.empty): DataFrame = {
 
-    val (inputDf, inputColumns) = getInput(qualifiedName, targetAttrs)
+    val inputDf = spark.table(qualifiedName)
     val continousAttrs = {
       val attrs = SparkUtils.stringToSeq(getOptionValue[String]("continousAttrs", options))
-      attrs.filter(inputColumns.contains)
+      attrs.filter(targetAttrs.contains)
     }
 
     if (continousAttrs.isEmpty) {

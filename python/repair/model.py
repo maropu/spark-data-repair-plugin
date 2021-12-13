@@ -691,9 +691,14 @@ class RepairModel():
         _logger.info('[Error Detection Phase] Used error detectors: {}'.format(
             ','.join(list(map(lambda x: str(x), error_detectors)))))
 
+        # Computes target attributes for error detection
+        target_attrs = map(lambda c: c != self.row_id, self._spark.table(input_table).columns)
+        if self.targets:
+            target_attrs = list(set(self.targets) & set(target_attrs))  # type: ignore
+
         # Initializes the given error detectors with the input params
         for d in error_detectors:
-            d.setUp(str(self.row_id), input_table, continous_columns, self.targets)  # type: ignore
+            d.setUp(str(self.row_id), input_table, continous_columns, target_attrs)  # type: ignore
 
         error_cells_dfs = [d.detect() for d in error_detectors]
         err_cells_df = functools.reduce(lambda x, y: x.union(y), error_cells_dfs)

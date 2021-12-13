@@ -49,7 +49,7 @@ class ErrorDetectorTests(ReusedSQLTestCase):
         load_testdata(cls.spark, "adult.csv").createOrReplaceTempView("adult")
 
     def test_NullErrorDetector(self):
-        errors = NullErrorDetector().setUp("tid", "adult", [], []).detect()
+        errors = NullErrorDetector().setUp("tid", "adult", [], ["Sex", "Age", "Income"]).detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=3, attribute="Sex"),
@@ -84,18 +84,18 @@ class ErrorDetectorTests(ReusedSQLTestCase):
 
     def test_DomainValues(self):
         errors = DomainValues("Country", []) \
-            .setUp("tid", "adult", [], []).detect()
+            .setUp("tid", "adult", [], ["Country"]).detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(),
             [Row(tid=i, attribute="Country") for i in range(0, 20)])
         errors = DomainValues("Country", ["United-States"]) \
-            .setUp("tid", "adult", [], []).detect()
+            .setUp("tid", "adult", [], ["Country"]).detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=7, attribute="Country"),
                 Row(tid=19, attribute="Country")])
         errors = DomainValues("Income", ["LessThan50K", "MoreThan50K"]) \
-            .setUp("tid", "adult", [], []).detect()
+            .setUp("tid", "adult", [], ["Income"]).detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=5, attribute="Income"),
@@ -103,13 +103,13 @@ class ErrorDetectorTests(ReusedSQLTestCase):
 
     def test_DomainValues_autofill(self):
         errors = DomainValues("Country", autofill=True, min_count_thres=4) \
-            .setUp("tid", "adult", [], []).detect()
+            .setUp("tid", "adult", [], ["Country"]).detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=7, attribute="Country"),
                 Row(tid=19, attribute="Country")])
         errors = DomainValues("Income", autofill=True, min_count_thres=1) \
-            .setUp("tid", "adult", [], []).detect()
+            .setUp("tid", "adult", [], ["Income"]).detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=5, attribute="Income"),
@@ -122,7 +122,7 @@ class ErrorDetectorTests(ReusedSQLTestCase):
 
     def test_RegExErrorDetector(self):
         errors = RegExErrorDetector("Country", "United-States") \
-            .setUp("tid", "adult", [], []).detect()
+            .setUp("tid", "adult", [], ["Country"]).detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=7, attribute="Country"),
@@ -143,7 +143,7 @@ class ErrorDetectorTests(ReusedSQLTestCase):
         with self.tempView("tempView"):
             self.spark.createDataFrame([(1, 12), (2, 123), (3, 1234), (4, 12345)], ["tid", "v"]) \
                 .createOrReplaceTempView("tempView")
-            errors = RegExErrorDetector("v", "123.+").setUp("tid", "tempView", [], []).detect()
+            errors = RegExErrorDetector("v", "123.+").setUp("tid", "tempView", [], ["v"]).detect()
             self.assertEqual(
                 errors.orderBy("tid", "attribute").collect(),
                 [Row(tid=1, attribute="v"), Row(tid=2, attribute="v")])
@@ -156,7 +156,7 @@ class ErrorDetectorTests(ReusedSQLTestCase):
     def test_ConstraintErrorDetector(self):
         constraint_path = "{}/adult_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
         errors = ConstraintErrorDetector(constraint_path) \
-            .setUp("tid", "adult", [], []).detect()
+            .setUp("tid", "adult", [], ["Relationship", "Sex"]).detect()
         self.assertEqual(
             errors.orderBy("tid", "attribute").collect(), [
                 Row(tid=4, attribute="Relationship"),
@@ -199,7 +199,7 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 .createOrReplaceTempView("tempView")
             for approx_enabled in [True, False]:
                 errors = GaussianOutlierErrorDetector(approx_enabled) \
-                    .setUp("tid", "tempView", ["v"], []).detect()
+                    .setUp("tid", "tempView", ["v"], ["v"]).detect()
                 self.assertEqual(
                     errors.orderBy("tid", "attribute").collect(),
                     [Row(tid=4, attribute="v")])
@@ -237,7 +237,7 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                     lambda: LOFOutlierErrorDetector(parallel_mode_threshold, num_parallelism=0))
 
                 errors = LOFOutlierErrorDetector(parallel_mode_threshold, num_parallelism=1) \
-                    .setUp("id", "tempView", ["v1", "v2"], []).detect()
+                    .setUp("id", "tempView", ["v1", "v2"], ["v1", "v2"]).detect()
                 self.assertEqual(
                     errors.orderBy("id", "attribute").collect(),
                     [Row(id=1000000, attribute='v2'), Row(id=1000001, attribute='v1')])
@@ -307,7 +307,7 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                     'num_parallelism': 1
                 }
                 errors = ScikitLearnBackedErrorDetector(**params) \
-                    .setUp("id", "tempView", ["v1", "v2"], []).detect()
+                    .setUp("id", "tempView", ["v1", "v2"], ["v1", "v2"]).detect()
                 self.assertEqual(
                     errors.orderBy("id", "attribute").collect(),
                     [Row(id=1000000, attribute='v2'), Row(id=1000001, attribute='v1')])

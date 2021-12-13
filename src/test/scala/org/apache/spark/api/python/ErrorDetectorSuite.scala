@@ -64,7 +64,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
         val df = ErrorDetectorApi.detectNullCells("default.t", "tid", targetAttrList)
         checkAnswer(df, expected)
       }
-      test("", Row("2", "v1") :: Row("3", "v3") :: Row("4", "v2") :: Nil)
+      test("v1,v2,v3", Row("2", "v1") :: Row("3", "v3") :: Row("4", "v2") :: Nil)
       test("v1", Row("2", "v1") :: Nil)
       test("v2,v3", Row("3", "v3") :: Row("4", "v2") :: Nil)
       test("v3,v1", Row("2", "v1") :: Row("3", "v3") :: Nil)
@@ -89,11 +89,11 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
           .detectErrorCellsFromRegEx("default.t", "tid", targetAttrList, attr, regex)
         checkAnswer(df, expected)
       }
-      test("", "v3", "123-hij",
+      test("v1,v2,v3", "v3", "123-hij",
         Row("1", "v3") :: Row("2", "v3") :: Row("3", "v3") :: Nil)
-      test("", "v3", "123.*",
+      test("v1,v2,v3", "v3", "123.*",
         Row("2", "v3") :: Row("3", "v3") :: Nil)
-      test("", "v1", "123.*",
+      test("v1,v2,v3", "v1", "123.*",
         Row("4", "v1") :: Nil)
       test("v3", "v3", "123.*",
         Row("2", "v3") :: Row("3", "v3") :: Nil)
@@ -143,7 +143,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
             .detectErrorCellsFromConstraints("default.t", "tid", targetAttrList, constraintFilePath)
           checkAnswer(df, expected)
         }
-        test("",
+        test("v1,v2",
           Row("1", "v1") ::
             Row("1", "v2") ::
             Row("2", "v1") ::
@@ -191,7 +191,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
       spark.read.option("header", true).format("csv").load(adultFilePath).write.saveAsTable("adult")
       val constraintFilePath = resourcePath("adult_constraints.txt")
       val df = ErrorDetectorApi
-        .detectErrorCellsFromConstraints("default.adult", "tid", "", constraintFilePath)
+        .detectErrorCellsFromConstraints("default.adult", "tid", "Sex,Relationship", constraintFilePath)
       checkAnswer(df,
         Row("4", "Relationship") ::
         Row("4", "Sex") ::
@@ -224,7 +224,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
         checkAnswer(resultDf, Row(1000L, "value"))
       }
       Seq(false, true).foreach { approxEnabled =>
-        test("", approxEnabled, Row(1000L, "value") :: Nil)
+        test("value", approxEnabled, Row(1000L, "value") :: Nil)
         test("value", approxEnabled, Row(1000L, "value") :: Nil)
         test("v,value", approxEnabled, Row(1000L, "value") :: Nil)
       }
