@@ -17,6 +17,7 @@
 # limitations under the License.
 #
 
+import copy
 import datetime
 import functools
 import heapq
@@ -608,6 +609,12 @@ class RepairModel():
     def _get_option(self, key: str, default_value: Optional[str]) -> Any:
         return self.opts[str(key)] if str(key) in self.opts else default_value
 
+    def _target_attrs(self, input_columns: List[str]) -> List[str]:
+        target_attrs = list(filter(lambda c: c != self.row_id, input_columns))
+        if self.targets:
+            target_attrs = list(set(self.targets) & set(target_attrs))  # type: ignore
+        return target_attrs
+
     def _clear_job_group(self) -> None:
         # TODO: Uses `SparkContext.clearJobGroup()` instead
         self._spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)  # type: ignore
@@ -692,9 +699,7 @@ class RepairModel():
             ','.join(list(map(lambda x: str(x), error_detectors)))))
 
         # Computes target attributes for error detection
-        target_attrs = filter(lambda c: c != self.row_id, self._spark.table(input_table).columns)
-        if self.targets:
-            target_attrs = list(set(self.targets) & set(target_attrs))  # type: ignore
+        target_attrs = self._target_attrs(self._spark.table(input_table).columns)
 
         # Initializes the given error detectors with the input params
         for d in error_detectors:
@@ -934,15 +939,20 @@ class RepairModel():
         func_deps = json.loads(self._repair_api.computeFunctionalDepMap(input_view, x, y))
         return FunctionalDepModel(x, func_deps)
 
-    def _get_functional_deps(self, train_df: DataFrame) -> Optional[Dict[str, List[str]]]:
+    def _get_functional_deps(self, train_df: DataFrame, target_columns: List[str],
+                             continous_columns: List[str]) -> Optional[Dict[str, List[str]]]:
         constraint_detectors = list(filter(lambda x: isinstance(x, ConstraintErrorDetector), self.error_detectors))
         # TODO: Supports the case where `self.error_detectors` has multiple `ConstraintErrorDetector`s
         if len(constraint_detectors) == 1:
             input_view = self._create_temp_view(train_df, 'input_to_compute_fdeps')
-            constraint_path = constraint_detectors[0].constraint_path  # type: ignore
-            target_attrs = ",".join(constraint_detectors[0].targets)  # type: ignore
-            func_deps = json.loads(self._repair_api.computeFunctionalDeps(input_view, constraint_path, target_attrs))
+            constraints = constraint_detectors[0]
+            constraints.setUp(str(self.row_id), input_view, continous_columns, target_columns)  # type: ignore
+            func_deps = json.loads(self._repair_api.computeFunctionalDeps(
+                input_view, constraints.constraint_path, ",".join(constraints.targets)))  # type: ignore
             return func_deps
+        elif len(constraint_detectors) >= 1:
+            _logger.warning(f'Multiple constraint classes not supported for detecting functional deps')
+            return None
         else:
             return None
 
@@ -1183,7 +1193,7 @@ class RepairModel():
 
         # If `self.rule_based_model_enabled` is `True`, try to analyze
         # functional deps on training data.
-        functional_deps = self._get_functional_deps(train_df) \
+        functional_deps = self._get_functional_deps(train_df, target_columns, continous_columns) \
             if self.rule_based_model_enabled else None
         if functional_deps is not None:
             _logger.debug(f"Functional deps found: {functional_deps}")
@@ -1251,7 +1261,6 @@ class RepairModel():
 
         # Resolve the conflict dependencies of the predictions
         if self.rule_based_model_enabled:
-            import copy
             pred_ordered_models = []
             error_columns = copy.deepcopy(target_columns)
 

@@ -46,9 +46,9 @@ class ErrorDetector(metaclass=ABCMeta):
         self.qualified_input_name = qualified_input_name
         self.continous_cols = continous_cols
         if self.targets:
-            self.targets = list(set(self.targets) & set(targets))
+            self._targets = list(set(self.targets) & set(targets))
         else:
-            self.targets = targets
+            self._targets = targets
 
         return self
 
@@ -60,7 +60,8 @@ class ErrorDetector(metaclass=ABCMeta):
         return ','.join(self.continous_cols) if self.continous_cols else ''
 
     def _to_target_list(self) -> str:
-        return ','.join(self.targets) if self.targets else ''
+        assert hasattr(self, '_targets'), '`setUp` should be called before `_to_target_list`'
+        return ','.join(self._targets) if self._targets else ''
 
     def _empty_dataframe(self) -> DataFrame:
         input_schema = self._spark.table(str(self.qualified_input_name)).schema
