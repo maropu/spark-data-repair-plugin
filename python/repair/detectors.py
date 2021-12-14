@@ -198,7 +198,7 @@ class ScikitLearnBasedErrorDetector(ErrorDetector):
         return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
 
     def _detect_impl(self) -> DataFrame:
-        columns = list(filter(lambda c: c in self.targets, self.continous_cols)) if self.targets \
+        columns = list(filter(lambda c: c in self._targets, self.continous_cols)) if self._targets \
             else self.continous_cols
         if not columns:
             return self._empty_dataframe()

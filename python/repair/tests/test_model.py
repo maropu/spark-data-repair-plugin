@@ -602,6 +602,26 @@ class RepairModelTests(ReusedSQLTestCase):
                 Row(tid=4, attribute="Sex", current_value="Female"),
                 Row(tid=11, attribute="Sex", current_value="Female")])
 
+        # Model reuse tests for `ConstraintErrorDetector`
+        error_detectors = [
+            ConstraintErrorDetector(constraint_path, targets=["Sex", "Relationship"])
+        ]
+        test_model_with_constraints = self._build_model() \
+            .setInput("adult") \
+            .setRowId("tid") \
+            .setTargets(["Sex"]) \
+            .setErrorDetectors(error_detectors)
+        constraint_errors = test_model_with_constraints.run(detect_errors_only=True)
+        self.assertEqual(
+            constraint_errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=4, attribute="Sex", current_value="Female"),
+                Row(tid=11, attribute="Sex", current_value="Female")])
+        constraint_errors = test_model_with_constraints.setTargets(["Relationship"]).run(detect_errors_only=True)
+        self.assertEqual(
+            constraint_errors.orderBy("tid", "attribute").collect(), [
+                Row(tid=4, attribute="Relationship", current_value="Husband"),
+                Row(tid=11, attribute="Relationship", current_value="Husband")])
+
     def test_DomainValues_against_continous_values(self):
         with self.tempView("inputView"):
             rows = [
