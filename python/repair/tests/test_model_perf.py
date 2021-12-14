@@ -195,6 +195,11 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             "MeasureName"
         ]
 
+        weighted_prob_targets = [
+            "Score",
+            "Sample"
+        ]
+
         # Sets params for a hospital repair model
         from repair.detectors import ConstraintErrorDetector
         constraint_path = "{}/hospital_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
@@ -204,8 +209,8 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setTargets(repair_targets) \
             .setErrorDetectors([ConstraintErrorDetector(constraint_path, targets=rule_based_model_targets)]) \
             .setRuleBasedModelEnabled(True) \
-            .setUpdateCostFunction(Levenshtein()) \
-            .option("pmf.cost_weight", "0.1") \
+            .setUpdateCostFunction(Levenshtein(targets=weighted_prob_targets)) \
+            .option("pmf.cost_weight", "1000.0") \
             .run()
 
         repair_targets_set = ",".join(map(lambda x: f"'{x}'", repair_targets))

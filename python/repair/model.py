@@ -1402,11 +1402,16 @@ class RepairModel():
         def _pmf_weight() -> float:
             return float(self._get_option("pmf.cost_weight", "0.1"))
 
-        to_weighted_probs = f"zip_with(probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * c))) probs"
+        to_weighted_probs = f"zip_with(probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * c)))"
+        if self.cf.targets:  # type: ignore
+            _logger.info(f'[Repairing Phase] {self.cf} computing weighting probs...')
+            cf_targets = ",".join(map(lambda x: f"'{x}'", self.cf.targets))  # type: ignore
+            to_weighted_probs = f"if(attribute IN ({cf_targets}), {to_weighted_probs}, probs)"
+
         sum_probs = "aggregate(probs, double(0.0), (acc, x) -> acc + x) norm"
         normalize_probs = "transform(probs, p -> p / norm) probs"
         weighted_pmf_df = pmf_df.withColumn("costs", cost_func(col("current_value"), col("classes"))) \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes", to_weighted_probs) \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes", f"{to_weighted_probs} probs") \
             .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes", "probs", sum_probs) \
             .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes", normalize_probs)
 
@@ -1605,6 +1610,7 @@ class RepairModel():
         # “Maximal Likelihood Repair” problem.
         if self.maximal_likelihood_repair_enabled:
             assert len(continous_columns) == 0
+            assert len(self.cf.targets) == 0  # type: ignore
 
             pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df, [])
             score_df = self._compute_score(pmf_df, error_cells_df)
@@ -1692,10 +1698,13 @@ class RepairModel():
         if self.input is None or self.row_id is None:
             raise ValueError("`setInput` and `setRowId` should be called before repairing")
         if self.maximal_likelihood_repair_enabled and self.repair_delta is None:
-            raise ValueError("`setRepairDelta` should be set when enabling "
+            raise ValueError("`setRepairDelta` should be called when enabling "
                              "maximal likelihood repairing")
         if self.maximal_likelihood_repair_enabled and self.cf is None:
-            raise ValueError("`setUpdateCostFunction` should be set when enabling "
+            raise ValueError("`setUpdateCostFunction` should be called when enabling "
+                             "maximal likelihood repairing")
+        if self.maximal_likelihood_repair_enabled and len(self.cf.targets) > 0:  # type: ignore
+            raise ValueError("`UpdateCostFunction.targets` cannot be used when enabling "
                              "maximal likelihood repairing")
 
         exclusive_param_list = [

@@ -146,7 +146,9 @@ class ConstraintErrorDetector(ErrorDetector):
         self.constraint_path = constraint_path
 
     def __str__(self) -> str:
-        return f'{self.__class__.__name__}(path={self.constraint_path})'
+        param_targets = f',targets={",".join(self.targets)}' if self.targets else ''
+        params = f'path={self.constraint_path}{param_targets}'
+        return f'{self.__class__.__name__}({params})'
 
     def _detect_impl(self) -> DataFrame:
         jdf = self._detector_api.detectErrorCellsFromConstraints(

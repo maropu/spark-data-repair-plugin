@@ -116,19 +116,27 @@ class RepairModelTests(ReusedSQLTestCase):
             .setDbName("default").run())
         self.assertRaisesRegexp(
             ValueError,
-            "`setRepairDelta` should be set when enabling maximal likelihood repairing",
+            "`setRepairDelta` should be called when enabling maximal likelihood repairing",
             lambda: RepairModel().setTableName("dummyTab").setRowId("dummyId")
             .setMaximalLikelihoodRepairEnabled(True).run())
         self.assertRaisesRegexp(
             ValueError,
-            "`setRepairDelta` should be set when enabling maximal likelihood repairing",
+            "`setRepairDelta` should be called when enabling maximal likelihood repairing",
             lambda: RepairModel().setInput("dummyTab").setRowId("dummyId")
             .setMaximalLikelihoodRepairEnabled(True).run())
         self.assertRaisesRegexp(
             ValueError,
-            "`setUpdateCostFunction` should be set when enabling maximal likelihood repairing",
+            "`setUpdateCostFunction` should be called when enabling maximal likelihood repairing",
             lambda: RepairModel().setInput("dummyTab").setRowId("dummyId")
             .setMaximalLikelihoodRepairEnabled(True).setRepairDelta(3).run())
+        self.assertRaisesRegexp(
+            ValueError,
+            "`UpdateCostFunction.targets` cannot be used when enabling maximal likelihood repairing",
+            lambda: RepairModel().setInput("dummyTab").setRowId("dummyId")
+            .setMaximalLikelihoodRepairEnabled(True)
+            .setRepairDelta(3)
+            .setUpdateCostFunction(Levenshtein(targets=['non-existent']))
+            .run())
         self.assertRaisesRegexp(
             ValueError,
             "`attrs` should have at least one attribute",
@@ -931,6 +939,44 @@ class RepairModelTests(ReusedSQLTestCase):
             repaired_df,
             "struct<tid:int,attribute:string,current_value:string,"
             "pmf:array<struct<class:string,prob:double>>>")
+
+    def test_compute_weighted_probs_for_target_attributes(self):
+        constraint_path = "{}/adult_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
+        error_detectors = [
+            ConstraintErrorDetector(constraint_path)
+        ]
+        test_model = self._build_model() \
+            .setTableName("adult") \
+            .setRowId("tid") \
+            .setTargets(["Sex", "Relationship"]) \
+            .setErrorDetectors(error_detectors) \
+            .option("hp.max_evals", "1000") \
+            .option("hp.no_progress_loss", "150")
+
+        base_rows = test_model \
+            .run(compute_repair_candidate_prob=True) \
+            .selectExpr('tid', 'attribute', 'pmf[0].class value', 'pmf[0].prob prob') \
+            .orderBy("tid", "attribute") \
+            .collect()
+
+        weighted_prob_rows = test_model \
+            .setUpdateCostFunction(Levenshtein(targets=["Sex"])) \
+            .option("pmf.cost_weight", "100000000.0") \
+            .run(compute_repair_candidate_prob=True) \
+            .selectExpr('tid', 'attribute', 'pmf[0].class value', 'pmf[0].prob prob') \
+            .orderBy("tid", "attribute") \
+            .collect()
+
+        for r1, r2 in zip(base_rows, weighted_prob_rows):
+            self.assertEqual(r1.tid, r1.tid)
+            self.assertEqual(r1.attribute, r1.attribute)
+            self.assertEqual(r1.value, r1.value)
+            if r1.attribute == 'Sex':
+                self.assertLess(r1.prob, 0.90)
+                self.assertGreater(r2.prob, 0.9999)
+            else:  # 'Relationship' case
+                self.assertLess(r1.prob, 0.90)
+                self.assertLess(r2.prob, 0.90)
 
     def test_compute_repair_prob(self):
         repaired_df = test_model = self._build_model() \

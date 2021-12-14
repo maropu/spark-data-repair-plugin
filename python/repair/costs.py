@@ -18,13 +18,13 @@
 #
 
 from abc import ABCMeta, abstractmethod
-from typing import Union
+from typing import List, Union
 
 
 class UpdateCostFunction(metaclass=ABCMeta):
 
-    def __init__(self, name: str) -> None:
-        self.name: str = name
+    def __init__(self, targets: List[str] = []) -> None:
+        self.targets: List[str] = targets
 
     @abstractmethod
     def _compute_impl(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
@@ -38,8 +38,12 @@ class UpdateCostFunction(metaclass=ABCMeta):
 
 class Levenshtein(UpdateCostFunction):
 
-    def __init__(self) -> None:
-        UpdateCostFunction.__init__(self, 'Levenshtein')
+    def __init__(self, targets: List[str] = []) -> None:
+        UpdateCostFunction.__init__(self, targets)
+
+    def __str__(self) -> str:
+        params = f'targets={",".join(self.targets)}' if self.targets else ''
+        return f'{self.__class__.__name__}({params})'
 
     def _compute_impl(self, x: Union[str, int, float], y: Union[str, int, float]) -> float:
         import Levenshtein  # type: ignore[import]
