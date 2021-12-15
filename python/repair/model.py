@@ -1492,7 +1492,11 @@ class RepairModel():
         # Concatenates `classes` and `probs` for pmfs then sorts pmfs by their probs
         to_current_expr = "named_struct('value', current_value, 'prob', " \
             "coalesce(prob[array_position(class, current_value) - 1], 0.0)) current_value"
-        sorted_pmf_expr = "array_sort(pmf, (left, right) -> if(left.prob < right.prob, 1, -1)) pmf"
+        compare_probs = lambda x, y: \
+            f"case when {x}.prob < {y}.prob then 1 " \
+            f"when {x}.prob > {y}.prob then -1 " \
+            "else 0 end"
+        sorted_pmf_expr = f'array_sort(pmf, (left, right) -> {compare_probs("left", "right")}) pmf'
         pmf_df = pmf_df.selectExpr(f"`{self.row_id}`", "attribute", 'current_value', 'classes class', 'probs prob') \
             .selectExpr(f"`{self.row_id}`", "attribute", to_current_expr, 'arrays_zip(class, prob) pmf') \
             .selectExpr(f"`{self.row_id}`", "attribute", "current_value", sorted_pmf_expr)
