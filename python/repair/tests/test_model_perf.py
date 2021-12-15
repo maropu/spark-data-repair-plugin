@@ -94,7 +94,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setInput(input) \
             .setRowId("tid") \
             .setErrorDetectors([NullErrorDetector()]) \
-            .option("hp.no_progress_loss", "150")
+            .option("model.hp.no_progress_loss", "150")
 
     def _compute_rmse(self, repaired_df, expected):
         # Compares predicted values with the correct ones
@@ -211,8 +211,8 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setRepairByFunctionalDeps(True) \
             .setRepairByNearestValues(True) \
             .setUpdateCostFunction(Levenshtein(targets=weighted_prob_targets)) \
-            .option("repair.merge_threshold", "2.0") \
-            .option("pmf.cost_weight", "1000.0") \
+            .option("model.rule.merge_threshold", "2.0") \
+            .option("repair.pmf.cost_weight", "1000.0") \
             .run()
 
         repair_targets_set = ",".join(map(lambda x: f"'{x}'", repair_targets))

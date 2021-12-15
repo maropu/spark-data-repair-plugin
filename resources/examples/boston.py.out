@@ -81,7 +81,7 @@ only showing top 1 row
 ...   .setTableName("boston") \
 ...   .setRowId("tid") \
 ...   .setDiscreteThreshold(30) \
-...   .option("hp.no_progress_loss", "300") \
+...   .option("model.hp.no_progress_loss", "300") \
 ...   .run()
 Detecting errors in a table `default.boston` (506 rows x 14 cols)...
 ...

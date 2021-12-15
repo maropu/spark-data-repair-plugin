@@ -98,7 +98,7 @@ only showing top 1 row
 ...     .setErrorCells("error_cells_ground_truth") \
 ...     .setTargets(["state"]) \
 ...     .setDiscreteThreshold(600) \
-...     .option("hp.no_progress_loss", "100") \
+...     .option("model.hp.no_progress_loss", "100") \
 ...     .run()
 2021-08-22 21:50:04.428:[Error Detection Phase] Error cells provided by `error_cells_20210822215004`
 2021-08-22 21:50:04.839:[Error Detection Phase] 127 noisy cells found (0.5269709543568465%)

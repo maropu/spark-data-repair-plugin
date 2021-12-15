@@ -85,7 +85,7 @@ only showing top 1 row
 ...   .setRowId("tid") \
 ...   .setErrorDetectors(error_detectors) \
 ...   .setRuleBasedModelEnabled(True) \
-...   .option("hp.no_progress_loss", "100") \
+...   .option("model.hp.no_progress_loss", "100") \
 ...   .setDiscreteThreshold(100) \
 ...   .run()
 Detecting errors in a table `default.hospital` (1000 rows x 20 cols)...

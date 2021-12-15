@@ -79,7 +79,7 @@ only showing top 1 row
 ...     .setRowId("tuple_id") \
 ...     .setErrorCells("error_cells_ground_truth") \
 ...     .setDiscreteThreshold(400) \
-...     .option("hp.no_progress_loss", "10") \
+...     .option("model.hp.no_progress_loss", "10") \
 ...     .run()
 2021-08-20 15:14:24.274:[Error Detection Phase] Error cells provided by `error_cells_20210820151424`
 2021-08-20 15:14:25.237:[Error Detection Phase] 4920 noisy cells found (34.51178451178451%)

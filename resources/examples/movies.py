@@ -37,7 +37,7 @@ repaired_df = delphi.repair \
     .setRowId("id") \
     .setErrorCells("error_cells_ground_truth") \
     .setDiscreteThreshold(600) \
-    .option("hp.no_progress_loss", "100") \
+    .option("model.hp.no_progress_loss", "100") \
     .run()
 
 # Computes performance numbers (precision & recall)

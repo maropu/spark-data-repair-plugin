@@ -29,54 +29,76 @@ from repair.utils import elapsed_time, setup_logger
 _logger = setup_logger()
 
 
+# List of internal configurations
+_opt_boosting_type = 'model.lgb.boosting_type'
+_opt_class_weight = 'model.lgb.class_weight'
+_opt_learning_rate = 'model.lgb.learning_rate'
+_opt_max_depth = 'model.lgb.max_depth'
+_opt_max_bin = 'model.lgb.max_bin'
+_opt_reg_alpha = 'model.lgb.reg_alpha'
+_opt_min_split_gain = 'model.lgb.min_split_gain'
+_opt_n_estimators = 'model.lgb.n_estimators'
+_opt_importance_type = 'model.lgb.importance_type'
+_opt_n_splits = 'model.cv.n_splits'
+_opt_timeout = 'model.hp.timeout'
+_opt_max_evals = 'model.hp.max_evals'
+_opt_no_progress_loss = 'model.hp.no_progress_loss'
+
+
 @elapsed_time  # type: ignore
 def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class: int, n_jobs: int,
                      opts: Dict[str, str]) -> Tuple[Any, float]:
     import lightgbm as lgb  # type: ignore[import]
 
-    # TODO: Validate given parameter values
-    def _get_option(key: str, default_value: Optional[str]) -> Any:
-        return opts[str(key)] if str(key) in opts else default_value
+    def _get_option_value(key: str, default_value: Any, type_class: Any = str) -> Any:
+        assert type(default_value) is type_class
+        if key in opts:
+            try:
+                return type_class(opts[key])
+            except:
+                _logger.warning(f'Failed to cast "{opts[key]}" into {type_class.__name__} data: key={key}')
+                pass
+
+        return default_value
 
     def _boosting_type() -> str:
-        return _get_option("lgb.boosting_type", "gbdt")
+        return _get_option_value(_opt_boosting_type, "gbdt")
 
     def _class_weight() -> str:
-        return _get_option("lgb.class_weight", "balanced")
+        return _get_option_value(_opt_class_weight, "balanced")
 
     def _learning_rate() -> float:
-        return float(_get_option("lgb.learning_rate", "0.01"))
+        return float(_get_option_value(_opt_learning_rate, 0.01, type_class=float))
 
     def _max_depth() -> int:
-        return int(_get_option("lgb.max_depth", "7"))
+        return int(_get_option_value(_opt_max_depth, 7, type_class=int))
 
     def _max_bin() -> int:
-        return int(_get_option("lgb.max_bin", "255"))
+        return int(_get_option_value(_opt_max_bin, 255, type_class=int))
 
     def _reg_alpha() -> float:
-        return float(_get_option("lgb.reg_alpha", "0.0"))
+        return float(_get_option_value(_opt_reg_alpha, 0.0, type_class=float))
 
     def _min_split_gain() -> float:
-        return float(_get_option("lgb.min_split_gain", "0.0"))
+        return float(_get_option_value(_opt_min_split_gain, 0.0, type_class=float))
 
     def _n_estimators() -> int:
-        return int(_get_option("lgb.n_estimators", "300"))
+        return int(_get_option_value(_opt_n_estimators, 300, type_class=int))
 
     def _importance_type() -> str:
-        return _get_option("lgb.importance_type", "gain")
+        return _get_option_value(_opt_importance_type, "gain")
 
     def _n_splits() -> int:
-        return int(_get_option("cv.n_splits", "3"))
+        return int(_get_option_value(_opt_n_splits, 3, type_class=int))
 
-    def _timeout() -> Optional[int]:
-        opt_value = _get_option("hp.timeout", None)
-        return int(opt_value) if opt_value is not None else None
+    def _timeout() -> int:
+        return int(_get_option_value(_opt_timeout, 0, type_class=int))
 
     def _max_eval() -> int:
-        return int(_get_option("hp.max_evals", "100000000"))
+        return int(_get_option_value(_opt_max_evals, 100000000, type_class=int))
 
     def _no_progress_loss() -> int:
-        return int(_get_option("hp.no_progress_loss", "50"))
+        return int(_get_option_value(_opt_no_progress_loss, 50, type_class=int))
 
     if is_discrete:
         objective = "binary" if num_class <= 2 else "multiclass"
@@ -163,7 +185,7 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
 
     def _early_stop_fn() -> Any:
         no_progress_loss_fn = no_progress_loss(_no_progress_loss())
-        if _timeout() is None:
+        if _timeout() <= 0:
             return no_progress_loss_fn
 
         # Set base time for budget mechanism
@@ -208,6 +230,24 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
     except Exception as e:
         _logger.warning(f"Failed to build a stat model because: {e}")
         return None, 0.0
+
+
+def model_configuration_keys() -> List[str]:
+    return [
+        _opt_boosting_type,
+        _opt_class_weight,
+        _opt_learning_rate,
+        _opt_max_depth,
+        _opt_max_bin,
+        _opt_reg_alpha,
+        _opt_min_split_gain,
+        _opt_n_estimators,
+        _opt_importance_type,
+        _opt_n_splits,
+        _opt_timeout,
+        _opt_max_evals,
+        _opt_no_progress_loss
+    ]
 
 
 def build_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class: int, n_jobs: int,

@@ -40,7 +40,7 @@ repaired_df = delphi.repair \
     .setTableName("boston") \
     .setRowId("tid") \
     .setDiscreteThreshold(30) \
-    .option("hp.no_progress_loss", "300") \
+    .option("model.hp.no_progress_loss", "300") \
     .run()
 
 # Computes performance numbers for discrete attributes (precision & recall)

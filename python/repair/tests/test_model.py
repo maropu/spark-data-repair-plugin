@@ -219,7 +219,7 @@ class RepairModelTests(ReusedSQLTestCase):
             lambda: RepairModel().setRepairDelta(-1))
         self.assertRaisesRegexp(
             ValueError,
-            "`error_cells` should have at least charactor",
+            "`error_cells` should have at least character",
             lambda: RepairModel().setErrorCells(''))
 
     def test_exclusive_params(self):
@@ -311,6 +311,54 @@ class RepairModelTests(ReusedSQLTestCase):
         return RepairModel() \
             .setErrorDetectors([NullErrorDetector()]) \
             .option("hp.max_evals", "1")
+
+    def test_options(self):
+        self.assertRaisesRegexp(
+            ValueError,
+            "Non-existent key specified: key=non-existent",
+            lambda: RepairModel().option('non-existent', '1'))
+        self.assertRaisesRegexp(
+            ValueError,
+            "`value` should have at least character",
+            lambda: RepairModel().option('model.rule.merge_threshold', ''))
+
+        test_option_keys = [
+            ('model.rule.merge_threshold', '2.0'),
+            ('model.rule.max_domain_size', '1000'),
+            ('repair.pmf.cost_weight', '0.1'),
+            ('repair.pmf.prob_threshold', '0.0'),
+            ('repair.pmf.prob_top_k', '80'),
+            ('model.lgb.boosting_type', 'gbdt'),
+            ('model.lgb.class_weight', 'balanced'),
+            ('model.lgb.learning_rate', '0.01'),
+            ('model.lgb.max_depth', '7'),
+            ('model.lgb.max_bin', '255'),
+            ('model.lgb.reg_alpha', '0.0'),
+            ('model.lgb.min_split_gain', '0.0'),
+            ('model.lgb.n_estimators', '300'),
+            ('model.lgb.importance_type', 'gain'),
+            ('model.cv.n_splits', '3'),
+            ('model.hp.timeout', '0'),
+            ('model.hp.max_evals', '10000000'),
+            ('model.hp.no_progress_loss', '50')
+        ]
+        for key, value in test_option_keys:
+            try:
+                RepairModel().option(key, value)
+            except Exception as e:
+                self.assertTrue(False, msg=str(e))
+
+    def test_get_option_value(self):
+        m = self._build_model().option('key1', 'abcd').option('key2', '1').option('key3', '3.2')
+        self.assertEqual(m._get_option_value('key1', 'efgh', type_class=str), 'abcd')
+        self.assertEqual(m._get_option_value('non.existent', 'efgh', type_class=str), 'efgh')
+        self.assertEqual(m._get_option_value('key2', 3, type_class=int), 1)
+        self.assertEqual(m._get_option_value('non.existent', 3, type_class=int), 3)
+        self.assertEqual(m._get_option_value('key1', 2, type_class=int), 2)
+        self.assertEqual(m._get_option_value('key3', 2, type_class=int), 2)
+        self.assertEqual(m._get_option_value('key3', 0.0, type_class=float), 3.2)
+        self.assertEqual(m._get_option_value('non.existent', 0.0, type_class=float), 0.0)
+        self.assertEqual(m._get_option_value('key1', 0.0, type_class=float), 0.0)
 
     def test_multiple_run(self):
         # Checks if auto-generated views are dropped finally
@@ -919,8 +967,8 @@ class RepairModelTests(ReusedSQLTestCase):
             .setRowId("tid") \
             .setTargets(["Sex", "Relationship"]) \
             .setErrorDetectors(error_detectors) \
-            .option("hp.max_evals", "1000") \
-            .option("hp.no_progress_loss", "150")
+            .option("model.hp.max_evals", "1000") \
+            .option("model.hp.no_progress_loss", "150")
 
         base_rows = test_model \
             .run(compute_repair_candidate_prob=True) \
@@ -930,7 +978,7 @@ class RepairModelTests(ReusedSQLTestCase):
 
         weighted_prob_rows = test_model \
             .setUpdateCostFunction(Levenshtein(targets=["Sex"])) \
-            .option("pmf.cost_weight", "100000000.0") \
+            .option("repair.pmf.cost_weight", "100000000.0") \
             .run(compute_repair_candidate_prob=True) \
             .selectExpr('tid', 'attribute', 'pmf[0].class value', 'pmf[0].prob prob') \
             .orderBy("tid", "attribute") \
@@ -1078,9 +1126,9 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setTableName("adult") \
                 .setRowId("tid") \
                 .setErrorCells("adult_dirty") \
-                .option("hp.max_evals", "10000000") \
-                .option("hp.no_progress_loss", "100000") \
-                .option("hp.timeout", "3") \
+                .option("model.hp.max_evals", "10000000") \
+                .option("model.hp.no_progress_loss", "100000") \
+                .option("model.hp.timeout", "3") \
                 .run() \
                 .collect()
 

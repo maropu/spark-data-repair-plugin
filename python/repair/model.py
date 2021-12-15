@@ -34,7 +34,7 @@ from pyspark.sql.types import ByteType, IntegerType, LongType, ShortType, Struct
 
 from repair.costs import UpdateCostFunction
 from repair.detectors import ConstraintErrorDetector, DomainValues, ErrorDetector, NullErrorDetector
-from repair.train import build_model, compute_class_nrow_stdv, rebalance_training_data
+from repair.train import build_model, compute_class_nrow_stdv, model_configuration_keys, rebalance_training_data
 from repair.utils import argtype_check, elapsed_time, setup_logger
 
 
@@ -166,6 +166,21 @@ class RepairModel():
         self._jvm = self._spark.sparkContext._active_spark_context._jvm  # type: ignore
         self._repair_api = self._jvm.RepairApi
 
+        # List of internal configurations
+        self._opt_merge_threshold = 'model.rule.merge_threshold'
+        self._opt_max_domain_size = 'model.rule.max_domain_size'
+        self._opt_cost_weight = 'repair.pmf.cost_weight'
+        self._opt_prob_threshold = 'repair.pmf.prob_threshold'
+        self._opt_prob_top_k = 'repair.pmf.prob_top_k'
+
+        self._repair_model_option_keys = set([
+            self._opt_merge_threshold,
+            self._opt_max_domain_size,
+            self._opt_cost_weight,
+            self._opt_prob_threshold,
+            self._opt_prob_top_k,
+            *model_configuration_keys()])
+
     @argtype_check  # type: ignore
     def setDbName(self, db_name: str) -> "RepairModel":
         """Specifies the database name for an input table.
@@ -287,7 +302,7 @@ class RepairModel():
         +---+---------+-------------+-----------+
         """
         if type(error_cells) is str and not error_cells:
-            raise ValueError("`error_cells` should have at least charactor")
+            raise ValueError("`error_cells` should have at least character")
 
         self.error_cells = error_cells
         return self
@@ -585,10 +600,15 @@ class RepairModel():
 
     @argtype_check  # type: ignore
     def option(self, key: str, value: str) -> "RepairModel":
-        """Adds an input option for internal functionalities (e.g., model learning).
+        """Sets an input option for internal functionalities (e.g., model learning).
 
         .. versionchanged:: 0.1.0
         """
+        if key not in self._repair_model_option_keys:
+            raise ValueError(f'Non-existent key specified: key={key}')
+        if len(value) == 0:
+            raise ValueError("`value` should have at least character")
+
         self.opts[key] = value
         return self
 
@@ -606,9 +626,16 @@ class RepairModel():
                              "`attribute` in columns")
         return self._create_temp_view(df, "error_cells")
 
-    # TODO: Lists up all the valid options here
-    def _get_option(self, key: str, default_value: Optional[str]) -> Any:
-        return self.opts[str(key)] if str(key) in self.opts else default_value
+    def _get_option_value(self, key: str, default_value: Any, type_class: Any = str) -> Any:
+        assert type(default_value) is type_class
+        if key in self.opts:
+            try:
+                return type_class(self.opts[key])
+            except:
+                _logger.warning(f'Failed to cast "{self.opts[key]}" into {type_class.__name__} data: key={key}')
+                pass
+
+        return default_value
 
     def _target_attrs(self, input_columns: List[str]) -> List[str]:
         target_attrs = list(filter(lambda c: c != self.row_id, input_columns))
@@ -911,7 +938,7 @@ class RepairModel():
         assert self.cf is not None
 
         def _repair_merge_threshold() -> float:
-            return float(self._get_option("repair.merge_threshold", "2.0"))
+            return float(self._get_option_value(self._opt_merge_threshold, 2.0, type_class=float))
 
         cf_targets = self.cf.targets  # type: ignore
         targets = list(filter(lambda c: c in cf_targets, target_columns)) \
@@ -1298,7 +1325,7 @@ class RepairModel():
             # builds a model based on the rule.
             if y not in models and functional_deps is not None and y in functional_deps:
                 def _max_domain_size() -> int:
-                    return int(self._get_option("rule.max_domain_size", "1000"))
+                    return int(self._get_option_value(self._opt_max_domain_size, 1000, type_class=int))
 
                 def _qualified(x: str) -> bool:
                     # Checks if the domain size of `x` is small enough
@@ -1446,7 +1473,7 @@ class RepairModel():
         assert self.cf is not None
 
         def _pmf_weight() -> float:
-            return float(self._get_option("pmf.cost_weight", "0.1"))
+            return float(self._get_option_value(self._opt_cost_weight, 0.1, type_class=float))
 
         cost_func = self._create_cost_func()
         to_weighted_probs = f"zip_with(probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * c)))"
@@ -1502,10 +1529,10 @@ class RepairModel():
             .selectExpr(f"`{self.row_id}`", "attribute", "current_value", sorted_pmf_expr)
 
         def _pmf_threshold() -> float:
-            return float(self._get_option("pmf.prob_threshold", "0.0"))
+            return float(self._get_option_value(self._opt_prob_threshold, 0.0, type_class=float))
 
         def _pmf_top_k() -> int:
-            return int(self._get_option("pmf.top_k", str(self.discrete_thres)))
+            return int(self._get_option_value(self._opt_prob_top_k, self.discrete_thres, type_class=int))
 
         # Filters less-confident candidates in `pmf`
         filtered_prob_expr = f"slice(filter(pmf, x -> x.prob > {_pmf_threshold()}), 1, {_pmf_top_k()}) pmf"

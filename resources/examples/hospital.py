@@ -43,7 +43,7 @@ repaired_df = delphi.repair \
     .setErrorDetectors(error_detectors) \
     .setDiscreteThreshold(100) \
     .setRuleBasedModelEnabled(True) \
-    .option("hp.no_progress_loss", "100") \
+    .option("model.hp.no_progress_loss", "100") \
     .run()
 
 # Computes performance numbers (precision & recall)
