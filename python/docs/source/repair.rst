@@ -43,7 +43,6 @@ model to repair them.
     RepairModel.setErrorDetectors
     RepairModel.setInput
     RepairModel.setMaximalLikelihoodRepairEnabled
-    RepairModel.setModelLoggingEnabled
     RepairModel.setMaxTrainingRowNum
     RepairModel.setMaxTrainingColumnNum
     RepairModel.setTrainingDataRebalancingEnabled

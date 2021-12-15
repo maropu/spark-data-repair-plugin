@@ -137,9 +137,6 @@ class RepairModel():
         self.training_data_rebalancing_enabled: bool = False
         self.small_domain_threshold: int = 12
 
-        # TODO: Remove this
-        self.model_logging_enabled: bool = False
-
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
         self.repair_delta: Optional[int] = None
@@ -428,20 +425,6 @@ class RepairModel():
             raise ValueError(f'`ratio` should be in [0.0, 1.0], got {ratio}')
 
         self.attr_stat_threshold = ratio
-        return self
-
-    @argtype_check  # type: ignore
-    def setModelLoggingEnabled(self, enabled: bool) -> "RepairModel":
-        """Specifies whether to enable model logging.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        enabled: bool
-            If set to ``True``, store the logs of built models  (default: ``False``).
-        """
-        self.model_logging_enabled = enabled
         return self
 
     @argtype_check  # type: ignore
@@ -1330,13 +1313,6 @@ class RepairModel():
             num_class_map, feature_map, transformer_map)
 
         assert len(models) == len(target_columns)
-
-        if self.model_logging_enabled:
-            schema = ["attributes", "type", "score", "elapsed", "training_nrow", "nclass", "class_nrow_stdv"]
-            df = self._spark.createDataFrame(data=[*logs, *stat_model_logs], schema=schema)
-            logViewName = self._create_temp_name("repair_model")
-            df.createOrReplaceTempView(logViewName)
-            _logger.info(f"Model training logs saved as a temporary view named '{logViewName}'")
 
         # Resolve the conflict dependencies of the predictions
         if self.repair_by_functional_deps:
