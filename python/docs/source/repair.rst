@@ -50,7 +50,8 @@ model to repair them.
     RepairModel.setMinCorrThreshold
     RepairModel.setRepairDelta
     RepairModel.setRowId
-    RepairModel.setRuleBasedModelEnabled
+    RepairModel.setRepairByFunctionalDepst
+    RepairModel.setRepairByNearestValues
     RepairModel.setParallelStatTrainingEnabled
     RepairModel.setSmallDomainThreshold
     RepairModel.setTableName

@@ -119,7 +119,6 @@ class RepairModel():
 
         # Parameters for error detection
         self.error_cells: Optional[Union[str, DataFrame]] = None
-        # To find error cells, the NULL detector is used by default
         self.error_detectors: List[ErrorDetector] = []
         self.discrete_thres: int = 80
         self.min_corr_thres: float = 0.70
@@ -130,13 +129,16 @@ class RepairModel():
         self.attr_stat_threshold: float = 0.0
 
         # Parameters for repair model training
-        self.model_logging_enabled: bool = False
+        self.parallel_stat_training_enabled: bool = False
+        self.repair_by_functional_deps: bool = False
+        self.repair_by_nearest_values: bool = False
         self.max_training_row_num: int = 10000
         self.max_training_column_num: Optional[int] = None
         self.training_data_rebalancing_enabled: bool = False
         self.small_domain_threshold: int = 12
-        self.rule_based_model_enabled: bool = False
-        self.parallel_stat_training_enabled: bool = False
+
+        # TODO: Remove this
+        self.model_logging_enabled: bool = False
 
         # Parameters for repairing
         self.maximal_likelihood_repair_enabled: bool = False
@@ -510,7 +512,7 @@ class RepairModel():
         return self
 
     @argtype_check  # type: ignore
-    def setRuleBasedModelEnabled(self, enabled: bool) -> "RepairModel":
+    def setRepairByFunctionalDeps(self, enabled: bool) -> "RepairModel":
         """Specifies whether to enable rule-based models based on functional dependencies.
 
         .. versionchanged:: 0.1.0
@@ -520,7 +522,22 @@ class RepairModel():
         enabled: bool
             If set to ``True``, uses rule-based models if possible (default: ``False``).
         """
-        self.rule_based_model_enabled = enabled
+        self.repair_by_functional_deps = enabled
+        return self
+
+    @argtype_check  # type: ignore
+    def setRepairByNearestValues(self, enabled: bool) -> "RepairModel":
+        """Specifies whether to enable a repairing technique based on value vicinity.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        enabled: bool
+            If set to ``True``, repairs dirty cells based on their value vicinity before
+            building statistical models (default: ``False``).
+        """
+        self.repair_by_nearest_values = enabled
         return self
 
     @argtype_check  # type: ignore
@@ -606,6 +623,7 @@ class RepairModel():
                              "`attribute` in columns")
         return self._create_temp_view(df, "error_cells")
 
+    # TODO: Lists up all the valid options here
     def _get_option(self, key: str, default_value: Optional[str]) -> Any:
         return self.opts[str(key)] if str(key) in self.opts else default_value
 
@@ -879,6 +897,67 @@ class RepairModel():
         clean_rows_df = repair_base_df.join(error_rows_df, str(self.row_id), "left_anti")
         dirty_rows_df = repair_base_df.join(error_rows_df, str(self.row_id), "left_semi")
         return clean_rows_df, dirty_rows_df
+
+    def _create_cost_func(self) -> Any:
+        broadcasted_cf = self._spark.sparkContext.broadcast(self.cf)
+
+        @functions.pandas_udf("array<double>", functions.PandasUDFType.SCALAR)
+        def cost_func(s1: pd.Series, s2: pd.Series) -> pd.Series:
+            cf = broadcasted_cf.value
+
+            result: List[List[float]] = []
+            for target, candidates in zip(s1, s2):
+                if target is not None:
+                    result.append([cf.compute(target, c) for c in candidates])  # type: ignore
+                else:
+                    result.append([0.0] * len(candidates))
+
+            return pd.Series(result)
+
+        return cost_func
+
+    # TODO: Adds tests for this code path
+    def _repair_by_nearest_values(self, repair_base_df: DataFrame,
+                                  error_cells_df: DataFrame,
+                                  target_columns: List[str]) -> Tuple[DataFrame, DataFrame]:
+        assert self.cf is not None
+
+        def _repair_merge_threshold() -> float:
+            return float(self._get_option("repair.merge_threshold", "2.0"))
+
+        cf_targets = self.cf.targets  # type: ignore
+        targets = list(filter(lambda c: c in cf_targets, target_columns)) \
+            if cf_targets else target_columns
+        if not targets:
+            from pyspark.sql.types import StructType, StructField, StringType
+            repaired_schema = StructType(error_cells_df.schema.fields + [StructField('repaired', StringType())])
+            return error_cells_df, self._empty_dataframe(repaired_schema)
+
+        cost_func = self._create_cost_func()
+        compute_dvs = lambda c: repair_base_df.selectExpr(f'"{c}" attribute', f'collect_set(`{c}`) dvs')
+        domain_df = functools.reduce(lambda x, y: x.union(y), map(compute_dvs, targets))
+
+        compare_dvs = lambda x, y: \
+            f"case when {x}.cost > {y}.cost then 1 " \
+            f"when {x}.cost < {y}.cost then -1 " \
+            "else 0 end"
+        sorted_domain_value_expr = 'array_sort(dvs, ' \
+            f'(left, right) -> {compare_dvs("left", "right")}) dvs'
+        repair_expr = f'if(dvs[0].cost <= {_repair_merge_threshold()} AND dvs[0].cost < dvs[1].cost, ' \
+            'dvs[0].value, null) repaired'
+        error_cells_df = error_cells_df.join(domain_df, 'attribute', 'left_outer') \
+            .withColumn("costs", cost_func(col("current_value"), col("dvs"))) \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", 'dvs value', 'costs cost') \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", 'arrays_zip(value, cost) dvs') \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", sorted_domain_value_expr) \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", repair_expr)
+
+        repaired_df = error_cells_df.where('repaired IS NOT NULL') \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "repaired")
+        error_cells_df = error_cells_df.where('repaired IS NULL') \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value")
+
+        return error_cells_df, repaired_df
 
     # Selects relevant features if necessary. To reduce model training time,
     # it is important to drop non-relevant in advance.
@@ -1191,10 +1270,10 @@ class RepairModel():
             feature_map[y] = features
             transformer_map[y] = self._create_transformers(domain_stats, features, continous_columns)
 
-        # If `self.rule_based_model_enabled` is `True`, try to analyze
+        # If `self.repair_by_functional_deps` is `True`, try to analyze
         # functional deps on training data.
         functional_deps = self._get_functional_deps(train_df, target_columns, continous_columns) \
-            if self.rule_based_model_enabled else None
+            if self.repair_by_functional_deps else None
         if functional_deps is not None:
             _logger.debug(f"Functional deps found: {functional_deps}")
 
@@ -1260,7 +1339,7 @@ class RepairModel():
             _logger.info(f"Model training logs saved as a temporary view named '{logViewName}'")
 
         # Resolve the conflict dependencies of the predictions
-        if self.rule_based_model_enabled:
+        if self.repair_by_functional_deps:
             pred_ordered_models = []
             error_columns = copy.deepcopy(target_columns)
 
@@ -1384,24 +1463,10 @@ class RepairModel():
     def _compute_weighted_probs(self, pmf_df: DataFrame) -> DataFrame:
         assert self.cf is not None
 
-        broadcasted_cf = self._spark.sparkContext.broadcast(self.cf)
-
-        @functions.pandas_udf("array<double>", functions.PandasUDFType.SCALAR)
-        def cost_func(s1: pd.Series, s2: pd.Series) -> pd.Series:
-            cf = broadcasted_cf.value
-
-            result: List[List[float]] = []
-            for target, candidates in zip(s1, s2):
-                if target is not None:
-                    result.append([cf.compute(target, c) for c in candidates])
-                else:
-                    result.append([0.0] * len(candidates))
-
-            return pd.Series(result)
-
         def _pmf_weight() -> float:
             return float(self._get_option("pmf.cost_weight", "0.1"))
 
+        cost_func = self._create_cost_func()
         to_weighted_probs = f"zip_with(probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * c)))"
         if self.cf.targets:  # type: ignore
             _logger.info(f'[Repairing Phase] {self.cf} computing weighting probs...')
@@ -1565,12 +1630,18 @@ class RepairModel():
         # Filters out non-repairable columns from `error_cells_df`
         error_cells_df = self._filter_columns_from(error_cells_df, target_columns)
 
-        # Clear out error cells (to NULL)
-        repair_base_df = self._prepare_repair_base_cells(input_table, error_cells_df, target_columns)
-
         #################################################################################
         # 2. Repair Model Training Phase
         #################################################################################
+
+        # Clear out error cells (to NULL) first
+        repair_base_df = self._prepare_repair_base_cells(input_table, error_cells_df, target_columns)
+
+        # Refines the repair base table to extract more clean data using a specified cost function
+        if self.repair_by_nearest_values:
+            error_cells_df, repaired_by_nvs_df = \
+                self._repair_by_nearest_values(repair_base_df, error_cells_df, target_columns)
+            repair_base_df = self._repair_attrs(repaired_by_nvs_df, repair_base_df)
 
         # Selects rows for training, building models, and repairing cells
         clean_rows_df, dirty_rows_df = \
@@ -1592,6 +1663,8 @@ class RepairModel():
         # If `compute_repair_candidate_prob` is True, returns probability mass function
         # of repair candidates.
         if compute_repair_candidate_prob and not self.maximal_likelihood_repair_enabled:
+            assert not self.repair_by_nearest_values, '`repair_by_nearest_values` not supported in this path'
+
             pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df, continous_columns)
             pmf_df = pmf_df.selectExpr(f"`{self.row_id}`", "attribute", "current_value.value AS current_value", "pmf")
 
@@ -1611,6 +1684,8 @@ class RepairModel():
         if self.maximal_likelihood_repair_enabled:
             assert len(continous_columns) == 0
             assert len(self.cf.targets) == 0  # type: ignore
+
+            assert not self.repair_by_nearest_values, '`repair_by_nearest_values` not supported in this path'
 
             pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df, [])
             score_df = self._compute_score(pmf_df, error_cells_df)
@@ -1633,6 +1708,9 @@ class RepairModel():
                 .join(error_cells_df, [str(self.row_id), "attribute"], "inner") \
                 .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "value repaired") \
                 .where("repaired IS NULL OR not(current_value <=> repaired)")
+
+            if self.repair_by_nearest_values:
+                repair_candidates_df = repair_candidates_df.union(repaired_by_nvs_df)
 
             if self.repair_validation_enabled:
                 return self._validate_repairs(repair_candidates_df, clean_rows_df)
@@ -1721,6 +1799,14 @@ class RepairModel():
 
         if compute_repair_score and not self.maximal_likelihood_repair_enabled:
             raise ValueError("Cannot compute repair scores when the maximal likelihood repair mode disabled")
+
+        # TODO: Support these mixed modes in future
+        if self.repair_by_nearest_values and \
+            (self.maximal_likelihood_repair_enabled or compute_repair_candidate_prob or
+                compute_repair_prob or compute_repair_score):
+            raise ValueError("Cannot enable `repair_by_nearest_values` together with "
+                             "`maximal_likelihood_repair_enabled`, `compute_repair_candidate_prob`, "
+                             "`compute_repair_prob`, or `compute_repair_score`")
 
         # To compute scores or the probabiity of predicted repairs, we need to compute
         # the probabiity mass function of candidate repairs.

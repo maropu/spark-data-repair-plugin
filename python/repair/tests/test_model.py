@@ -894,7 +894,7 @@ class RepairModelTests(ReusedSQLTestCase):
                     .setRowId("tid") \
                     .setErrorCells("errorCells") \
                     .setErrorDetectors(error_detectors) \
-                    .setRuleBasedModelEnabled(True)
+                    .setRepairByFunctionalDeps(True)
 
                 self.assertEqual(
                     test_model.run().orderBy("tid", "attribute").collect(), [
