@@ -121,21 +121,12 @@ class RepairModel():
         self.error_cells: Optional[Union[str, DataFrame]] = None
         self.error_detectors: List[ErrorDetector] = []
         self.discrete_thres: int = 80
-        self.min_corr_thres: float = 0.70
-        self.domain_threshold_alpha: float = 0.0
-        self.domain_threshold_beta: float = 0.70
-        self.max_attrs_to_compute_domains: int = 4
-        self.attr_stat_sample_ratio: float = 1.0
-        self.attr_stat_threshold: float = 0.0
 
         # Parameters for repair model training
         self.parallel_stat_training_enabled: bool = False
         self.repair_by_functional_deps: bool = False
         self.repair_by_nearest_values: bool = False
-        self.max_training_row_num: int = 10000
-        self.max_training_column_num: Optional[int] = None
         self.training_data_rebalancing_enabled: bool = False
-        self.small_domain_threshold: int = 12
 
         # Parameters for repairing
         self.repair_delta: Optional[int] = None
@@ -166,6 +157,15 @@ class RepairModel():
         self._repair_api = self._jvm.RepairApi
 
         # List of internal configurations
+        self._opt_min_corr_thres = 'error.min_corr_thres'
+        self._opt_domain_threshold_alpha = 'error.domain_threshold_alph'
+        self._opt_domain_threshold_beta = 'error.domain_threshold_beta'
+        self._opt_max_attrs_to_compute_domains = 'error.max_attrs_to_compute_domains'
+        self._opt_attr_stat_sample_ratio = 'error.attr_stat_sample_ratio'
+        self._opt_attr_stat_threshold = 'error.attr_stat_threshold'
+        self._opt_max_training_row_num = 'model.max_training_row_num'
+        self._opt_max_training_column_num = 'model.max_training_column_num'
+        self._opt_small_domain_threshold = 'model.small_domain_threshold'
         self._opt_merge_threshold = 'model.rule.merge_threshold'
         self._opt_max_domain_size = 'model.rule.max_domain_size'
         self._opt_cost_weight = 'repair.pmf.cost_weight'
@@ -348,164 +348,17 @@ class RepairModel():
         return self
 
     @argtype_check  # type: ignore
-    def setMinCorrThreshold(self, thres: float) -> "RepairModel":
-        """Specifies a threshold to decide which columns are used to compute domains.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        thres: float
-           threshold value. The value must be in [0.0, 1.0) and
-           the default value is 0.7.0.
-        """
-        if thres < 0.0 or thres >= 1.0:
-            raise ValueError(f'`thres` should be in [0.0, 1.0), got {thres}')
-
-        self.min_corr_thres = thres
-        return self
-
-    @argtype_check  # type: ignore
-    def setDomainThresholds(self, alpha: float, beta: float) -> "RepairModel":
-        """Specifies a thresholds to reduce domain size.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        thres: float
-           threshold values. The values must be in [0.0, 1.0) and
-           the default values of alpha and beta are 0.0 and 0.70, respectively.
-        """
-        if alpha < 0.0 or alpha >= 1.0:
-            raise ValueError(f'`alpha` should be in [0.0, 1.0), got {alpha}')
-        if beta < 0.0 or beta >= 1.0:
-            raise ValueError(f'`beta` should be in [0.0, 1.0), got {beta}')
-        if alpha >= beta:
-            raise ValueError(f'`alpha` should be greater than `beta`, got {alpha} >= {beta}')
-
-        self.domain_threshold_alpha = alpha
-        self.domain_threshold_beta = beta
-        return self
-
-    @argtype_check  # type: ignore
-    def setAttrMaxNumToComputeDomains(self, n: int) -> "RepairModel":
-        """
-        Specifies the max number of attributes to compute posterior probabiity
-        based on the Naive Bayes assumption.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        n: int
-            the max number of attributes (default: 4).
-        """
-        if n < 2:
-            raise ValueError(f'`n` should be greater than 1, got {n}')
-
-        self.max_attrs_to_compute_domains = n
-        return self
-
-    @argtype_check  # type: ignore
-    def setAttrStatSampleRatio(self, ratio: float) -> "RepairModel":
-        """Specifies a sample ratio for table used to compute co-occurrence frequency.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        ratio: float
-            sampling ratio (default: 1.0).
-        """
-        if ratio < 0.0 or ratio > 1.0:
-            raise ValueError(f'`ratio` should be in [0.0, 1.0], got {ratio}')
-
-        self.attr_stat_sample_ratio = ratio
-        return self
-
-    @argtype_check  # type: ignore
-    def setAttrStatThreshold(self, ratio: float) -> "RepairModel":
-        """Specifies a threshold for filtering out low frequency.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        ratio: float
-            threshold value (default: 0.0).
-        """
-        if ratio < 0.0 or ratio > 1.0:
-            raise ValueError(f'`ratio` should be in [0.0, 1.0], got {ratio}')
-
-        self.attr_stat_threshold = ratio
-        return self
-
-    @argtype_check  # type: ignore
-    def setMaxTrainingRowNum(self, n: int) -> "RepairModel":
-        """
-        Specifies the max number of training rows to build statistical models.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        n: int
-            the max number of training data (default: 10000).
-        """
-        if n < 10:
-            raise ValueError(f'`n` should be greater than and equal to 10, got {n}')
-
-        self.max_training_row_num = n
-        return self
-
-    @argtype_check  # type: ignore
-    def setMaxTrainingColumnNum(self, n: int) -> "RepairModel":
-        """
-        Specifies the max number of training columns to build statistical models.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        n: int
-            the max number of columns (default: None).
-        """
-        if n < 2:
-            raise ValueError(f'`n` should be greater than 1, got {n}')
-
-        self.max_training_column_num = n
-        return self
-
-    @argtype_check  # type: ignore
-    def setTrainingDataRebalancingEnabled(self, enabled: bool) -> "RepairModel":
-        """Specifies whether to enable class rebalancing in training data.
+    def setParallelStatTrainingEnabled(self, enabled: bool) -> "RepairModel":
+        """Specifies whether to enable parallel training for stats repair models.
 
         .. versionchanged:: 0.1.0
 
         Parameters
         ----------
         enabled: bool
-            If set to ``True``, rebalance class labels in training data (default: ``False``).
+            If set to ``True``, runs multiples tasks to build stat repair models (default: ``False``).
         """
-        self.training_data_rebalancing_enabled = enabled
-        return self
-
-    @argtype_check  # type: ignore
-    def setSmallDomainThreshold(self, thres: int) -> "RepairModel":
-        """Specifies max domain size for low-cardinality catogory encoding.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        thres: int
-            threshold value (default: 12).
-        """
-        if thres < 3:
-            raise ValueError(f'`thres` should be greater than 2, got {thres}')
-
-        self.small_domain_threshold = thres
+        self.parallel_stat_training_enabled = enabled
         return self
 
     @argtype_check  # type: ignore
@@ -538,17 +391,17 @@ class RepairModel():
         return self
 
     @argtype_check  # type: ignore
-    def setParallelStatTrainingEnabled(self, enabled: bool) -> "RepairModel":
-        """Specifies whether to enable parallel training for stats repair models.
+    def setTrainingDataRebalancingEnabled(self, enabled: bool) -> "RepairModel":
+        """Specifies whether to enable class rebalancing in training data.
 
         .. versionchanged:: 0.1.0
 
         Parameters
         ----------
         enabled: bool
-            If set to ``True``, runs multiples tasks to build stat repair models (default: ``False``).
+            If set to ``True``, rebalance class labels in training data (default: ``False``).
         """
-        self.parallel_stat_training_enabled = enabled
+        self.training_data_rebalancing_enabled = enabled
         return self
 
     @argtype_check  # type: ignore
@@ -772,6 +625,39 @@ class RepairModel():
             freq_attr_stats: str,
             pairwise_attr_stats: Dict[str, int]) -> str:
         _logger.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
+
+        def _max_attrs_to_compute_domains() -> int:
+            default_value = 4
+            v = int(self._get_option_value(self._opt_max_attrs_to_compute_domains, default_value, type_class=int))
+            if v < 2:
+                _logger.warning(f'`{self._opt_max_attrs_to_compute_domains}` should be greater than 1, got {v}')
+                return default_value
+            return v
+
+        def _min_corr_thres() -> float:
+            default_value = 0.7
+            v = float(self._get_option_value(self._opt_min_corr_thres, default_value, type_class=float))
+            if v < 0.0 or v >= 1.0:
+                _logger.warning(f'`{self._opt_min_corr_thres}` should be in [0.0, 1.0), got {v}')
+                return default_value
+            return v
+
+        def _domain_threshold_alpha() -> float:
+            default_value = 0.0
+            v = float(self._get_option_value(self._opt_domain_threshold_alpha, default_value, type_class=float))
+            if v < 0.0 or v >= 1.0:
+                _logger.warning(f'`{self._opt_domain_threshold_alpha}` should be in [0.0, 1.0), got {v}')
+                return default_value
+            return v
+
+        def _domain_threshold_beta() -> float:
+            default_value = 0.7
+            v = float(self._get_option_value(self._opt_domain_threshold_beta, default_value, type_class=float))
+            if v < 0.0 or v >= 1.0:
+                _logger.warning(f'`{self._opt_domain_threshold_beta}` should be in [0.0, 1.0), got {v}')
+                return default_value
+            return v
+
         noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v3")
         jdf = self._repair_api.computeDomainInErrorCells(
             discretized_table, noisy_cells, str(self.row_id),
@@ -780,10 +666,10 @@ class RepairModel():
             freq_attr_stats,
             json.dumps(pairwise_attr_stats),
             json.dumps(domain_stats),
-            self.max_attrs_to_compute_domains,
-            self.min_corr_thres,
-            self.domain_threshold_alpha,
-            self.domain_threshold_beta)
+            _max_attrs_to_compute_domains(),
+            _min_corr_thres(),
+            _domain_threshold_alpha(),
+            _domain_threshold_beta())
 
         cell_domain_df = DataFrame(jdf, self._spark._wrapped)  # type: ignore
         cell_domain = self._create_temp_view(cell_domain_df.cache(), "cell_domain")
@@ -868,20 +754,37 @@ class RepairModel():
 
     def _compute_attr_stats(self, discretized_table: str, target_columns: List[str],
                             domain_stats: Dict[str, int]) -> Tuple[str, Dict[str, Any]]:
+
+        def _attr_stat_sample_ratio() -> float:
+            default_value = 1.0
+            v = float(self._get_option_value(self._opt_attr_stat_sample_ratio, default_value, type_class=float))
+            if v < 0.0 or v > 1.0:
+                _logger.warning(f'`{self._opt_attr_stat_sample_ratio}` should be in [0.0, 1.0], got {v}')
+                return default_value
+            return v
+
+        def _attr_stat_threshold() -> float:
+            default_value = 0.0
+            v = float(self._get_option_value(self._opt_attr_stat_threshold, default_value, type_class=float))
+            if v < 0.0 or v > 1.0:
+                _logger.warning(f'`{self._opt_attr_stat_threshold}` should be in [0.0, 1.0], got {v}')
+                return default_value
+            return v
+
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
         _logger.debug("Collecting and sampling attribute stats (ratio={} threshold={}) "
                       "before computing error domains...".format(
-                          self.attr_stat_sample_ratio,
-                          self.attr_stat_threshold))
+                          _attr_stat_sample_ratio(),
+                          _attr_stat_threshold()))
 
         ret_as_json = json.loads(self._repair_api.computeAttrStats(
             discretized_table,
             str(self.row_id),
             ','.join(target_columns),
             json.dumps(domain_stats),
-            self.attr_stat_sample_ratio,
-            self.attr_stat_threshold))
+            _attr_stat_sample_ratio(),
+            _attr_stat_threshold()))
 
         return self._register_table(ret_as_json['freq_attr_stats']), \
             ret_as_json['pairwise_attr_stats']
@@ -916,7 +819,6 @@ class RepairModel():
 
         return cost_func
 
-    # TODO: Adds tests for this code path
     def _repair_by_nearest_values(self, repair_base_df: DataFrame,
                                   error_cells_df: DataFrame,
                                   target_columns: List[str]) -> Tuple[DataFrame, DataFrame]:
@@ -963,8 +865,16 @@ class RepairModel():
     # Selects relevant features if necessary. To reduce model training time,
     # it is important to drop non-relevant in advance.
     def _select_features(self, pairwise_attr_stats: Dict[str, str], y: str, features: List[str]) -> List[str]:
-        if self.max_training_column_num is not None and \
-                int(self.max_training_column_num) < len(features) and \
+
+        def _max_training_column_num() -> int:
+            default_value = 65536
+            v = int(self._get_option_value(self._opt_max_attrs_to_compute_domains, default_value, type_class=int))
+            if v < 2:
+                raise ValueError(f'`{self._opt_max_training_column_num}` should be greater than 1, got {v}')
+                return default_value
+            return v
+
+        if int(_max_training_column_num()) < len(features) and \
                 y in pairwise_attr_stats:
             heap: List[Tuple[float, str]] = []
             for f, corr in map(lambda x: tuple(x), pairwise_attr_stats[y]):  # type: ignore
@@ -976,7 +886,7 @@ class RepairModel():
             top_k_fts: List[Tuple[float, str]] = []
             for corr, f in fts:  # type: ignore
                 # TODO: Parameterize a minimum corr to filter out irrelevant features
-                if len(top_k_fts) <= 1 or (-float(corr) >= 0.0 and len(top_k_fts) < int(self.max_training_column_num)):
+                if len(top_k_fts) <= 1 or (-float(corr) >= 0.0 and len(top_k_fts) < int(_max_training_column_num())):
                     top_k_fts.append((float(corr), f))
 
             _logger.info("[Repair Model Training Phase] {} features ({}) selected from {} features".format(
@@ -992,13 +902,22 @@ class RepairModel():
         import category_encoders as ce  # type: ignore[import]
         discrete_columns = [c for c in features if c not in continous_columns]
         transformers = []
+
+        def _small_domain_threshold() -> int:
+            default_value = 12
+            v = int(self._get_option_value(self._opt_small_domain_threshold, default_value, type_class=int))
+            if v < 3:
+                raise ValueError(f'`{self._opt_small_domain_threshold}` should be greater than 2, got {v}')
+                return default_value
+            return v
+
         if len(discrete_columns) != 0:
             # TODO: Needs to reconsider feature transformation in this part, e.g.,
             # we can use `ce.OrdinalEncoder` for small domain features. For the other category
             # encoders, see https://github.com/scikit-learn-contrib/category_encoders
             small_domain_columns = [
                 c for c in discrete_columns
-                if int(domain_stats[c]) < self.small_domain_threshold]  # type: ignore
+                if int(domain_stats[c]) < _small_domain_threshold()]  # type: ignore
             discrete_columns = [
                 c for c in discrete_columns if c not in small_domain_columns]
             if len(small_domain_columns) > 0:
@@ -1037,11 +956,20 @@ class RepairModel():
             return None
 
     def _sample_training_data_from(self, df: DataFrame, training_data_num: int) -> DataFrame:
-        # The value of `max_training_row_num` highly depends on
+
+        def _max_training_row_num() -> int:
+            default_value = 10000
+            v = int(self._get_option_value(self._opt_max_training_row_num, default_value, type_class=int))
+            if v < 10:
+                _logger.warning(f'`{self._opt_max_training_row_num}` should be greater than and equal to 10, got {v}')
+                return default_value
+            return v
+
+        # The value of `_opt_max_training_row_num` highly depends on
         # the performance of pandas and LightGBM.
         sampling_ratio = 1.0
-        if training_data_num > self.max_training_row_num:
-            sampling_ratio = float(self.max_training_row_num) / training_data_num
+        if training_data_num > _max_training_row_num():
+            sampling_ratio = float(_max_training_row_num()) / training_data_num
             _logger.info(f'To reduce training data, extracts {sampling_ratio * 100.0}% samples '
                          f'from {training_data_num} rows')
 

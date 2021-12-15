@@ -33,25 +33,17 @@ model to repair them.
 
     RepairModel.option
     RepairModel.run
-    RepairModel.setAttrMaxNumToComputeDomains
-    RepairModel.setAttrStatSampleRatio
-    RepairModel.setAttrStatThreshold
     RepairModel.setDbName
     RepairModel.setDiscreteThreshold
-    RepairModel.setDomainThresholds
     RepairModel.setErrorCells
     RepairModel.setErrorDetectors
     RepairModel.setInput
-    RepairModel.setMaxTrainingRowNum
-    RepairModel.setMaxTrainingColumnNum
     RepairModel.setTrainingDataRebalancingEnabled
-    RepairModel.setMinCorrThreshold
     RepairModel.setRepairDelta
     RepairModel.setRowId
     RepairModel.setRepairByFunctionalDepst
     RepairModel.setRepairByNearestValues
     RepairModel.setParallelStatTrainingEnabled
-    RepairModel.setSmallDomainThreshold
     RepairModel.setTableName
     RepairModel.setTargets
     RepairModel.setUpdateCostFunction

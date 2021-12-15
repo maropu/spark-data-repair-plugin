@@ -268,19 +268,11 @@ delphi.repair
   // Parameters for Error Detection
   .setErrorCells(str)                          // user-specified error cells
   .setErrorDetectors(list)                     // list of error detector implementations (`NullErrorDetector`, `DomainValues`, `RegExErrorDetector`, `ConstraintErrorDetector`, and `GaussianOutlierErrorDetector`)
-  .setDiscreteThreshold(float)                 // max domain size of discrete values (default: 80)
-  .setMinCorrThreshold(float)                  // threshold to decide which columns are used to compute domains (default: 0.70)
-  .setDomainThresholds(float, float)           // thresholds to reduce domain size (default: 0.0, 0.70)
-  .setAttrMaxNumToComputeDomains(int)          // max number of attributes to compute posterior probabiity based on the Naive Bayes assumption (default: 4)
-  .setAttrStatSampleRatio(float)               // sample ratio for table used to compute co-occurrence frequency (default: 1.0)
-  .setAttrStatThreshold(float)                 // threshold for filtering out low frequency (default: 0.0)
+  .setDiscreteThreshold(int)                   // max domain size of discrete values (default: 80)
 
   // Parameters for Repair Model Training
-  .setMaxTrainingRowNum(int)                   // max number of training rows to build statistical models (default: 10000)
-  .setMaxTrainingColumnNum(int)                // max number of training columns to build statistical models (default: None)
+  .setRepairByFunctionalDeps                   // whether to enable rule-based models based on functional dependencies (default: False)
   .setTrainingDataRebalancingEnabled(bool)     // whether to rebalance class labels in training data (default: False)
-  .setSmallDomainThreshold(int)                // max domain size for low-cardinality catogory encoding (default: 12)
-  .setRuleBasedModelEnabled(bool)              // whether to use rule-based models (e.g., FD) if possible (default: False)
   .setParallelStatTrainingEnabled(bool)        // whether to run multiples tasks to build stat repair models (default: False)
 
   // Parameters for Repairing

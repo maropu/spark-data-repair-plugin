@@ -144,26 +144,6 @@ class RepairModelTests(ReusedSQLTestCase):
             lambda: RepairModel().setDiscreteThreshold(0))
         self.assertRaisesRegexp(
             ValueError,
-            "`alpha` should be in \\[0.0, 1.0\\), got -0.1",
-            lambda: RepairModel().setDomainThresholds(-0.1, 0.7))
-        self.assertRaisesRegexp(
-            ValueError,
-            "`alpha` should be in \\[0.0, 1.0\\), got 1.1",
-            lambda: RepairModel().setDomainThresholds(1.1, 0.7))
-        self.assertRaisesRegexp(
-            ValueError,
-            "`beta` should be in \\[0.0, 1.0\\), got -0.1",
-            lambda: RepairModel().setDomainThresholds(0.0, -0.1))
-        self.assertRaisesRegexp(
-            ValueError,
-            "`beta` should be in \\[0.0, 1.0\\), got 1.1",
-            lambda: RepairModel().setDomainThresholds(0.0, 1.1))
-        self.assertRaisesRegexp(
-            ValueError,
-            "`alpha` should be greater than `beta`, got 0.7 >= 0.0",
-            lambda: RepairModel().setDomainThresholds(0.7, 0.0))
-        self.assertRaisesRegexp(
-            ValueError,
             "Can not specify a database name when input is `DataFrame`",
             lambda: RepairModel().setInput(self.spark.range(0)).setDbName('db'))
         self.assertRaisesRegexp(
@@ -182,34 +162,6 @@ class RepairModelTests(ReusedSQLTestCase):
             ValueError,
             "`thres` should be bigger than 1, got 0",
             lambda: RepairModel().setDiscreteThreshold(0))
-        self.assertRaisesRegexp(
-            ValueError,
-            "`thres` should be in \\[0.0, 1.0\\), got -1.0",
-            lambda: RepairModel().setMinCorrThreshold(-1.0))
-        self.assertRaisesRegexp(
-            ValueError,
-            "`n` should be greater than 1, got 0",
-            lambda: RepairModel().setAttrMaxNumToComputeDomains(0))
-        self.assertRaisesRegexp(
-            ValueError,
-            "`ratio` should be in \\[0.0, 1.0\\], got -1.0",
-            lambda: RepairModel().setAttrStatSampleRatio(-1.0))
-        self.assertRaisesRegexp(
-            ValueError,
-            "`ratio` should be in \\[0.0, 1.0\\], got -1.0",
-            lambda: RepairModel().setAttrStatThreshold(-1.0))
-        self.assertRaisesRegexp(
-            ValueError,
-            "`n` should be greater than and equal to 10, got 9",
-            lambda: RepairModel().setMaxTrainingRowNum(9))
-        self.assertRaisesRegexp(
-            ValueError,
-            "`n` should be greater than 1, got 0",
-            lambda: RepairModel().setMaxTrainingColumnNum(0))
-        self.assertRaisesRegexp(
-            ValueError,
-            "`thres` should be greater than 2, got 0",
-            lambda: RepairModel().setSmallDomainThreshold(0))
         self.assertRaisesRegexp(
             ValueError,
             "Repair delta should be positive, got -1",
@@ -248,14 +200,6 @@ class RepairModelTests(ReusedSQLTestCase):
             TypeError,
             "`thres` should be provided as int, got str",
             lambda: RepairModel().setDiscreteThreshold("a"))
-        self.assertRaisesRegexp(
-            TypeError,
-            "`thres` should be provided as float, got int",
-            lambda: RepairModel().setMinCorrThreshold(1))
-        self.assertRaisesRegexp(
-            TypeError,
-            "`beta` should be provided as float, got int",
-            lambda: RepairModel().setDomainThresholds(1.0, 1))
         self.assertRaisesRegexp(
             TypeError,
             "`input` should be provided as str/DataFrame, got int",
@@ -468,21 +412,6 @@ class RepairModelTests(ReusedSQLTestCase):
                 self.expected_adult_result_without_repaired)
         _test(test_model.setParallelStatTrainingEnabled(False).run())
         _test(test_model.setParallelStatTrainingEnabled(True).run())
-
-    def test_setMaxTrainingRowNum(self):
-        row_num = int(self.spark.table("adult").count() / 2)
-        test_model = self._build_model() \
-            .setTableName("adult") \
-            .setRowId("tid") \
-            .setMaxTrainingRowNum(row_num)
-        self._assert_adult_without_repaired(test_model)
-
-    def test_setMaxTrainingColumnNum(self):
-        test_model = self._build_model() \
-            .setTableName("adult") \
-            .setRowId("tid") \
-            .setMaxTrainingColumnNum(2)
-        self._assert_adult_without_repaired(test_model)
 
     def test_error_cells_having_no_existent_attribute(self):
         error_cells = [
