@@ -340,7 +340,8 @@ class RepairModelTests(ReusedSQLTestCase):
                 self.assertTrue(False, msg=str(e))
 
     def test_get_option_value(self):
-        m = self._build_model().option('key1', 'abcd').option('key2', '1').option('key3', '3.2')
+        m = self._build_model()
+        m.opts = {'key1': 'abcd', 'key2': '1', 'key3': '3.2'}
         self.assertEqual(m._get_option_value('key1', 'efgh', type_class=str), 'abcd')
         self.assertEqual(m._get_option_value('non.existent', 'efgh', type_class=str), 'efgh')
         self.assertEqual(m._get_option_value('key2', 3, type_class=int), 1)
