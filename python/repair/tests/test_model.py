@@ -117,26 +117,23 @@ class RepairModelTests(ReusedSQLTestCase):
         self.assertRaisesRegexp(
             ValueError,
             "`setRepairDelta` should be called when enabling maximal likelihood repairing",
-            lambda: RepairModel().setTableName("dummyTab").setRowId("dummyId")
-            .setMaximalLikelihoodRepairEnabled(True).run())
+            lambda: RepairModel().setTableName("dummyTab").setRowId("dummyId").run(maximal_likelihood_repair=True))
         self.assertRaisesRegexp(
             ValueError,
             "`setRepairDelta` should be called when enabling maximal likelihood repairing",
-            lambda: RepairModel().setInput("dummyTab").setRowId("dummyId")
-            .setMaximalLikelihoodRepairEnabled(True).run())
+            lambda: RepairModel().setInput("dummyTab").setRowId("dummyId").run(maximal_likelihood_repair=True))
         self.assertRaisesRegexp(
             ValueError,
             "`setUpdateCostFunction` should be called when enabling maximal likelihood repairing",
             lambda: RepairModel().setInput("dummyTab").setRowId("dummyId")
-            .setMaximalLikelihoodRepairEnabled(True).setRepairDelta(3).run())
+            .setRepairDelta(3).run(maximal_likelihood_repair=True))
         self.assertRaisesRegexp(
             ValueError,
             "`UpdateCostFunction.targets` cannot be used when enabling maximal likelihood repairing",
             lambda: RepairModel().setInput("dummyTab").setRowId("dummyId")
-            .setMaximalLikelihoodRepairEnabled(True)
             .setRepairDelta(3)
             .setUpdateCostFunction(Levenshtein(targets=['non-existent']))
-            .run())
+            .run(maximal_likelihood_repair=True))
         self.assertRaisesRegexp(
             ValueError,
             "`attrs` should have at least one attribute",
@@ -224,7 +221,7 @@ class RepairModelTests(ReusedSQLTestCase):
 
     def test_exclusive_params(self):
         def _assert_exclusive_params(func):
-            self.assertRaisesRegexp(ValueError, "cannot be set to True simultaneously", func)
+            self.assertRaisesRegexp(ValueError, "cannot be set to true simultaneously", func)
         test_model = RepairModel()
         api = test_model.setTableName("dummyTab").setRowId("dummyId")
         _assert_exclusive_params(
@@ -291,26 +288,20 @@ class RepairModelTests(ReusedSQLTestCase):
     def test_invalid_running_modes(self):
         test_model = RepairModel() \
             .setTableName("mixed_input") \
-            .setRowId("tid")
-        self.assertRaisesRegexp(
-            ValueError,
-            "Cannot compute repair scores when the maximal likelihood repair mode disabled",
-            lambda: test_model.run(compute_repair_score=True))
-
-        test_model = test_model.setMaximalLikelihoodRepairEnabled(True) \
+            .setRowId("tid") \
             .setRepairDelta(1) \
             .setUpdateCostFunction(Levenshtein())
         self.assertRaisesRegexp(
             ValueError,
             "Cannot enable the maximal likelihood repair mode when continous attributes found",
-            lambda: test_model.run())
+            lambda: test_model.run(maximal_likelihood_repair=True))
 
     # TODO: We fix a seed for building a repair model, but inferred values fluctuate run-by-run.
     # So, to avoid it, we set 1 to `hp.max_evals` for now.
     def _build_model(self):
         return RepairModel() \
             .setErrorDetectors([NullErrorDetector()]) \
-            .option("hp.max_evals", "1")
+            .option("model.hp.max_evals", "1")
 
     def test_options(self):
         self.assertRaisesRegexp(
@@ -728,7 +719,6 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setTableName("inputView2") \
                 .setRowId("t i d") \
                 .setDiscreteThreshold(10) \
-                .setMaximalLikelihoodRepairEnabled(True) \
                 .setUpdateCostFunction(Levenshtein()) \
                 .setRepairDelta(3)
             df = test_model \
@@ -1010,7 +1000,6 @@ class RepairModelTests(ReusedSQLTestCase):
         repaired_df = test_model = self._build_model() \
             .setTableName("adult") \
             .setRowId("tid") \
-            .setMaximalLikelihoodRepairEnabled(True) \
             .setUpdateCostFunction(Levenshtein()) \
             .setRepairDelta(1) \
             .run(compute_repair_score=True)
@@ -1024,10 +1013,9 @@ class RepairModelTests(ReusedSQLTestCase):
         repaired_df = test_model = self._build_model() \
             .setTableName("adult") \
             .setRowId("tid") \
-            .setMaximalLikelihoodRepairEnabled(True) \
             .setUpdateCostFunction(Levenshtein()) \
             .setRepairDelta(3) \
-            .run()
+            .run(maximal_likelihood_repair=True)
         self.assertEqual(
             repaired_df.orderBy("tid", "attribute").collect(), [
                 Row(tid=3, attribute="Sex", current_value=None, repaired="Male"),

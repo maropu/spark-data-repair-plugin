@@ -138,7 +138,6 @@ class RepairModel():
         self.small_domain_threshold: int = 12
 
         # Parameters for repairing
-        self.maximal_likelihood_repair_enabled: bool = False
         self.repair_delta: Optional[int] = None
         self.repair_validation_enabled: bool = False
 
@@ -550,20 +549,6 @@ class RepairModel():
             If set to ``True``, runs multiples tasks to build stat repair models (default: ``False``).
         """
         self.parallel_stat_training_enabled = enabled
-        return self
-
-    @argtype_check  # type: ignore
-    def setMaximalLikelihoodRepairEnabled(self, enabled: bool) -> "RepairModel":
-        """Specifies whether to enable maximal likelihood repair.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        enabled: bool
-            If set to ``True``, uses maximal likelihood repair (default: ``False``).
-        """
-        self.maximal_likelihood_repair_enabled = enabled
         return self
 
     @argtype_check  # type: ignore
@@ -1388,15 +1373,15 @@ class RepairModel():
     @_spark_job_group(name="repairing")
     def _repair(self, models: List[Any], continous_columns: List[str],
                 dirty_rows_df: DataFrame, error_cells_df: DataFrame,
-                compute_repair_candidate_prob: bool) -> pd.DataFrame:
+                compute_repair_candidate_prob: bool, maximal_likelihood_repair: bool) -> pd.DataFrame:
         # Shares all the variables for the learnt models in a Spark cluster
         broadcasted_columns = self._spark.sparkContext.broadcast(dirty_rows_df.columns)
         broadcasted_continous_columns = self._spark.sparkContext.broadcast(continous_columns)
         broadcasted_models = self._spark.sparkContext.broadcast(models)
         broadcasted_compute_repair_candidate_prob = \
             self._spark.sparkContext.broadcast(compute_repair_candidate_prob)
-        broadcasted_maximal_likelihood_repair_enabled = \
-            self._spark.sparkContext.broadcast(self.maximal_likelihood_repair_enabled)
+        broadcasted_maximal_likelihood_repair = \
+            self._spark.sparkContext.broadcast(maximal_likelihood_repair)
 
         # Creates a dict that checks if a column's type is integral or not
         def _create_integral_column_map(schema) -> Dict[str, Any]:  # type: ignore
@@ -1425,11 +1410,10 @@ class RepairModel():
             integral_column_map = broadcasted_integral_column_map.value
             models = broadcasted_models.value
             compute_repair_candidate_prob = broadcasted_compute_repair_candidate_prob.value
-            maximal_likelihood_repair_enabled = \
-                broadcasted_maximal_likelihood_repair_enabled.value
+            maximal_likelihood_repair = broadcasted_maximal_likelihood_repair.value
 
             # An internal PMF format is like '{"classes": ["dog", "cat"], "probs": [0.76, 0.24]}'
-            need_to_compute_pmf = compute_repair_candidate_prob or maximal_likelihood_repair_enabled
+            need_to_compute_pmf = compute_repair_candidate_prob or maximal_likelihood_repair
 
             for m in models:
                 (y, (model, features, transformers)) = m
@@ -1616,7 +1600,7 @@ class RepairModel():
     def _run(self, input_table: str, continous_columns: List[str], detect_errors_only: bool,
              compute_repair_candidate_prob: bool,
              compute_repair_prob: bool, compute_repair_score: bool,
-             repair_data: bool) -> DataFrame:
+             repair_data: bool, maximal_likelihood_repair: bool) -> DataFrame:
 
         #################################################################################
         # 1. Error Detection Phase
@@ -1671,11 +1655,12 @@ class RepairModel():
         # TODO: Could we refine repair candidates by considering given integrity constraints? (See [15])
         repaired_df = self._repair(
             models, continous_columns, dirty_rows_df, error_cells_df,
-            compute_repair_candidate_prob)
+            compute_repair_candidate_prob,
+            maximal_likelihood_repair)
 
         # If `compute_repair_candidate_prob` is True, returns probability mass function
         # of repair candidates.
-        if compute_repair_candidate_prob and not self.maximal_likelihood_repair_enabled:
+        if compute_repair_candidate_prob and not maximal_likelihood_repair:
             assert not self.repair_by_nearest_values, '`repair_by_nearest_values` not supported in this path'
 
             pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df, continous_columns)
@@ -1694,7 +1679,7 @@ class RepairModel():
         # If any discrete target columns and its probability distribution given,
         # computes scores to decide which cells should be repaired to follow the
         # “Maximal Likelihood Repair” problem.
-        if self.maximal_likelihood_repair_enabled:
+        if maximal_likelihood_repair:
             assert len(continous_columns) == 0
             assert len(self.cf.targets) == 0  # type: ignore
 
@@ -1736,7 +1721,7 @@ class RepairModel():
 
     def run(self, detect_errors_only: bool = False, compute_repair_candidate_prob: bool = False,
             compute_repair_prob: bool = False, compute_repair_score: bool = False,
-            repair_data: bool = False) -> DataFrame:
+            repair_data: bool = False, maximal_likelihood_repair: bool = False) -> DataFrame:
         """
         Starts processing to detect error cells in given input data and build a statistical
         model to repair them.
@@ -1753,7 +1738,9 @@ class RepairModel():
         compute_repair_prob : bool
             If set to ``True``, returns probabiity of predicted repairs (default: ``False``).
         repair_data : bool
-            If set to ``True``, returns repaired data (default: False).
+            If set to ``True``, returns repaired input data (default: ``False``).
+        maximal_likelihood_repair : bool
+            If set to ``True``, returns maximal likelihood repairs (default: ``False``).
 
         Examples
         --------
@@ -1788,13 +1775,14 @@ class RepairModel():
         """
         if self.input is None or self.row_id is None:
             raise ValueError("`setInput` and `setRowId` should be called before repairing")
-        if self.maximal_likelihood_repair_enabled and self.repair_delta is None:
+
+        if maximal_likelihood_repair and self.repair_delta is None:
             raise ValueError("`setRepairDelta` should be called when enabling "
                              "maximal likelihood repairing")
-        if self.maximal_likelihood_repair_enabled and self.cf is None:
+        if maximal_likelihood_repair and self.cf is None:
             raise ValueError("`setUpdateCostFunction` should be called when enabling "
                              "maximal likelihood repairing")
-        if self.maximal_likelihood_repair_enabled and len(self.cf.targets) > 0:  # type: ignore
+        if maximal_likelihood_repair and len(self.cf.targets) > 0:  # type: ignore
             raise ValueError("`UpdateCostFunction.targets` cannot be used when enabling "
                              "maximal likelihood repairing")
 
@@ -1807,18 +1795,15 @@ class RepairModel():
         ]
         selected_param = list(map(lambda x: x[0], filter(lambda x: x[1], exclusive_param_list)))
         if len(selected_param) > 1:
-            raise ValueError("{} cannot be set to True simultaneously".format(
+            raise ValueError("{} cannot be set to true simultaneously".format(
                 "/".join(map(lambda x: f"`{x}`", selected_param))))
-
-        if compute_repair_score and not self.maximal_likelihood_repair_enabled:
-            raise ValueError("Cannot compute repair scores when the maximal likelihood repair mode disabled")
 
         # TODO: Support these mixed modes in future
         if self.repair_by_nearest_values and \
-            (self.maximal_likelihood_repair_enabled or compute_repair_candidate_prob or
+            (maximal_likelihood_repair or compute_repair_candidate_prob or
                 compute_repair_prob or compute_repair_score):
             raise ValueError("Cannot enable `repair_by_nearest_values` together with "
-                             "`maximal_likelihood_repair_enabled`, `compute_repair_candidate_prob`, "
+                             "`maximal_likelihood_repair`, `compute_repair_candidate_prob`, "
                              "`compute_repair_prob`, or `compute_repair_score`")
 
         # To compute scores or the probabiity of predicted repairs, we need to compute
@@ -1826,11 +1811,15 @@ class RepairModel():
         if compute_repair_prob or compute_repair_score:
             compute_repair_candidate_prob = True
 
+        # `maximal_likelihood_repair` needs to be set to true for `compute_repair_score`
+        if compute_repair_score:
+            maximal_likelihood_repair = True
+
         try:
             # Validates input data
             input_table, continous_columns = self._check_input_table()
 
-            if self.maximal_likelihood_repair_enabled and len(continous_columns) != 0:
+            if maximal_likelihood_repair and len(continous_columns) != 0:
                 raise ValueError("Cannot enable the maximal likelihood repair mode "
                                  "when continous attributes found")
 
@@ -1839,7 +1828,8 @@ class RepairModel():
 
             df, elapsed_time = self._run(
                 input_table, continous_columns, detect_errors_only, compute_repair_candidate_prob,
-                compute_repair_prob, compute_repair_score, repair_data)
+                compute_repair_prob, compute_repair_score, repair_data,
+                maximal_likelihood_repair)
 
             _logger.info(f"!!!Total Processing time is {elapsed_time}(s)!!!")
 

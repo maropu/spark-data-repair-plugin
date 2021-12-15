@@ -284,7 +284,6 @@ delphi.repair
   .setParallelStatTrainingEnabled(bool)        // whether to run multiples tasks to build stat repair models (default: False)
 
   // Parameters for Repairing
-  .setMaximalLikelihoodRepairEnabled(bool)     // whether to enable maximal likelihood repair (default: False)
   .setRepairDelta(int)                         // max number of applied repairs
 
   // Running Mode Parameters

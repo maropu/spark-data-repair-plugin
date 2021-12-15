@@ -42,7 +42,6 @@ model to repair them.
     RepairModel.setErrorCells
     RepairModel.setErrorDetectors
     RepairModel.setInput
-    RepairModel.setMaximalLikelihoodRepairEnabled
     RepairModel.setMaxTrainingRowNum
     RepairModel.setMaxTrainingColumnNum
     RepairModel.setTrainingDataRebalancingEnabled
