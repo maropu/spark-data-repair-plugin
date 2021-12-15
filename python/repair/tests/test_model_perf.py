@@ -135,7 +135,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
     def test_perf_boston_target_num_1(self):
         test_params = [
             ("CRIM", 6.134364848429722),
-            ("RAD", 0.8879535677396304),
+            ("RAD", 0.9903379376602871),
             ("TAX", 38.55947786645111),
             ("LSTAT", 3.31145213404028)
         ]
@@ -151,7 +151,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             ("CRIM", "RAD", 3.871610580555785),
             ("RAD", "TAX", 56.96715426988806),
             ("TAX", "LSTAT", 26.66078638300166),
-            ("LSTAT", "CRIM", 4.510643438749042)
+            ("LSTAT", "CRIM", 4.649152759148939)
         ]
         for target1, target2, ulimit in test_params:
             with self.subTest(f"target:boston({target1},{target2})"):

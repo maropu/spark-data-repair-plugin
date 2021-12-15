@@ -941,11 +941,11 @@ class RepairModelTests(ReusedSQLTestCase):
             self.assertEqual(r1.attribute, r1.attribute)
             self.assertEqual(r1.value, r1.value)
             if r1.attribute == 'Sex':
-                self.assertLess(r1.prob, 0.90)
+                self.assertLess(r1.prob, 0.95)
                 self.assertGreater(r2.prob, 0.9999)
             else:  # 'Relationship' case
-                self.assertLess(r1.prob, 0.90)
-                self.assertLess(r2.prob, 0.90)
+                self.assertLess(r1.prob, 0.95)
+                self.assertLess(r2.prob, 0.95)
 
     def test_compute_repair_prob(self):
         repaired_df = test_model = self._build_model() \

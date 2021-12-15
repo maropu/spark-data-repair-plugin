@@ -891,8 +891,13 @@ class RepairModel():
             result: List[List[float]] = []
             for target, candidates in zip(s1, s2):
                 if target is not None:
-                    result.append([cf.compute(target, c) for c in candidates])  # type: ignore
+                    if candidates is not None:
+                        result.append([cf.compute(target, c) for c in candidates])  # type: ignore
+                    else:
+                        # TODO: Fix this
+                        result.append([0.0])
                 else:
+                    # TODO: Fix this
                     result.append([0.0] * len(candidates))
 
             return pd.Series(result)
@@ -917,7 +922,8 @@ class RepairModel():
             return error_cells_df, self._empty_dataframe(repaired_schema)
 
         cost_func = self._create_cost_func()
-        compute_dvs = lambda c: repair_base_df.selectExpr(f'"{c}" attribute', f'collect_set(`{c}`) dvs')
+        compute_dvs = lambda c: repair_base_df.where(f'`{c}` IS NOT NULL') \
+            .selectExpr(f'"{c}" attribute', f'collect_set(`{c}`) dvs')
         domain_df = functools.reduce(lambda x, y: x.union(y), map(compute_dvs, targets))
 
         compare_dvs = lambda x, y: \
