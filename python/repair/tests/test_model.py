@@ -292,6 +292,15 @@ class RepairModelTests(ReusedSQLTestCase):
             except Exception as e:
                 self.assertTrue(False, msg=str(e))
 
+    def test_invalid_internal_options(self):
+        test_model = self._build_model() \
+            .setTableName("adult") \
+            .setRowId("tid")
+        self.assertRaisesRegexp(
+            ValueError,
+            'Failed to cast "invalid" into float data: key=error.min_corr_thres',
+            lambda: test_model.option('error.min_corr_thres', 'invalid').run())
+
     def test_get_option_value(self):
         m = self._build_model()
         m.opts = {'key1': 'abcd', 'key2': '1', 'key3': '3.2'}
@@ -315,6 +324,28 @@ class RepairModelTests(ReusedSQLTestCase):
             test_model = self._build_model() \
                 .setTableName("adult") \
                 .setRowId("tid")
+                .option('error.min_corr_thres', '0.70') \
+                .option('error.domain_threshold_alph', '0.0') \
+                .option('error.domain_threshold_beta', '0.70') \
+                .option('error.max_attrs_to_compute_domains', '4') \
+                .option('error.attr_stat_sample_ratio', '1.0') \
+                .option('error.attr_stat_threshold', '0.0') \
+                .option('model.max_training_row_num', '10000') \
+                .option('model.max_training_column_num', '65536') \
+                .option('model.small_domain_threshold', '12') \
+                .option('model.lgb.boosting_type', 'gbdt') \
+                .option('model.lgb.class_weight', 'balanced') \
+                .option('model.lgb.learning_rate', '0.01') \
+                .option('model.lgb.max_depth', '7') \
+                .option('model.lgb.max_bin', '255') \
+                .option('model.lgb.reg_alpha', '0.0') \
+                .option('model.lgb.min_split_gain', '0.0') \
+                .option('model.lgb.n_estimators', '300') \
+                .option('model.lgb.importance_type', 'gain') \
+                .option('model.cv.n_splits', '3') \
+                .option('model.hp.timeout', '0') \
+                .option('model.hp.max_evals', '100000000') \
+                .option('model.hp.no_progress_loss', '50')
             self.assertEqual(
                 test_model.run().orderBy("tid", "attribute").collect(),
                 self.expected_adult_result)
@@ -842,7 +873,8 @@ class RepairModelTests(ReusedSQLTestCase):
                     .setRowId("tid") \
                     .setErrorCells("errorCells") \
                     .setErrorDetectors(error_detectors) \
-                    .setRepairByFunctionalDeps(True)
+                    .setRepairByFunctionalDeps(True) \
+                    .option('model.rule.max_domain_size', '12')
                 self.assertEqual(
                     test_model.run().orderBy("tid", "attribute").collect(), [
                         Row(tid=3, attribute="y", current_value=None, repaired="test-1"),
@@ -929,6 +961,9 @@ class RepairModelTests(ReusedSQLTestCase):
         repaired_df = test_model = self._build_model() \
             .setTableName("adult") \
             .setRowId("tid") \
+            .option('repair.pmf.cost_weight', '0.1') \
+            .option('repair.pmf.prob_threshold', '0.0') \
+            .option('repair.pmf.prob_top_k', '80') \
             .run(compute_repair_candidate_prob=True)
 
         self._check_adult_repair_prob_and_score(

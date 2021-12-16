@@ -35,7 +35,7 @@ from pyspark.sql.types import ByteType, IntegerType, LongType, ShortType, Struct
 from repair.costs import UpdateCostFunction
 from repair.detectors import ConstraintErrorDetector, DomainValues, ErrorDetector, NullErrorDetector
 from repair.train import build_model, compute_class_nrow_stdv, model_configuration_keys, rebalance_training_data
-from repair.utils import argtype_check, elapsed_time, setup_logger
+from repair.utils import argtype_check, elapsed_time, is_testing, setup_logger
 
 
 _logger = setup_logger()
@@ -479,8 +479,12 @@ class RepairModel():
             try:
                 return type_class(self.opts[key])
             except:
-                _logger.warning(f'Failed to cast "{self.opts[key]}" into {type_class.__name__} data: key={key}')
-                pass
+                msg = f'Failed to cast "{self.opts[key]}" into {type_class.__name__} data: key={key}'
+                if is_testing():
+                    raise ValueError(msg)
+                else:
+                    _logger.warning()
+                    pass
 
         return default_value
 

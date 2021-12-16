@@ -19,6 +19,7 @@
 
 import functools
 import inspect
+import os
 import time
 import typing
 from typing import Any
@@ -155,3 +156,7 @@ def elapsed_time(f):  # type: ignore
         return ret, time.time() - start_time
 
     return wrapper
+
+
+def is_testing() -> bool:
+    return os.environ.get("SPARK_TESTING") is not None
