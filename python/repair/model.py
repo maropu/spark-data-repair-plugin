@@ -173,6 +173,15 @@ class RepairModel():
         self._opt_prob_top_k = 'repair.pmf.prob_top_k'
 
         self._repair_model_option_keys = set([
+            self._opt_min_corr_thres,
+            self._opt_domain_threshold_alpha,
+            self._opt_domain_threshold_beta,
+            self._opt_max_attrs_to_compute_domains,
+            self._opt_attr_stat_sample_ratio,
+            self._opt_attr_stat_threshold,
+            self._opt_max_training_row_num,
+            self._opt_max_training_column_num,
+            self._opt_small_domain_threshold,
             self._opt_merge_threshold,
             self._opt_max_domain_size,
             self._opt_cost_weight,

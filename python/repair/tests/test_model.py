@@ -258,6 +258,15 @@ class RepairModelTests(ReusedSQLTestCase):
             lambda: RepairModel().option('model.rule.merge_threshold', ''))
 
         test_option_keys = [
+            ('error.min_corr_thres', '0.7'),
+            ('error.domain_threshold_alph', '0.0'),
+            ('error.domain_threshold_beta', '0.7'),
+            ('error.max_attrs_to_compute_domains', '4'),
+            ('error.attr_stat_sample_ratio', '1.0'),
+            ('error.attr_stat_threshold', '0.0'),
+            ('model.max_training_row_num', '100000'),
+            ('model.max_training_column_num', '65536'),
+            ('model.small_domain_threshold', '12'),
             ('model.rule.merge_threshold', '2.0'),
             ('model.rule.max_domain_size', '1000'),
             ('repair.pmf.cost_weight', '0.1'),
@@ -295,6 +304,8 @@ class RepairModelTests(ReusedSQLTestCase):
         self.assertEqual(m._get_option_value('key3', 0.0, type_class=float), 3.2)
         self.assertEqual(m._get_option_value('non.existent', 0.0, type_class=float), 0.0)
         self.assertEqual(m._get_option_value('key1', 0.0, type_class=float), 0.0)
+        self.assertEqual(m._get_option_value('key2', False, type_class=bool), True)
+        self.assertEqual(m._get_option_value('non.existent', False, type_class=bool), False)
 
     def test_multiple_run(self):
         # Checks if auto-generated views are dropped finally
@@ -801,7 +812,7 @@ class RepairModelTests(ReusedSQLTestCase):
             self.assertTrue(rows[0].repaired is not None)
             self.assertTrue(rows[1].repaired is not None)
 
-    def test_rule_based_model(self):
+    def test_repair_by_functional_deps(self):
         with self.tempView("inputView", "errorCells"):
             rows = [
                 (1, "1", "test-1"),
@@ -832,12 +843,60 @@ class RepairModelTests(ReusedSQLTestCase):
                     .setErrorCells("errorCells") \
                     .setErrorDetectors(error_detectors) \
                     .setRepairByFunctionalDeps(True)
-
                 self.assertEqual(
                     test_model.run().orderBy("tid", "attribute").collect(), [
                         Row(tid=3, attribute="y", current_value=None, repaired="test-1"),
                         Row(tid=5, attribute="y", current_value=None, repaired="test-2"),
                         Row(tid=6, attribute="y", current_value=None, repaired=None)])
+
+    def test_repair_by_nearest_values(self):
+        with self.tempView("inputView", "errorCells"):
+            rows = [
+                (1, "100%", 100, "a", 1.0),
+                (3, "32%", 101, "b", 1.1),
+                (4, "1xx%", 1, "a", 1.3),
+                (5, "100x", 2, "b", 0.6),
+                (6, "12x", 300, "a", 0.8)
+            ]
+            self.spark.createDataFrame(rows, ["tid", "v0", "v1", "v2", "v3"]) \
+                .createOrReplaceTempView("inputView")
+
+            error_cells = [(4, "v0"), (5, "v0"), (6, "v0"), (3, "v1"), (5, "v1"), (6, "v1"), (5, "v2")]
+            self.spark.createDataFrame(error_cells, ["tid", "attribute"]) \
+                .createOrReplaceTempView("errorCells")
+            test_model = self._build_model() \
+                .setTableName("inputView") \
+                .setRowId("tid") \
+                .setErrorCells("errorCells") \
+                .setRepairByNearestValues(True) \
+                .setUpdateCostFunction(Levenshtein(targets=["v0", "v1"])) \
+                .option("model.rule.merge_threshold", "2.0")
+            self.assertEqual(
+                test_model.run().orderBy("tid", "attribute").collect(), [
+                    Row(tid=3, attribute='v1', current_value='101', repaired='100'),
+                    Row(tid=4, attribute='v0', current_value='1xx%', repaired='100%'),
+                    Row(tid=5, attribute='v0', current_value='100x', repaired='100%'),
+                    Row(tid=5, attribute='v1', current_value='2', repaired='1'),
+                    Row(tid=5, attribute='v2', current_value='b', repaired='a'),
+                    Row(tid=6, attribute='v0', current_value='12x', repaired='32%'),
+                    Row(tid=6, attribute='v1', current_value='300', repaired='100')])
+
+            test_model = self._build_model() \
+                .setTableName("inputView") \
+                .setRowId("tid") \
+                .setTargets(["v0", "v1"]) \
+                .setErrorCells("errorCells") \
+                .setRepairByNearestValues(True) \
+                .setUpdateCostFunction(Levenshtein(targets=["v0", "v1"])) \
+                .option("model.rule.merge_threshold", "2.0")
+            self.assertEqual(
+                test_model.run().orderBy("tid", "attribute").collect(), [
+                    Row(tid=3, attribute='v1', current_value='101', repaired='100'),
+                    Row(tid=4, attribute='v0', current_value='1xx%', repaired='100%'),
+                    Row(tid=5, attribute='v0', current_value='100x', repaired='100%'),
+                    Row(tid=5, attribute='v1', current_value='2', repaired='1'),
+                    Row(tid=6, attribute='v0', current_value='12x', repaired='32%'),
+                    Row(tid=6, attribute='v1', current_value='300', repaired='100')])
 
     def test_repair_updates(self):
         expected_result = self.spark.table("adult_clean") \
