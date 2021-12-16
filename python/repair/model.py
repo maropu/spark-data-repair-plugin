@@ -157,36 +157,65 @@ class RepairModel():
         self._repair_api = self._jvm.RepairApi
 
         # List of internal configurations
-        self._opt_min_corr_thres = 'error.min_corr_thres'
-        self._opt_domain_threshold_alpha = 'error.domain_threshold_alph'
-        self._opt_domain_threshold_beta = 'error.domain_threshold_beta'
-        self._opt_max_attrs_to_compute_domains = 'error.max_attrs_to_compute_domains'
-        self._opt_attr_stat_sample_ratio = 'error.attr_stat_sample_ratio'
-        self._opt_attr_stat_threshold = 'error.attr_stat_threshold'
-        self._opt_max_training_row_num = 'model.max_training_row_num'
-        self._opt_max_training_column_num = 'model.max_training_column_num'
-        self._opt_small_domain_threshold = 'model.small_domain_threshold'
-        self._opt_merge_threshold = 'model.rule.merge_threshold'
-        self._opt_max_domain_size = 'model.rule.max_domain_size'
-        self._opt_cost_weight = 'repair.pmf.cost_weight'
-        self._opt_prob_threshold = 'repair.pmf.prob_threshold'
-        self._opt_prob_top_k = 'repair.pmf.prob_top_k'
+        from collections import namedtuple
+        option = namedtuple('option', 'key default_value type_class validator err_msg')
+
+        self._opt_min_corr_thres = \
+            option('error.min_corr_thres', 0.70, float,
+                   lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
+        self._opt_domain_threshold_alpha = \
+            option('error.domain_threshold_alph', 0.0, float,
+                   lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
+        self._opt_domain_threshold_beta = \
+            option('error.domain_threshold_beta', 0.70, float,
+                   lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
+        self._opt_max_attrs_to_compute_domains = \
+            option('error.max_attrs_to_compute_domains', 4, int,
+                   lambda v: v >= 2, '`{}` should be greater than 1')
+        self._opt_attr_stat_sample_ratio = \
+            option('error.attr_stat_sample_ratio', 1.0, float,
+                   lambda v: 0.0 <= v and v <= 1.0, '`{}` should be in [0.0, 1.0]')
+        self._opt_attr_stat_threshold = \
+            option('error.attr_stat_threshold', 0.0, float,
+                   lambda v: 0.0 <= v and v <= 1.0, '`{}` should be in [0.0, 1.0]')
+        self._opt_max_training_row_num = \
+            option('model.max_training_row_num', 10000, int,
+                   lambda v: v >= 10, '`{}` should be greater than and equal to 10')
+        self._opt_max_training_column_num = \
+            option('model.max_training_column_num', 65536, int,
+                   lambda v: v >= 2, '`{}` should be greater than 1')
+        self._opt_small_domain_threshold = \
+            option('model.small_domain_threshold', 12, int,
+                   lambda v: v >= 3, '`{}` should be greater than 2')
+        self._opt_merge_threshold = \
+            option('model.rule.merge_threshold', 2.0, float, None, None)
+        self._opt_max_domain_size = \
+            option('model.rule.max_domain_size', 1000, int,
+                   lambda v: v > 10, '`{}` should be greater than 10')
+        self._opt_cost_weight = \
+            option('repair.pmf.cost_weight', 0.1, float,
+                   lambda v: v > 0.0, '`{}` should be positive')
+        self._opt_prob_threshold = \
+            option('repair.pmf.prob_threshold', 0.0, float, None, None)
+        self._opt_prob_top_k = \
+            option('repair.pmf.prob_top_k', self.discrete_thres, int,
+                   lambda v: v >= 3, '`{}` should be greater than 2')
 
         self._repair_model_option_keys = set([
-            self._opt_min_corr_thres,
-            self._opt_domain_threshold_alpha,
-            self._opt_domain_threshold_beta,
-            self._opt_max_attrs_to_compute_domains,
-            self._opt_attr_stat_sample_ratio,
-            self._opt_attr_stat_threshold,
-            self._opt_max_training_row_num,
-            self._opt_max_training_column_num,
-            self._opt_small_domain_threshold,
-            self._opt_merge_threshold,
-            self._opt_max_domain_size,
-            self._opt_cost_weight,
-            self._opt_prob_threshold,
-            self._opt_prob_top_k,
+            self._opt_min_corr_thres.key,
+            self._opt_domain_threshold_alpha.key,
+            self._opt_domain_threshold_beta.key,
+            self._opt_max_attrs_to_compute_domains.key,
+            self._opt_attr_stat_sample_ratio.key,
+            self._opt_attr_stat_threshold.key,
+            self._opt_max_training_row_num.key,
+            self._opt_max_training_column_num.key,
+            self._opt_small_domain_threshold.key,
+            self._opt_merge_threshold.key,
+            self._opt_max_domain_size.key,
+            self._opt_cost_weight.key,
+            self._opt_prob_threshold.key,
+            self._opt_prob_top_k.key,
             *model_configuration_keys()])
 
     @argtype_check  # type: ignore
@@ -473,17 +502,28 @@ class RepairModel():
                              "`attribute` in columns")
         return self._create_temp_view(df, "error_cells")
 
-    def _get_option_value(self, key: str, default_value: Any, type_class: Any = str) -> Any:
+    def _get_option_value(self, key: str, default_value: Any, type_class: Any = str,
+                          validator: Optional[Any] = None, err_msg: Optional[str] = None) -> Any:
         assert type(default_value) is type_class
+
         if key in self.opts:
             try:
-                return type_class(self.opts[key])
+                v = type_class(self.opts[key])
+                if validator and not validator(v):
+                    msg = f'{str(err_msg).format(key)}, got {v}'
+                    if is_testing():
+                        raise ValueError(msg)
+
+                    _logger.warning(msg)
+                    return default_value
+
+                return v
             except:
                 msg = f'Failed to cast "{self.opts[key]}" into {type_class.__name__} data: key={key}'
                 if is_testing():
                     raise ValueError(msg)
                 else:
-                    _logger.warning()
+                    _logger.warning(msg)
                     pass
 
         return default_value
@@ -639,38 +679,6 @@ class RepairModel():
             pairwise_attr_stats: Dict[str, int]) -> str:
         _logger.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
 
-        def _max_attrs_to_compute_domains() -> int:
-            default_value = 4
-            v = int(self._get_option_value(self._opt_max_attrs_to_compute_domains, default_value, type_class=int))
-            if v < 2:
-                _logger.warning(f'`{self._opt_max_attrs_to_compute_domains}` should be greater than 1, got {v}')
-                return default_value
-            return v
-
-        def _min_corr_thres() -> float:
-            default_value = 0.7
-            v = float(self._get_option_value(self._opt_min_corr_thres, default_value, type_class=float))
-            if v < 0.0 or v >= 1.0:
-                _logger.warning(f'`{self._opt_min_corr_thres}` should be in [0.0, 1.0), got {v}')
-                return default_value
-            return v
-
-        def _domain_threshold_alpha() -> float:
-            default_value = 0.0
-            v = float(self._get_option_value(self._opt_domain_threshold_alpha, default_value, type_class=float))
-            if v < 0.0 or v >= 1.0:
-                _logger.warning(f'`{self._opt_domain_threshold_alpha}` should be in [0.0, 1.0), got {v}')
-                return default_value
-            return v
-
-        def _domain_threshold_beta() -> float:
-            default_value = 0.7
-            v = float(self._get_option_value(self._opt_domain_threshold_beta, default_value, type_class=float))
-            if v < 0.0 or v >= 1.0:
-                _logger.warning(f'`{self._opt_domain_threshold_beta}` should be in [0.0, 1.0), got {v}')
-                return default_value
-            return v
-
         noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v3")
         jdf = self._repair_api.computeDomainInErrorCells(
             discretized_table, noisy_cells, str(self.row_id),
@@ -679,10 +687,10 @@ class RepairModel():
             freq_attr_stats,
             json.dumps(pairwise_attr_stats),
             json.dumps(domain_stats),
-            _max_attrs_to_compute_domains(),
-            _min_corr_thres(),
-            _domain_threshold_alpha(),
-            _domain_threshold_beta())
+            self._get_option_value(*self._opt_max_attrs_to_compute_domains),
+            self._get_option_value(*self._opt_min_corr_thres),
+            self._get_option_value(*self._opt_domain_threshold_alpha),
+            self._get_option_value(*self._opt_domain_threshold_beta))
 
         cell_domain_df = DataFrame(jdf, self._spark._wrapped)  # type: ignore
         cell_domain = self._create_temp_view(cell_domain_df.cache(), "cell_domain")
@@ -767,37 +775,20 @@ class RepairModel():
 
     def _compute_attr_stats(self, discretized_table: str, target_columns: List[str],
                             domain_stats: Dict[str, int]) -> Tuple[str, Dict[str, Any]]:
-
-        def _attr_stat_sample_ratio() -> float:
-            default_value = 1.0
-            v = float(self._get_option_value(self._opt_attr_stat_sample_ratio, default_value, type_class=float))
-            if v < 0.0 or v > 1.0:
-                _logger.warning(f'`{self._opt_attr_stat_sample_ratio}` should be in [0.0, 1.0], got {v}')
-                return default_value
-            return v
-
-        def _attr_stat_threshold() -> float:
-            default_value = 0.0
-            v = float(self._get_option_value(self._opt_attr_stat_threshold, default_value, type_class=float))
-            if v < 0.0 or v > 1.0:
-                _logger.warning(f'`{self._opt_attr_stat_threshold}` should be in [0.0, 1.0], got {v}')
-                return default_value
-            return v
-
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
         _logger.debug("Collecting and sampling attribute stats (ratio={} threshold={}) "
                       "before computing error domains...".format(
-                          _attr_stat_sample_ratio(),
-                          _attr_stat_threshold()))
+                          self._get_option_value(*self._opt_attr_stat_sample_ratio),
+                          self._get_option_value(*self._opt_attr_stat_threshold)))
 
         ret_as_json = json.loads(self._repair_api.computeAttrStats(
             discretized_table,
             str(self.row_id),
             ','.join(target_columns),
             json.dumps(domain_stats),
-            _attr_stat_sample_ratio(),
-            _attr_stat_threshold()))
+            self._get_option_value(*self._opt_attr_stat_sample_ratio),
+            self._get_option_value(*self._opt_attr_stat_threshold)))
 
         return self._register_table(ret_as_json['freq_attr_stats']), \
             ret_as_json['pairwise_attr_stats']
@@ -837,9 +828,6 @@ class RepairModel():
                                   target_columns: List[str]) -> Tuple[DataFrame, DataFrame]:
         assert self.cf is not None
 
-        def _repair_merge_threshold() -> float:
-            return float(self._get_option_value(self._opt_merge_threshold, 2.0, type_class=float))
-
         cf_targets = self.cf.targets  # type: ignore
         targets = list(filter(lambda c: c in cf_targets, target_columns)) \
             if cf_targets else target_columns
@@ -853,13 +841,15 @@ class RepairModel():
             .selectExpr(f'"{c}" attribute', f'collect_set(`{c}`) dvs')
         domain_df = functools.reduce(lambda x, y: x.union(y), map(compute_dvs, targets))
 
+        repair_merge_threshold = self._get_option_value(*self._opt_merge_threshold)
+
         compare_dvs = lambda x, y: \
             f"case when {x}.cost > {y}.cost then 1 " \
             f"when {x}.cost < {y}.cost then -1 " \
             "else 0 end"
         sorted_domain_value_expr = 'array_sort(dvs, ' \
             f'(left, right) -> {compare_dvs("left", "right")}) dvs'
-        repair_expr = f'if(dvs[0].cost <= {_repair_merge_threshold()} AND dvs[0].cost < dvs[1].cost, ' \
+        repair_expr = f'if(dvs[0].cost <= {repair_merge_threshold} AND dvs[0].cost < dvs[1].cost, ' \
             'dvs[0].value, null) repaired'
         error_cells_df = error_cells_df.join(domain_df, 'attribute', 'left_outer') \
             .withColumn("costs", cost_func(col("current_value"), col("dvs"))) \
@@ -878,16 +868,9 @@ class RepairModel():
     # Selects relevant features if necessary. To reduce model training time,
     # it is important to drop non-relevant in advance.
     def _select_features(self, pairwise_attr_stats: Dict[str, str], y: str, features: List[str]) -> List[str]:
+        max_training_column_num = int(self._get_option_value(*self._opt_max_training_column_num))
 
-        def _max_training_column_num() -> int:
-            default_value = 65536
-            v = int(self._get_option_value(self._opt_max_attrs_to_compute_domains, default_value, type_class=int))
-            if v < 2:
-                raise ValueError(f'`{self._opt_max_training_column_num}` should be greater than 1, got {v}')
-                return default_value
-            return v
-
-        if int(_max_training_column_num()) < len(features) and \
+        if max_training_column_num < len(features) and \
                 y in pairwise_attr_stats:
             heap: List[Tuple[float, str]] = []
             for f, corr in map(lambda x: tuple(x), pairwise_attr_stats[y]):  # type: ignore
@@ -899,7 +882,7 @@ class RepairModel():
             top_k_fts: List[Tuple[float, str]] = []
             for corr, f in fts:  # type: ignore
                 # TODO: Parameterize a minimum corr to filter out irrelevant features
-                if len(top_k_fts) <= 1 or (-float(corr) >= 0.0 and len(top_k_fts) < int(_max_training_column_num())):
+                if len(top_k_fts) <= 1 or (-float(corr) >= 0.0 and len(top_k_fts) < max_training_column_num):
                     top_k_fts.append((float(corr), f))
 
             _logger.info("[Repair Model Training Phase] {} features ({}) selected from {} features".format(
@@ -916,13 +899,7 @@ class RepairModel():
         discrete_columns = [c for c in features if c not in continous_columns]
         transformers = []
 
-        def _small_domain_threshold() -> int:
-            default_value = 12
-            v = int(self._get_option_value(self._opt_small_domain_threshold, default_value, type_class=int))
-            if v < 3:
-                raise ValueError(f'`{self._opt_small_domain_threshold}` should be greater than 2, got {v}')
-                return default_value
-            return v
+        small_domain_threshold = int(self._get_option_value(*self._opt_small_domain_threshold))
 
         if len(discrete_columns) != 0:
             # TODO: Needs to reconsider feature transformation in this part, e.g.,
@@ -930,7 +907,7 @@ class RepairModel():
             # encoders, see https://github.com/scikit-learn-contrib/category_encoders
             small_domain_columns = [
                 c for c in discrete_columns
-                if int(domain_stats[c]) < _small_domain_threshold()]  # type: ignore
+                if int(domain_stats[c]) < small_domain_threshold]  # type: ignore
             discrete_columns = [
                 c for c in discrete_columns if c not in small_domain_columns]
             if len(small_domain_columns) > 0:
@@ -969,20 +946,12 @@ class RepairModel():
             return None
 
     def _sample_training_data_from(self, df: DataFrame, training_data_num: int) -> DataFrame:
-
-        def _max_training_row_num() -> int:
-            default_value = 10000
-            v = int(self._get_option_value(self._opt_max_training_row_num, default_value, type_class=int))
-            if v < 10:
-                _logger.warning(f'`{self._opt_max_training_row_num}` should be greater than and equal to 10, got {v}')
-                return default_value
-            return v
-
         # The value of `_opt_max_training_row_num` highly depends on
         # the performance of pandas and LightGBM.
+        max_training_row_num = int(self._get_option_value(*self._opt_max_training_row_num))
         sampling_ratio = 1.0
-        if training_data_num > _max_training_row_num():
-            sampling_ratio = float(_max_training_row_num()) / training_data_num
+        if training_data_num > max_training_row_num:
+            sampling_ratio = float(max_training_row_num) / training_data_num
             _logger.info(f'To reduce training data, extracts {sampling_ratio * 100.0}% samples '
                          f'from {training_data_num} rows')
 
@@ -1250,12 +1219,10 @@ class RepairModel():
             # If `y` is functionally-dependent on one of clean attributes,
             # builds a model based on the rule.
             if y not in models and functional_deps is not None and y in functional_deps:
-                def _max_domain_size() -> int:
-                    return int(self._get_option_value(self._opt_max_domain_size, 1000, type_class=int))
-
                 def _qualified(x: str) -> bool:
                     # Checks if the domain size of `x` is small enough
-                    return x in feature_map[y] and int(domain_stats[x]) < _max_domain_size()
+                    return x in feature_map[y] and \
+                        int(domain_stats[x]) < int(self._get_option_value(*self._opt_max_domain_size))
 
                 fx = list(filter(lambda x: _qualified(x), functional_deps[y]))
                 if len(fx) > 0:
@@ -1397,11 +1364,9 @@ class RepairModel():
     def _compute_weighted_probs(self, pmf_df: DataFrame) -> DataFrame:
         assert self.cf is not None
 
-        def _pmf_weight() -> float:
-            return float(self._get_option_value(self._opt_cost_weight, 0.1, type_class=float))
-
+        pmf_weight = float(self._get_option_value(*self._opt_cost_weight))
         cost_func = self._create_cost_func()
-        to_weighted_probs = f"zip_with(probs, costs, (p, c) -> p * (1.0 / (1.0 + {_pmf_weight()} * c)))"
+        to_weighted_probs = f"zip_with(probs, costs, (p, c) -> p * (1.0 / (1.0 + {pmf_weight} * c)))"
         if self.cf.targets:  # type: ignore
             _logger.info(f'[Repairing Phase] {self.cf} computing weighting probs...')
             cf_targets = ",".join(map(lambda x: f"'{x}'", self.cf.targets))  # type: ignore
@@ -1453,14 +1418,10 @@ class RepairModel():
             .selectExpr(f"`{self.row_id}`", "attribute", to_current_expr, 'arrays_zip(class, prob) pmf') \
             .selectExpr(f"`{self.row_id}`", "attribute", "current_value", sorted_pmf_expr)
 
-        def _pmf_threshold() -> float:
-            return float(self._get_option_value(self._opt_prob_threshold, 0.0, type_class=float))
-
-        def _pmf_top_k() -> int:
-            return int(self._get_option_value(self._opt_prob_top_k, self.discrete_thres, type_class=int))
-
         # Filters less-confident candidates in `pmf`
-        filtered_prob_expr = f"slice(filter(pmf, x -> x.prob > {_pmf_threshold()}), 1, {_pmf_top_k()}) pmf"
+        pmf_threshold = self._get_option_value(*self._opt_prob_threshold)
+        pmf_top_k = self._get_option_value(*self._opt_prob_top_k)
+        filtered_prob_expr = f"slice(filter(pmf, x -> x.prob > {pmf_threshold}), 1, {pmf_top_k}) pmf"
         pmf_df = pmf_df.selectExpr(
             f"`{self.row_id}`", "attribute", "current_value",
             filtered_prob_expr)

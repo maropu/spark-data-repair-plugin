@@ -323,7 +323,7 @@ class RepairModelTests(ReusedSQLTestCase):
         def _test_basic():
             test_model = self._build_model() \
                 .setTableName("adult") \
-                .setRowId("tid")
+                .setRowId("tid") \
                 .option('error.min_corr_thres', '0.70') \
                 .option('error.domain_threshold_alph', '0.0') \
                 .option('error.domain_threshold_beta', '0.70') \
