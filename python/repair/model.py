@@ -1383,20 +1383,20 @@ class RepairModel():
         jdf = self._jvm.RepairMiscApi.flattenTable("", input_table, str(self.row_id))
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
-    def _compute_repair_pmf(self, repaired_df: DataFrame, error_cells_df: DataFrame,
+    def _compute_repair_pmf(self, repaired_rows_df: DataFrame, error_cells_df: DataFrame,
                             continous_columns: List[str]) -> DataFrame:
-        # Extracts predicted cells from `repaired_df`
-        repaired_df = self._flatten(self._create_temp_view(repaired_df, 'repaired')) \
+        # Extracts predicted cells from `repaired_rows_df`
+        repaired_cells_df = self._flatten(self._create_temp_view(repaired_rows_df, 'repaired')) \
             .join(error_cells_df, [str(self.row_id), "attribute"], "inner")
 
         # Since we cannot compute pmfs for continouos values, their columns need
         # to be filtered out first.
-        discrete_repaired_df = repaired_df if len(continous_columns) == 0 \
-            else self._filter_columns_from(repaired_df, continous_columns, negate=True)
+        discrete_repaired_cells_df = repaired_cells_df if len(continous_columns) == 0 \
+            else self._filter_columns_from(repaired_cells_df, continous_columns, negate=True)
 
         parse_pmf_json_expr = "from_json(value, 'classes array<string>, probs array<double>') pmf"
         slice_probs = "slice(pmf.probs, 1, size(pmf.classes)) probs"
-        pmf_df = discrete_repaired_df \
+        pmf_df = discrete_repaired_cells_df \
             .selectExpr(f"`{self.row_id}`", "attribute", "current_value", parse_pmf_json_expr) \
             .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "pmf.classes classes", slice_probs)
 
@@ -1426,10 +1426,10 @@ class RepairModel():
 
         # Appends rows for continous values if necessary
         if len(continous_columns) > 0:
-            continous_repaired_df = self._filter_columns_from(repaired_df, continous_columns, negate=False)
+            continous_repaired_cells_df = self._filter_columns_from(repaired_cells_df, continous_columns, negate=False)
             continous_to_pmf_expr = "array(named_struct('class', value, 'prob', 1.0D)) pmf"
             to_current_expr = "named_struct('value', current_value, 'prob', 0.0D) current_value"
-            continous_pmf_df = continous_repaired_df \
+            continous_pmf_df = continous_repaired_cells_df \
                 .selectExpr(f"`{self.row_id}`", "attribute", to_current_expr, continous_to_pmf_expr)
             pmf_df = pmf_df.union(continous_pmf_df)
 
@@ -1553,7 +1553,7 @@ class RepairModel():
         #################################################################################
 
         # TODO: Could we refine repair candidates by considering given integrity constraints? (See [15])
-        repaired_df = self._repair(
+        repaired_rows_df = self._repair(
             models, continous_columns, dirty_rows_df, error_cells_df,
             compute_repair_candidate_prob,
             maximal_likelihood_repair)
@@ -1563,7 +1563,7 @@ class RepairModel():
         if compute_repair_candidate_prob and not maximal_likelihood_repair:
             assert not self.repair_by_nearest_values, '`repair_by_nearest_values` not supported in this path'
 
-            pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df, continous_columns)
+            pmf_df = self._compute_repair_pmf(repaired_rows_df, error_cells_df, continous_columns)
             pmf_df = pmf_df.selectExpr(f"`{self.row_id}`", "attribute", "current_value.value AS current_value", "pmf")
 
             # If `compute_repair_prob` is true, returns a predicted repair with
@@ -1585,7 +1585,7 @@ class RepairModel():
 
             assert not self.repair_by_nearest_values, '`repair_by_nearest_values` not supported in this path'
 
-            pmf_df = self._compute_repair_pmf(repaired_df, error_cells_df, [])
+            pmf_df = self._compute_repair_pmf(repaired_rows_df, error_cells_df, [])
             score_df = self._compute_score(pmf_df, error_cells_df)
             if compute_repair_score:
                 return score_df
@@ -1595,29 +1595,28 @@ class RepairModel():
                 return top_delta_repairs_df
 
             # If `repair_data` is True, applys the selected repair updates into `dirty_rows`
-            repaired_df = self._repair_attrs(
+            repaired_rows_df = self._repair_attrs(
                 self._create_temp_view(top_delta_repairs_df, "top_delta_repairs"),
                 self._create_temp_view(dirty_rows_df, "dirty_rows"))
 
-        # If `repair_data` is False, returns repair candidates whoes
-        # value is the same with `current_value`.
-        if not repair_data:
-            repair_candidates_df = self._flatten(self._create_temp_view(repaired_df, 'repaired')) \
-                .join(error_cells_df, [str(self.row_id), "attribute"], "inner") \
-                .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "value repaired") \
-                .where("repaired IS NULL OR not(current_value <=> repaired)")
-
-            if self.repair_by_nearest_values:
-                repair_candidates_df = repair_candidates_df.union(repaired_by_nvs_df)
-
-            if self.repair_validation_enabled:
-                return self._validate_repairs(repair_candidates_df, clean_rows_df)
-
-            return self._register_df(repair_candidates_df.cache(), 'output')
-        else:
-            clean_df = clean_rows_df.union(repaired_df)
+        if repair_data:
+            clean_df = clean_rows_df.union(repaired_rows_df)
             assert clean_df.count() == self._spark.table(input_table).count()
             return self._register_df(clean_df.cache(), 'output')
+
+        # If `repair_data` is False, returns repair candidates whoes
+        # value is not the same with `current_value`.
+        repair_candidates_df = self._flatten(self._create_temp_view(repaired_rows_df, 'repaired')) \
+            .join(error_cells_df, [str(self.row_id), "attribute"], "inner") \
+            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "value repaired") \
+            .where("repaired IS NULL OR NOT(current_value <=> repaired)")
+
+        repair_candidates_df = repair_candidates_df.union(repaired_by_nvs_df) \
+            if self.repair_by_nearest_values else repair_candidates_df
+        repair_candidates_df = self._validate_repairs(repair_candidates_df, clean_rows_df) \
+            if self.repair_validation_enabled else repair_candidates_df
+
+        return self._register_df(repair_candidates_df.cache(), 'output')
 
     def run(self, detect_errors_only: bool = False, compute_repair_candidate_prob: bool = False,
             compute_repair_prob: bool = False, compute_repair_score: bool = False,
