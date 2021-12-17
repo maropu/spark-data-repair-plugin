@@ -267,12 +267,13 @@ class ScikitLearnBackedErrorDetector(ScikitLearnBasedErrorDetector):
     def __init__(self, error_detector_cls: Any, parallel_mode_threshold: int = 10000,
                  num_parallelism: Optional[int] = None) -> None:
         ScikitLearnBasedErrorDetector.__init__(self, parallel_mode_threshold, num_parallelism)
-        self.error_detector_cls = error_detector_cls
 
-        if not hasattr(self.error_detector_cls, "__call__"):
+        if not hasattr(error_detector_cls, "__call__"):
             raise ValueError('`error_detector_cls` should be callable')
-        if not hasattr(self.error_detector_cls(), "fit_predict"):
+        if not hasattr(error_detector_cls(), "fit_predict"):
             raise ValueError('An instance that `error_detector_cls` returns should have a `fit_predict` method')
+
+        self.error_detector_cls = error_detector_cls
 
     def __str__(self) -> str:
         return f'{self.__class__.__name__}()'
