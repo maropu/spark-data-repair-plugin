@@ -26,6 +26,9 @@ class CostsTests(ReusedSQLTestCase):
     def test_Levenshtein(self):
         f = Levenshtein()
         self.assertAlmostEqual(f.compute('111', '123'), 2.0)
+        self.assertAlmostEqual(f.compute(None, '123'), None)
+        self.assertAlmostEqual(f.compute('111', None), None)
+        self.assertAlmostEqual(f.compute(None, None), None)
         self.assertAlmostEqual(f.compute(111, 123), 2.0)
         self.assertAlmostEqual(f.compute('111', 123), 2.0)
         self.assertAlmostEqual(f.compute(111, '123'), 2.0)
@@ -42,6 +45,9 @@ class CostsTests(ReusedSQLTestCase):
         import Levenshtein  # type: ignore[import]
         f = UserDefinedUpdateCostFunction(f=lambda x, y: float(1.0 / (Levenshtein.jaro(str(x), str(y)) + 0.0000001)))
         self.assertAlmostEqual(f.compute('111', '123'), 1.7999996760000587)
+        self.assertAlmostEqual(f.compute(None, '123'), None)
+        self.assertAlmostEqual(f.compute('111', None), None)
+        self.assertAlmostEqual(f.compute(None, None), None)
         self.assertAlmostEqual(f.compute(111, 123), 1.7999996760000587)
         self.assertAlmostEqual(f.compute('111', 123), 1.7999996760000587)
         self.assertAlmostEqual(f.compute(111, '123'), 1.7999996760000587)

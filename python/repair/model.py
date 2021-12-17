@@ -810,15 +810,8 @@ class RepairModel():
 
             result: List[List[float]] = []
             for target, candidates in zip(s1, s2):
-                if target is not None:
-                    if candidates is not None:
-                        result.append([cf.compute(target, c) for c in candidates])  # type: ignore
-                    else:
-                        # TODO: Fix this
-                        result.append([0.0])
-                else:
-                    # TODO: Fix this
-                    result.append([0.0] * len(candidates))
+                costs = [cf.compute(target, c) for c in candidates] if target and candidates else []  # type: ignore
+                result.append(costs)  # type: ignore
 
             return pd.Series(result)
 

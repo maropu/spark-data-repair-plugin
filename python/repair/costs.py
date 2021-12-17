@@ -30,8 +30,8 @@ class UpdateCostFunction(metaclass=ABCMeta):
     def _compute_impl(self, x: Union[str, int, float], y: Union[str, int, float]) -> Optional[float]:
         pass
 
-    def compute(self, x: Union[str, int, float], y: Union[str, int, float]) -> Optional[float]:
-        return self._compute_impl(x, y)
+    def compute(self, x: Optional[Union[str, int, float]], y: Optional[Union[str, int, float]]) -> Optional[float]:
+        return self._compute_impl(x, y) if x and y else None
 
 
 class Levenshtein(UpdateCostFunction):
