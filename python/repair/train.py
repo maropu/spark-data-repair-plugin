@@ -21,28 +21,53 @@ import copy
 import time
 import numpy as np  # type: ignore[import]
 import pandas as pd  # type: ignore[import]
+from collections import namedtuple
 from typing import Any, Dict, List, Optional, Tuple
 
-from repair.utils import elapsed_time, setup_logger
+from repair.utils import elapsed_time, is_testing, setup_logger
 
 
 _logger = setup_logger()
 
 
 # List of internal configurations
-_opt_boosting_type = 'model.lgb.boosting_type'
-_opt_class_weight = 'model.lgb.class_weight'
-_opt_learning_rate = 'model.lgb.learning_rate'
-_opt_max_depth = 'model.lgb.max_depth'
-_opt_max_bin = 'model.lgb.max_bin'
-_opt_reg_alpha = 'model.lgb.reg_alpha'
-_opt_min_split_gain = 'model.lgb.min_split_gain'
-_opt_n_estimators = 'model.lgb.n_estimators'
-_opt_importance_type = 'model.lgb.importance_type'
-_opt_n_splits = 'model.cv.n_splits'
-_opt_timeout = 'model.hp.timeout'
-_opt_max_evals = 'model.hp.max_evals'
-_opt_no_progress_loss = 'model.hp.no_progress_loss'
+_option = namedtuple('_option', 'key default_value type_class validator err_msg')
+
+_opt_boosting_type = \
+    _option('model.lgb.boosting_type', 'gbdt', str,
+            lambda v: v in ['gbdt', 'dart', 'goss', 'rf'], "`{}` should be in ['gbdt', 'dart', 'goss', 'rf']")
+_opt_class_weight = \
+    _option('model.lgb.class_weight', 'balanced', str, None, None)
+_opt_learning_rate = \
+    _option('model.lgb.learning_rate', 0.01, float,
+            lambda v: v > 0.0, '`{}` should be positive')
+_opt_max_depth = \
+    _option('model.lgb.max_depth', 7, int, None, None)
+_opt_max_bin = \
+    _option('model.lgb.max_bin', 255, int, None, None)
+_opt_reg_alpha = \
+    _option('model.lgb.reg_alpha', 0.0, float,
+            lambda v: v >= 0.0, '`{}` should be greater than or equal to 0.0')
+_opt_min_split_gain = \
+    _option('model.lgb.min_split_gain', 0.0, float,
+            lambda v: v >= 0.0, '`{}` should be greater than or equal to 0.0')
+_opt_n_estimators = \
+    _option('model.lgb.n_estimators', 300, int,
+            lambda v: v > 0, '`{}` should be positive')
+_opt_importance_type = \
+    _option('model.lgb.importance_type', 'gain', str,
+            lambda v: v in ['split', 'gain'], "`{}` should be in ['split', 'gain']")
+_opt_n_splits = \
+    _option('model.cv.n_splits', 3, int,
+            lambda v: v >= 3, '`{}` should be greater than 2')
+_opt_timeout = \
+    _option('model.hp.timeout', 0, int, None, None)
+_opt_max_evals = \
+    _option('model.hp.max_evals', 100000000, int,
+            lambda v: v > 0, '`{}` should be positive')
+_opt_no_progress_loss = \
+    _option('model.hp.no_progress_loss', 50, int,
+            lambda v: v > 0, '`{}` should be positive')
 
 
 @elapsed_time  # type: ignore
@@ -50,55 +75,32 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
                      opts: Dict[str, str]) -> Tuple[Any, float]:
     import lightgbm as lgb  # type: ignore[import]
 
-    def _get_option_value(key: str, default_value: Any, type_class: Any = str) -> Any:
+    def _get_option_value(key: str, default_value: Any, type_class: Any = str,
+                          validator: Optional[Any] = None, err_msg: Optional[str] = None) -> Any:
         assert type(default_value) is type_class
-        if key in opts:
-            try:
-                return type_class(opts[key])
-            except:
-                _logger.warning(f'Failed to cast "{opts[key]}" into {type_class.__name__} data: key={key}')
-                pass
 
-        return default_value
+        if key not in opts:
+            return default_value
 
-    def _boosting_type() -> str:
-        return _get_option_value(_opt_boosting_type, "gbdt")
+        try:
+            value = type_class(opts[key])
+        except:
+            msg = f'Failed to cast "{opts[key]}" into {type_class.__name__} data: key={key}'
+            if is_testing():
+                raise ValueError(msg)
 
-    def _class_weight() -> str:
-        return _get_option_value(_opt_class_weight, "balanced")
+            _logger.warning(msg)
+            return default_value
 
-    def _learning_rate() -> float:
-        return float(_get_option_value(_opt_learning_rate, 0.01, type_class=float))
+        if validator and not validator(value):
+            msg = f'{str(err_msg).format(key)}, got {value}'
+            if is_testing():
+                raise ValueError(msg)
 
-    def _max_depth() -> int:
-        return int(_get_option_value(_opt_max_depth, 7, type_class=int))
+            _logger.warning(msg)
+            return default_value
 
-    def _max_bin() -> int:
-        return int(_get_option_value(_opt_max_bin, 255, type_class=int))
-
-    def _reg_alpha() -> float:
-        return float(_get_option_value(_opt_reg_alpha, 0.0, type_class=float))
-
-    def _min_split_gain() -> float:
-        return float(_get_option_value(_opt_min_split_gain, 0.0, type_class=float))
-
-    def _n_estimators() -> int:
-        return int(_get_option_value(_opt_n_estimators, 300, type_class=int))
-
-    def _importance_type() -> str:
-        return _get_option_value(_opt_importance_type, "gain")
-
-    def _n_splits() -> int:
-        return int(_get_option_value(_opt_n_splits, 3, type_class=int))
-
-    def _timeout() -> int:
-        return int(_get_option_value(_opt_timeout, 0, type_class=int))
-
-    def _max_eval() -> int:
-        return int(_get_option_value(_opt_max_evals, 100000000, type_class=int))
-
-    def _no_progress_loss() -> int:
-        return int(_get_option_value(_opt_no_progress_loss, 50, type_class=int))
+        return value
 
     if is_discrete:
         objective = "binary" if num_class <= 2 else "multiclass"
@@ -106,16 +108,16 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
         objective = "regression"
 
     fixed_params = {
-        "boosting_type": _boosting_type(),
+        "boosting_type": _get_option_value(*_opt_boosting_type),
         "objective": objective,
-        "class_weight": _class_weight(),
-        "learning_rate": _learning_rate(),
-        "max_depth": _max_depth(),
-        "max_bin": _max_bin(),
-        "reg_alpha": _reg_alpha(),
-        "min_split_gain": _min_split_gain(),
-        "n_estimators": _n_estimators(),
-        "importance_type": _importance_type(),
+        "class_weight": _get_option_value(*_opt_class_weight),
+        "learning_rate": _get_option_value(*_opt_learning_rate),
+        "max_depth": _get_option_value(*_opt_max_depth),
+        "max_bin": _get_option_value(*_opt_max_bin),
+        "reg_alpha": _get_option_value(*_opt_reg_alpha),
+        "min_split_gain": _get_option_value(*_opt_min_split_gain),
+        "n_estimators": _get_option_value(*_opt_n_estimators),
+        "importance_type": _get_option_value(*_opt_importance_type),
         "random_state": 42,
         "n_jobs": n_jobs
     }
@@ -162,8 +164,9 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
     }
 
     scorer = "f1_macro" if is_discrete else "neg_mean_squared_error"
-    cv = StratifiedKFold(n_splits=_n_splits(), shuffle=True) if is_discrete \
-        else KFold(n_splits=_n_splits(), shuffle=True)
+    n_splits = int(_get_option_value(*_opt_n_splits))
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True) if is_discrete \
+        else KFold(n_splits=n_splits, shuffle=True)
 
     def _objective(params: Dict[str, Any]) -> float:
         model = _create_model(params)
@@ -184,8 +187,9 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
             return 0.0
 
     def _early_stop_fn() -> Any:
-        no_progress_loss_fn = no_progress_loss(_no_progress_loss())
-        if _timeout() <= 0:
+        no_progress_loss_fn = no_progress_loss(int(_get_option_value(*_opt_no_progress_loss)))
+        timeout = int(_get_option_value(*_opt_timeout))
+        if timeout <= 0:
             return no_progress_loss_fn
 
         # Set base time for budget mechanism
@@ -193,25 +197,26 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
 
         def timeout_fn(trials, best_loss=None, iteration_no_progress=0):  # type: ignore
             no_progress_loss, meta = no_progress_loss_fn(trials, best_loss, iteration_no_progress)
-            timeout = time.time() - start_time > _timeout()
-            return no_progress_loss or timeout, meta
+            to = time.time() - start_time > timeout
+            return no_progress_loss or to, meta
 
         return timeout_fn
 
     try:
         trials = Trials()
+        max_evals = int(_get_option_value(*_opt_max_evals))
         best_params = fmin(
             fn=_objective,
             space=param_space,
             algo=tpe.suggest,
             trials=trials,
-            max_evals=_max_eval(),
+            max_evals=max_evals,
             early_stop_fn=_early_stop_fn(),
             rstate=np.random.RandomState(42),
             show_progressbar=False,
             verbose=False)
 
-        _logger.info("hyperopt: #eval={}/{}".format(len(trials.trials), _max_eval()))
+        _logger.info("hyperopt: #eval={}/{}".format(len(trials.trials), max_evals))
 
         # Builds a model with `best_params`
         # TODO: Could we extract constraint rules (e.g., FD and CFD) from built statistical models?
@@ -234,19 +239,19 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
 
 def model_configuration_keys() -> List[str]:
     return [
-        _opt_boosting_type,
-        _opt_class_weight,
-        _opt_learning_rate,
-        _opt_max_depth,
-        _opt_max_bin,
-        _opt_reg_alpha,
-        _opt_min_split_gain,
-        _opt_n_estimators,
-        _opt_importance_type,
-        _opt_n_splits,
-        _opt_timeout,
-        _opt_max_evals,
-        _opt_no_progress_loss
+        _opt_boosting_type.key,
+        _opt_class_weight.key,
+        _opt_learning_rate.key,
+        _opt_max_depth.key,
+        _opt_max_bin.key,
+        _opt_reg_alpha.key,
+        _opt_min_split_gain.key,
+        _opt_n_estimators.key,
+        _opt_importance_type.key,
+        _opt_n_splits.key,
+        _opt_timeout.key,
+        _opt_max_evals.key,
+        _opt_no_progress_loss.key
     ]
 
 

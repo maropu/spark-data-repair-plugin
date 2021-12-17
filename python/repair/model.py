@@ -506,27 +506,28 @@ class RepairModel():
                           validator: Optional[Any] = None, err_msg: Optional[str] = None) -> Any:
         assert type(default_value) is type_class
 
-        if key in self.opts:
-            try:
-                v = type_class(self.opts[key])
-                if validator and not validator(v):
-                    msg = f'{str(err_msg).format(key)}, got {v}'
-                    if is_testing():
-                        raise ValueError(msg)
+        if key not in self.opts:
+            return default_value
 
-                    _logger.warning(msg)
-                    return default_value
+        try:
+            value = type_class(self.opts[key])
+        except:
+            msg = f'Failed to cast "{self.opts[key]}" into {type_class.__name__} data: key={key}'
+            if is_testing():
+                raise ValueError(msg)
 
-                return v
-            except:
-                msg = f'Failed to cast "{self.opts[key]}" into {type_class.__name__} data: key={key}'
-                if is_testing():
-                    raise ValueError(msg)
-                else:
-                    _logger.warning(msg)
-                    pass
+            _logger.warning(msg)
+            return default_value
 
-        return default_value
+        if validator and not validator(value):
+            msg = f'{str(err_msg).format(key)}, got {value}'
+            if is_testing():
+                raise ValueError(msg)
+
+            _logger.warning(msg)
+            return default_value
+
+        return value
 
     def _target_attrs(self, input_columns: List[str]) -> List[str]:
         target_attrs = list(filter(lambda c: c != self.row_id, input_columns))
