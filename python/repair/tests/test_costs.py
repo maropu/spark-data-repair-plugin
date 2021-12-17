@@ -32,6 +32,10 @@ class CostsTests(ReusedSQLTestCase):
         self.assertEqual(f.compute(1.11, 1.23), 2.0)
         self.assertEqual(f.compute('1.11', 1.23), 2.0)
         self.assertEqual(f.compute(1.11, '1.23'), 2.0)
+        # TODO: It looks like '1xx%' should be closer to '100%' than '12%' in this case
+        self.assertEqual(f.compute('1xx%', '100%'), f.compute('1xx%', '12%'))
+        self.assertEqual(f.compute('1xx%', '100%'), f.compute('1xx%', '1%'))
+        self.assertLess(f.compute('1xx%', '100%'), f.compute('1xx%', '2%'))
 
 
 if __name__ == "__main__":
