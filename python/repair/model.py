@@ -145,17 +145,6 @@ class RepairModel():
         # Options for internal behaviours
         self.opts: Dict[str, str] = {}
 
-        # Temporary views to keep intermediate results; these views are automatically
-        # created when repairing data, and then dropped finally.
-        #
-        # TODO: Move this variable into a runtime env
-        self._intermediate_views_on_runtime: List[str] = []
-
-        # JVM interfaces for Data Repair/Graph APIs
-        self._spark = SparkSession.builder.getOrCreate()
-        self._jvm = self._spark.sparkContext._active_spark_context._jvm  # type: ignore
-        self._repair_api = self._jvm.RepairApi
-
         # List of internal configurations
         from collections import namedtuple
         option = namedtuple('option', 'key default_value type_class validator err_msg')
@@ -217,6 +206,17 @@ class RepairModel():
             self._opt_prob_threshold.key,
             self._opt_prob_top_k.key,
             *model_configuration_keys()])
+
+        # Temporary views to keep intermediate results; these views are automatically
+        # created when repairing data, and then dropped finally.
+        #
+        # TODO: Move this variable into a runtime env
+        self._intermediate_views_on_runtime: List[str] = []
+
+        # JVM interfaces for Data Repair/Graph APIs
+        self._spark = SparkSession.builder.getOrCreate()
+        self._jvm = self._spark.sparkContext._active_spark_context._jvm  # type: ignore
+        self._repair_api = self._jvm.RepairApi
 
     @argtype_check  # type: ignore
     def setDbName(self, db_name: str) -> "RepairModel":
