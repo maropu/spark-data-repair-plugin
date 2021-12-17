@@ -935,9 +935,10 @@ class RepairModel():
         if len(constraint_detectors) == 1:
             input_view = self._create_temp_view(train_df, 'input_to_compute_fdeps')
             constraints = constraint_detectors[0]
-            constraints.setUp(str(self.row_id), input_view, continous_columns, target_columns)  # type: ignore
+            constraint_targets = list(filter(lambda c: c in constraints.targets, target_columns)) \
+                if constraints.targets else target_columns
             func_deps = json.loads(self._repair_api.computeFunctionalDeps(
-                input_view, constraints.constraint_path, ",".join(constraints.targets)))  # type: ignore
+                input_view, constraints.constraint_path, ",".join(constraint_targets)))  # type: ignore
             return func_deps
         elif len(constraint_detectors) >= 1:
             _logger.warning(f'Multiple constraint classes not supported for detecting functional deps')

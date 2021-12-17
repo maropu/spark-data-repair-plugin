@@ -305,16 +305,26 @@ class RepairModelTests(ReusedSQLTestCase):
         m = self._build_model()
         m.opts = {'key1': 'abcd', 'key2': '1', 'key3': '3.2'}
         self.assertEqual(m._get_option_value('key1', 'efgh', type_class=str), 'abcd')
-        self.assertEqual(m._get_option_value('non.existent', 'efgh', type_class=str), 'efgh')
         self.assertEqual(m._get_option_value('key2', 3, type_class=int), 1)
-        self.assertEqual(m._get_option_value('non.existent', 3, type_class=int), 3)
-        self.assertEqual(m._get_option_value('key1', 2, type_class=int), 2)
-        self.assertEqual(m._get_option_value('key3', 2, type_class=int), 2)
         self.assertEqual(m._get_option_value('key3', 0.0, type_class=float), 3.2)
-        self.assertEqual(m._get_option_value('non.existent', 0.0, type_class=float), 0.0)
-        self.assertEqual(m._get_option_value('key1', 0.0, type_class=float), 0.0)
         self.assertEqual(m._get_option_value('key2', False, type_class=bool), True)
+        self.assertEqual(m._get_option_value('non.existent', 'efgh', type_class=str), 'efgh')
+        self.assertEqual(m._get_option_value('non.existent', 3, type_class=int), 3)
+        self.assertEqual(m._get_option_value('non.existent', 0.0, type_class=float), 0.0)
         self.assertEqual(m._get_option_value('non.existent', False, type_class=bool), False)
+
+        self.assertRaisesRegexp(
+            ValueError,
+            'Failed to cast "abcd" into int data: key=key1',
+            lambda: m._get_option_value('key1', 2, type_class=int))
+        self.assertRaisesRegexp(
+            ValueError,
+            'Failed to cast "abcd" into float data: key=key1',
+            lambda: m._get_option_value('key1', 0.0, type_class=float))
+        self.assertRaisesRegexp(
+            ValueError,
+            'Failed to cast "3.2" into int data: key=key3',
+            lambda: m._get_option_value('key3', 2, type_class=int))
 
     def test_multiple_run(self):
         # Checks if auto-generated views are dropped finally
@@ -344,7 +354,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 .option('model.lgb.importance_type', 'gain') \
                 .option('model.cv.n_splits', '3') \
                 .option('model.hp.timeout', '0') \
-                .option('model.hp.max_evals', '100000000') \
+                .option('model.hp.max_evals', '1') \
                 .option('model.hp.no_progress_loss', '50')
             self.assertEqual(
                 test_model.run().orderBy("tid", "attribute").collect(),
@@ -874,7 +884,7 @@ class RepairModelTests(ReusedSQLTestCase):
                     .setErrorCells("errorCells") \
                     .setErrorDetectors(error_detectors) \
                     .setRepairByFunctionalDeps(True) \
-                    .option('model.rule.max_domain_size', '12')
+                    .option('model.rule.max_domain_size', '1000')
                 self.assertEqual(
                     test_model.run().orderBy("tid", "attribute").collect(), [
                         Row(tid=3, attribute="y", current_value=None, repaired="test-1"),
