@@ -808,10 +808,12 @@ class RepairModel():
         def cost_func(s1: pd.Series, s2: pd.Series) -> pd.Series:
             cf = broadcasted_cf.value
 
-            result: List[List[float]] = []
+            result: List[Optional[List[float]]] = []
             for target, candidates in zip(s1, s2):
-                costs = [cf.compute(target, c) for c in candidates] if target and candidates else []  # type: ignore
-                result.append(costs)  # type: ignore
+                if target and candidates is not None:
+                    result.append([float(cf.compute(target, c)) for c in candidates])  # type: ignore
+                else:
+                    result.append(None)
 
             return pd.Series(result)
 
@@ -1361,7 +1363,8 @@ class RepairModel():
 
         pmf_weight = float(self._get_option_value(*self._opt_cost_weight))
         cost_func = self._create_cost_func()
-        to_weighted_probs = f"zip_with(probs, costs, (p, c) -> p * (1.0 / (1.0 + {pmf_weight} * c)))"
+        to_weighted_probs = "if(costs IS NOT NULL, zip_with(probs, costs, " \
+            f"(p, c) -> p * (1.0 / (1.0 + {pmf_weight} * c))), probs)"
         if self.cf.targets:  # type: ignore
             _logger.info(f'[Repairing Phase] {self.cf} computing weighting probs...')
             cf_targets = ",".join(map(lambda x: f"'{x}'", self.cf.targets))  # type: ignore
@@ -1446,8 +1449,8 @@ class RepairModel():
 
         maximal_likelihood_repair_expr = "named_struct('value', pmf[0].class, 'prob', pmf[0].prob) repaired"
         current_expr = "IF(ISNOTNULL(current_value.value), current_value.value, repaired.value)"
-        score_expr = "ln(repaired.prob / IF(current_value.prob > 0.0, current_value.prob, 1e-6)) " \
-            "* (1.0 / (1.0 + cost)) score"
+        score_expr = "ln(repaired.prob / IF(current_value.prob > 0.0, current_value.prob, 1e-6)) *" \
+            "(1.0 / (1.0 + coalesce(cost, 256.0))) score"
         score_df = pmf_df \
             .selectExpr(f"`{self.row_id}`", "attribute", "current_value", maximal_likelihood_repair_expr) \
             .withColumn("cost", cost_func(expr(current_expr), col("repaired.value"))) \
