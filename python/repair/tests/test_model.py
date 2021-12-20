@@ -243,9 +243,11 @@ class RepairModelTests(ReusedSQLTestCase):
         test_model = RepairModel() \
             .setTableName("adult") \
             .setRowId("tid") \
-            .setRepairByRules(True)
+            .setRepairByRules(True) \
+            .setUpdateCostFunction(Levenshtein()) \
+            .setRepairDelta(3)
         expected_error_msg = "Cannot repair data by nearest values when enabling `maximal_likelihood_repair`, " \
-            "`compute_repair_candidate_prob`, `compute_repair_prob`, or `compute_repair_score`",
+            "`compute_repair_candidate_prob`, `compute_repair_prob`, or `compute_repair_score`"
         self.assertRaisesRegexp(
             ValueError,
             expected_error_msg,
@@ -292,6 +294,7 @@ class RepairModelTests(ReusedSQLTestCase):
             ('model.small_domain_threshold', '12'),
             ('model.rule.repair_by_nearest_values.disabled', '1'),
             ('model.rule.merge_threshold', '2.0'),
+            ('model.rule.repair_by_regex.disabled', '1'),
             ('model.rule.repair_by_functional_deps.disabled', '1'),
             ('model.rule.max_domain_size', '1000'),
             ('repair.pmf.cost_weight', '0.1'),

@@ -30,7 +30,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pyspark.sql import DataFrame, SparkSession, functions  # type: ignore[import]
 from pyspark.sql.functions import col, expr  # type: ignore[import]
-from pyspark.sql.types import ByteType, IntegerType, LongType, ShortType, StructType  # type: ignore[import]
+from pyspark.sql.types import ByteType, IntegerType, LongType, ShortType, \
+    StringType, StructField, StructType  # type: ignore[import]
 
 from repair.costs import UpdateCostFunction
 from repair.detectors import ConstraintErrorDetector, DomainValues, ErrorDetector, NullErrorDetector
@@ -175,12 +176,18 @@ class RepairModel():
         self._opt_small_domain_threshold = \
             option('model.small_domain_threshold', 12, int,
                    lambda v: v >= 3, '`{}` should be greater than 2')
-        self._opt_repair_by_nearest_values = \
-            option('model.rule.repair_by_nearest_values.disabled', False, bool, None, None)
+        self._opt_repair_by_nearest_values_disabled = \
+            option('model.rule.repair_by_nearest_values.disabled', False, bool,
+                   None, None)
         self._opt_merge_threshold = \
-            option('model.rule.merge_threshold', 2.0, float, None, None)
+            option('model.rule.merge_threshold', 2.0, float,
+                   None, None)
+        self._opt_repair_by_regex_disabled = \
+            option('model.rule.repair_by_regex.disabled', False, bool,
+                   None, None)
         self._opt_repair_by_functional_deps_disabled = \
-            option('model.rule.repair_by_functional_deps.disabled', False, bool, None, None)
+            option('model.rule.repair_by_functional_deps.disabled', False, bool,
+                   None, None)
         self._opt_max_domain_size = \
             option('model.rule.max_domain_size', 1000, int,
                    lambda v: v > 10, '`{}` should be greater than 10')
@@ -188,7 +195,8 @@ class RepairModel():
             option('repair.pmf.cost_weight', 0.1, float,
                    lambda v: v > 0.0, '`{}` should be positive')
         self._opt_prob_threshold = \
-            option('repair.pmf.prob_threshold', 0.0, float, None, None)
+            option('repair.pmf.prob_threshold', 0.0, float,
+                   None, None)
         self._opt_prob_top_k = \
             option('repair.pmf.prob_top_k', self.discrete_thres, int,
                    lambda v: v >= 3, '`{}` should be greater than 2')
@@ -203,7 +211,10 @@ class RepairModel():
             self._opt_max_training_row_num.key,
             self._opt_max_training_column_num.key,
             self._opt_small_domain_threshold.key,
+            self._opt_repair_by_nearest_values_disabled.key,
             self._opt_merge_threshold.key,
+            self._opt_repair_by_regex_disabled.key,
+            self._opt_repair_by_functional_deps_disabled.key,
             self._opt_max_domain_size.key,
             self._opt_cost_weight.key,
             self._opt_prob_threshold.key,
@@ -490,6 +501,21 @@ class RepairModel():
             raise ValueError(f"Error cells should have `{self.row_id}` and "
                              "`attribute` in columns")
         return self._create_temp_view(df, "error_cells")
+
+    @property
+    def _repair_by_nearest_values_enabled(self) -> bool:
+        return not bool(self._get_option_value(*self._opt_repair_by_nearest_values_disabled)) \
+            and self.repair_by_rules and self.cf is not None
+
+    @property
+    def _repair_by_regex_enabled(self) -> bool:
+        return not bool(self._get_option_value(*self._opt_repair_by_regex_disabled)) \
+            and self.repair_by_rules
+
+    @property
+    def _repair_by_functional_deps_enabled(self) -> bool:
+        return not bool(self._get_option_value(*self._opt_repair_by_functional_deps_disabled)) \
+            and self.repair_by_rules
 
     def _get_option_value(self, key: str, default_value: Any, type_class: Any = str,
                           validator: Optional[Any] = None, err_msg: Optional[str] = None) -> Any:
@@ -808,6 +834,11 @@ class RepairModel():
 
         return cost_func
 
+    def _empty_repaired_cells_dataframe(self, row_id_field: StructField) -> DataFrame:
+        field_names = ['attribute', 'current_value', 'repaired']
+        fields = [row_id_field] + list(map(lambda n: StructField(n, StringType()), field_names))
+        return self._empty_dataframe(StructType(fields))
+
     def _repair_by_nearest_values(self, repair_base_df: DataFrame,
                                   error_cells_df: DataFrame,
                                   target_columns: List[str]) -> Tuple[DataFrame, DataFrame]:
@@ -817,9 +848,8 @@ class RepairModel():
         targets = list(filter(lambda c: c in cf_targets, target_columns)) \
             if cf_targets else target_columns
         if not targets:
-            from pyspark.sql.types import StructType, StructField, StringType
-            repaired_schema = StructType(error_cells_df.schema.fields + [StructField('repaired', StringType())])
-            return error_cells_df, self._empty_dataframe(repaired_schema)
+            row_id_field = error_cells_df.schema[str(self.row_id)]
+            return error_cells_df, self._empty_repaired_cells_dataframe(row_id_field)
 
         cost_func = self._create_cost_func()
         compute_dvs = lambda c: repair_base_df.where(f'`{c}` IS NOT NULL') \
@@ -849,6 +879,36 @@ class RepairModel():
             .selectExpr(f"`{self.row_id}`", "attribute", "current_value")
 
         return error_cells_df, repaired_df
+
+    def _repair_by_regex(self, repair_base_df: DataFrame,
+                         error_cells_df: DataFrame,
+                         target_columns: List[str]) -> Tuple[DataFrame, DataFrame]:
+        # TODO: Needs to Implement a repair strategy using regular expressions (See [17])
+        row_id_field = error_cells_df.schema[str(self.row_id)]
+        empty_repaired_cells_df = self._empty_repaired_cells_dataframe(row_id_field)
+        return error_cells_df, empty_repaired_cells_df
+
+    def _repair_by_rules(self, repair_base_df: DataFrame,
+                         error_cells_df: DataFrame,
+                         target_columns: List[str]) -> Tuple[DataFrame, DataFrame]:
+        repaired_cells_dfs: List[DataFrame] = []
+
+        # Adds an empty dataframe for unioning result repaired dataframes
+        row_id_field = error_cells_df.schema[str(self.row_id)]
+        repaired_cells_dfs.append(self._empty_repaired_cells_dataframe(row_id_field))
+
+        if self._repair_by_nearest_values_enabled:
+            error_cells_df, repaired_by_nv_df = \
+                self._repair_by_nearest_values(repair_base_df, error_cells_df, target_columns)
+            repaired_cells_dfs.append(repaired_by_nv_df)
+
+        if self._repair_by_regex_enabled:
+            error_cells_df, repaired_by_regex_df = \
+                self._repair_by_regex(repair_base_df, error_cells_df, target_columns)
+            repaired_cells_dfs.append(repaired_by_regex_df)
+
+        repaired_by_rules_df = functools.reduce(lambda x, y: x.union(y), repaired_cells_dfs)
+        return error_cells_df, repaired_by_rules_df
 
     # Selects relevant features if necessary. To reduce model training time,
     # it is important to drop non-relevant in advance.
@@ -1125,16 +1185,6 @@ class RepairModel():
             models[row.target] = (model, features, transformers)
 
         return logs
-
-    @property
-    def _repair_by_nearest_values_enabled(self) -> bool:
-        return not bool(self._get_option_value(*self._opt_repair_by_nearest_values)) \
-            and self.repair_by_rules
-
-    @property
-    def _repair_by_functional_deps_enabled(self) -> bool:
-        return not bool(self._get_option_value(*self._opt_repair_by_functional_deps_disabled)) \
-            and self.repair_by_rules
 
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, train_df: DataFrame, target_columns: List[str], continous_columns: List[str],
@@ -1533,10 +1583,9 @@ class RepairModel():
         repair_base_df = self._prepare_repair_base_cells(input_table, error_cells_df, target_columns)
 
         # Refines the repair base table to extract more clean data using a specified cost function
-        if self._repair_by_nearest_values_enabled:
-            error_cells_df, repaired_by_nvs_df = \
-                self._repair_by_nearest_values(repair_base_df, error_cells_df, target_columns)
-            repair_base_df = self._repair_attrs(repaired_by_nvs_df, repair_base_df)
+        if self.repair_by_rules:
+            error_cells_df, repaired_by_rules_df = self._repair_by_rules(repair_base_df, error_cells_df, target_columns)
+            repair_base_df = self._repair_attrs(repaired_by_rules_df, repair_base_df)
 
         # Selects rows for training, building models, and repairing cells
         clean_rows_df, dirty_rows_df = \
@@ -1611,8 +1660,8 @@ class RepairModel():
             .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "value repaired") \
             .where("repaired IS NULL OR NOT(current_value <=> repaired)")
 
-        repair_candidates_df = repair_candidates_df.union(repaired_by_nvs_df) \
-            if self._repair_by_nearest_values_enabled else repair_candidates_df
+        repair_candidates_df = repair_candidates_df.union(repaired_by_rules_df) \
+            if self.repair_by_rules else repair_candidates_df
         repair_candidates_df = self._validate_repairs(repair_candidates_df, clean_rows_df) \
             if self.repair_validation_enabled else repair_candidates_df
 
