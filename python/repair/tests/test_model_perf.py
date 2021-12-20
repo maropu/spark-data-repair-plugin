@@ -201,13 +201,18 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         ]
 
         # Sets params for a hospital repair model
-        from repair.detectors import ConstraintErrorDetector
+        from repair.detectors import ConstraintErrorDetector, RegExErrorDetector
         constraint_path = "{}/hospital_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
+        error_detectors = [
+            ConstraintErrorDetector(constraint_path, targets=rule_based_model_targets),
+            RegExErrorDetector("Sample", "^[0-9]{1,3} patients$"),
+            RegExErrorDetector("Score", "^[0-9]{1,3}%$")
+        ]
         repaired_df = self._build_model("hospital") \
             .setErrorCells("hospital_error_cells") \
             .setDiscreteThreshold(400) \
             .setTargets(repair_targets) \
-            .setErrorDetectors([ConstraintErrorDetector(constraint_path, targets=rule_based_model_targets)]) \
+            .setErrorDetectors(error_detectors) \
             .setRepairByFunctionalDeps(True) \
             .setRepairByNearestValues(True) \
             .setUpdateCostFunction(Levenshtein(targets=weighted_prob_targets)) \
