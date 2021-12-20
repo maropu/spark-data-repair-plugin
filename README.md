@@ -309,7 +309,7 @@ delphi.repair
 
 ## TODO
 
- - Implements a repair strategy using regular expressions (See [17])
+ - Implements a rule-based repair strategy using regular expressions (See [17])
 
 ## Bug Reports
 
