@@ -41,8 +41,7 @@ model to repair them.
     RepairModel.setTrainingDataRebalancingEnabled
     RepairModel.setRepairDelta
     RepairModel.setRowId
-    RepairModel.setRepairByFunctionalDepst
-    RepairModel.setRepairByNearestValues
+    RepairModel.setRepairByRules
     RepairModel.setParallelStatTrainingEnabled
     RepairModel.setTableName
     RepairModel.setTargets

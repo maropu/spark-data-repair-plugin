@@ -271,9 +271,9 @@ delphi.repair
   .setDiscreteThreshold(int)                   // max domain size of discrete values (default: 80)
 
   // Parameters for Repair Model Training
-  .setRepairByFunctionalDeps                   // whether to enable rule-based models based on functional dependencies (default: False)
-  .setTrainingDataRebalancingEnabled(bool)     // whether to rebalance class labels in training data (default: False)
+  .setRepairByRules(bool)                      // whether to enable rule-based repair techniques, e.g., using functional dependencies and merging nearest values (default: False)
   .setParallelStatTrainingEnabled(bool)        // whether to run multiples tasks to build stat repair models (default: False)
+  .setTrainingDataRebalancingEnabled(bool)     // whether to rebalance class labels in training data (default: False)
 
   // Parameters for Repairing
   .setRepairDelta(int)                         // max number of applied repairs

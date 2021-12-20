@@ -124,9 +124,8 @@ class RepairModel():
 
         # Parameters for repair model training
         self.parallel_stat_training_enabled: bool = False
-        self.repair_by_functional_deps: bool = False
-        self.repair_by_nearest_values: bool = False
         self.training_data_rebalancing_enabled: bool = False
+        self.repair_by_rules: bool = False
 
         # Parameters for repairing
         self.repair_delta: Optional[int] = None
@@ -176,8 +175,12 @@ class RepairModel():
         self._opt_small_domain_threshold = \
             option('model.small_domain_threshold', 12, int,
                    lambda v: v >= 3, '`{}` should be greater than 2')
+        self._opt_repair_by_nearest_values = \
+            option('model.rule.repair_by_nearest_values.disabled', False, bool, None, None)
         self._opt_merge_threshold = \
             option('model.rule.merge_threshold', 2.0, float, None, None)
+        self._opt_repair_by_functional_deps_disabled = \
+            option('model.rule.repair_by_functional_deps.disabled', False, bool, None, None)
         self._opt_max_domain_size = \
             option('model.rule.max_domain_size', 1000, int,
                    lambda v: v > 10, '`{}` should be greater than 10')
@@ -400,35 +403,6 @@ class RepairModel():
         return self
 
     @argtype_check  # type: ignore
-    def setRepairByFunctionalDeps(self, enabled: bool) -> "RepairModel":
-        """Specifies whether to enable rule-based models based on functional dependencies.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        enabled: bool
-            If set to ``True``, uses rule-based models if possible (default: ``False``).
-        """
-        self.repair_by_functional_deps = enabled
-        return self
-
-    @argtype_check  # type: ignore
-    def setRepairByNearestValues(self, enabled: bool) -> "RepairModel":
-        """Specifies whether to enable a repairing technique based on value vicinity.
-
-        .. versionchanged:: 0.1.0
-
-        Parameters
-        ----------
-        enabled: bool
-            If set to ``True``, repairs dirty cells based on their value vicinity before
-            building statistical models (default: ``False``).
-        """
-        self.repair_by_nearest_values = enabled
-        return self
-
-    @argtype_check  # type: ignore
     def setTrainingDataRebalancingEnabled(self, enabled: bool) -> "RepairModel":
         """Specifies whether to enable class rebalancing in training data.
 
@@ -440,6 +414,21 @@ class RepairModel():
             If set to ``True``, rebalance class labels in training data (default: ``False``).
         """
         self.training_data_rebalancing_enabled = enabled
+        return self
+
+    @argtype_check  # type: ignore
+    def setRepairByRules(self, enabled: bool) -> "RepairModel":
+        """Specifies whether to enable rule-based repair techniques, e.g., using functional
+           dependencies and merging nearest values.
+
+        .. versionchanged:: 0.1.0
+
+        Parameters
+        ----------
+        enabled: bool
+            If set to ``True``, uses rule-based ways to repair data if possible (default: ``False``).
+        """
+        self.repair_by_rules = enabled
         return self
 
     @argtype_check  # type: ignore
@@ -1137,6 +1126,16 @@ class RepairModel():
 
         return logs
 
+    @property
+    def _repair_by_nearest_values_enabled(self) -> bool:
+        return not bool(self._get_option_value(*self._opt_repair_by_nearest_values)) \
+            and self.repair_by_rules
+
+    @property
+    def _repair_by_functional_deps_enabled(self) -> bool:
+        return not bool(self._get_option_value(*self._opt_repair_by_functional_deps_disabled)) \
+            and self.repair_by_rules
+
     @_spark_job_group(name="repair model training")
     def _build_repair_models(self, train_df: DataFrame, target_columns: List[str], continous_columns: List[str],
                              domain_stats: Dict[str, str],
@@ -1178,10 +1177,9 @@ class RepairModel():
             feature_map[y] = features
             transformer_map[y] = self._create_transformers(domain_stats, features, continous_columns)
 
-        # If `self.repair_by_functional_deps` is `True`, try to analyze
-        # functional deps on training data.
+        # If `self.repair_by_rules` is `True`, try to analyze functional deps on training data.
         functional_deps = self._get_functional_deps(train_df, target_columns, continous_columns) \
-            if self.repair_by_functional_deps else None
+            if self._repair_by_functional_deps_enabled else None
         if functional_deps is not None:
             _logger.debug(f"Functional deps found: {functional_deps}")
 
@@ -1238,7 +1236,7 @@ class RepairModel():
         assert len(models) == len(target_columns)
 
         # Resolve the conflict dependencies of the predictions
-        if self.repair_by_functional_deps:
+        if self._repair_by_functional_deps_enabled:
             pred_ordered_models = []
             error_columns = copy.deepcopy(target_columns)
 
@@ -1535,7 +1533,7 @@ class RepairModel():
         repair_base_df = self._prepare_repair_base_cells(input_table, error_cells_df, target_columns)
 
         # Refines the repair base table to extract more clean data using a specified cost function
-        if self.repair_by_nearest_values:
+        if self._repair_by_nearest_values_enabled:
             error_cells_df, repaired_by_nvs_df = \
                 self._repair_by_nearest_values(repair_base_df, error_cells_df, target_columns)
             repair_base_df = self._repair_attrs(repaired_by_nvs_df, repair_base_df)
@@ -1561,7 +1559,8 @@ class RepairModel():
         # If `compute_repair_candidate_prob` is True, returns probability mass function
         # of repair candidates.
         if compute_repair_candidate_prob and not maximal_likelihood_repair:
-            assert not self.repair_by_nearest_values, '`repair_by_nearest_values` not supported in this path'
+            assert not self._repair_by_nearest_values_enabled, \
+                'repairing data by nearest values not supported in this path'
 
             pmf_df = self._compute_repair_pmf(repaired_rows_df, error_cells_df, continous_columns)
             pmf_df = pmf_df.selectExpr(f"`{self.row_id}`", "attribute", "current_value.value AS current_value", "pmf")
@@ -1583,7 +1582,8 @@ class RepairModel():
             assert len(continous_columns) == 0
             assert len(self.cf.targets) == 0  # type: ignore
 
-            assert not self.repair_by_nearest_values, '`repair_by_nearest_values` not supported in this path'
+            assert not self._repair_by_nearest_values_enabled, \
+                'repairing data by nearest values not supported in this path'
 
             pmf_df = self._compute_repair_pmf(repaired_rows_df, error_cells_df, [])
             score_df = self._compute_score(pmf_df, error_cells_df)
@@ -1612,7 +1612,7 @@ class RepairModel():
             .where("repaired IS NULL OR NOT(current_value <=> repaired)")
 
         repair_candidates_df = repair_candidates_df.union(repaired_by_nvs_df) \
-            if self.repair_by_nearest_values else repair_candidates_df
+            if self._repair_by_nearest_values_enabled else repair_candidates_df
         repair_candidates_df = self._validate_repairs(repair_candidates_df, clean_rows_df) \
             if self.repair_validation_enabled else repair_candidates_df
 
@@ -1698,10 +1698,10 @@ class RepairModel():
                 "/".join(map(lambda x: f"`{x}`", selected_param))))
 
         # TODO: Support these mixed modes in future
-        if self.repair_by_nearest_values and \
+        if self._repair_by_nearest_values_enabled and \
             (maximal_likelihood_repair or compute_repair_candidate_prob or
                 compute_repair_prob or compute_repair_score):
-            raise ValueError("Cannot enable `repair_by_nearest_values` together with "
+            raise ValueError("Cannot repair data by nearest values when enabling "
                              "`maximal_likelihood_repair`, `compute_repair_candidate_prob`, "
                              "`compute_repair_prob`, or `compute_repair_score`")
 

@@ -240,6 +240,29 @@ class RepairModelTests(ReusedSQLTestCase):
             "Cannot enable the maximal likelihood repair mode when continous attributes found",
             lambda: test_model.run(maximal_likelihood_repair=True))
 
+        test_model = RepairModel() \
+            .setTableName("adult") \
+            .setRowId("tid") \
+            .setRepairByRules(True)
+        expected_error_msg = "Cannot repair data by nearest values when enabling `maximal_likelihood_repair`, " \
+            "`compute_repair_candidate_prob`, `compute_repair_prob`, or `compute_repair_score`",
+        self.assertRaisesRegexp(
+            ValueError,
+            expected_error_msg,
+            lambda: test_model.run(maximal_likelihood_repair=True))
+        self.assertRaisesRegexp(
+            ValueError,
+            expected_error_msg,
+            lambda: test_model.run(compute_repair_candidate_prob=True))
+        self.assertRaisesRegexp(
+            ValueError,
+            expected_error_msg,
+            lambda: test_model.run(compute_repair_prob=True))
+        self.assertRaisesRegexp(
+            ValueError,
+            expected_error_msg,
+            lambda: test_model.run(compute_repair_score=True))
+
     # TODO: We fix a seed for building a repair model, but inferred values fluctuate run-by-run.
     # So, to avoid it, we set 1 to `hp.max_evals` for now.
     def _build_model(self):
@@ -267,7 +290,9 @@ class RepairModelTests(ReusedSQLTestCase):
             ('model.max_training_row_num', '100000'),
             ('model.max_training_column_num', '65536'),
             ('model.small_domain_threshold', '12'),
+            ('model.rule.repair_by_nearest_values.disabled', '1'),
             ('model.rule.merge_threshold', '2.0'),
+            ('model.rule.repair_by_functional_deps.disabled', '1'),
             ('model.rule.max_domain_size', '1000'),
             ('repair.pmf.cost_weight', '0.1'),
             ('repair.pmf.prob_threshold', '0.0'),
@@ -883,7 +908,7 @@ class RepairModelTests(ReusedSQLTestCase):
                     .setRowId("tid") \
                     .setErrorCells("errorCells") \
                     .setErrorDetectors(error_detectors) \
-                    .setRepairByFunctionalDeps(True) \
+                    .setRepairByRules(True) \
                     .option('model.rule.max_domain_size', '1000')
                 self.assertEqual(
                     test_model.run().orderBy("tid", "attribute").collect(), [
@@ -910,7 +935,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setTableName("inputView") \
                 .setRowId("tid") \
                 .setErrorCells("errorCells") \
-                .setRepairByNearestValues(True) \
+                .setRepairByRules(True) \
                 .setUpdateCostFunction(Levenshtein(targets=["v0", "v1"])) \
                 .option("model.rule.merge_threshold", "2.0")
             self.assertEqual(
@@ -928,7 +953,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setRowId("tid") \
                 .setTargets(["v0", "v1"]) \
                 .setErrorCells("errorCells") \
-                .setRepairByNearestValues(True) \
+                .setRepairByRules(True) \
                 .setUpdateCostFunction(Levenshtein(targets=["v0", "v1"])) \
                 .option("model.rule.merge_threshold", "2.0")
             self.assertEqual(

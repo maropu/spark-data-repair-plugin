@@ -213,8 +213,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setDiscreteThreshold(400) \
             .setTargets(repair_targets) \
             .setErrorDetectors(error_detectors) \
-            .setRepairByFunctionalDeps(True) \
-            .setRepairByNearestValues(True) \
+            .setRepairByRules(True) \
             .setUpdateCostFunction(Levenshtein(targets=weighted_prob_targets)) \
             .option("model.rule.merge_threshold", "2.0") \
             .option("repair.pmf.cost_weight", "1000.0") \
