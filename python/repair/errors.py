@@ -17,10 +17,8 @@
 # limitations under the License.
 #
 
-import datetime
 import functools
 import json
-import time
 import numpy as np
 import pandas as pd
 from abc import ABCMeta, abstractmethod
@@ -29,7 +27,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from pyspark.sql import DataFrame, SparkSession, functions  # type: ignore
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType
 
-from repair.utils import get_option_value, setup_logger, to_list_str
+from repair.utils import get_option_value, get_random_string, setup_logger, \
+    spark_job_group, to_list_str
 
 
 _logger = setup_logger()
@@ -203,9 +202,6 @@ class ScikitLearnBasedErrorDetector(ErrorDetector):
     def _outlier_detector_impl(self) -> Any:
         pass
 
-    def _create_temp_name(self, prefix: str) -> str:
-        return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
-
     def _detect_impl(self) -> DataFrame:
         columns = list(filter(lambda c: c in self._targets, self.continous_cols)) if self._targets \
             else self.continous_cols
@@ -257,7 +253,7 @@ class ScikitLearnBasedErrorDetector(ErrorDetector):
             return _pdf
 
         # Sets a grouping key for inference
-        grouping_key = self._create_temp_name("grouping_key")
+        grouping_key = get_random_string("grouping_key")
         grouping_key_expr = functions.rand() * functions.lit(self._num_parallelism)
         input_df = input_df.withColumn(grouping_key, grouping_key_expr.cast("int"))
         predicted_df = input_df.groupBy(grouping_key).apply(predict)
@@ -350,8 +346,6 @@ class ErrorModel():
 
         # Temporary views to keep intermediate results; these views are automatically
         # created when repairing data, and then dropped finally.
-        #
-        # TODO: Move this variable into a runtime env
         self._intermediate_views_on_runtime: List[str] = []
 
         # JVM interfaces for Data Repair/Graph APIs
@@ -371,38 +365,14 @@ class ErrorModel():
                              "`attribute` in columns")
         return self._create_temp_view(df, "error_cells")
 
-    def _create_temp_name(self, prefix: str) -> str:
-        return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
-
-    def _clear_job_group(self) -> None:
-        # TODO: Uses `SparkContext.clearJobGroup()` instead
-        self._spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)  # type: ignore
-        self._spark.sparkContext.setLocalProperty("spark.job.description", None)  # type: ignore
-        self._spark.sparkContext.setLocalProperty("spark.job.interruptOnCancel", None)  # type: ignore
-
-    def _spark_job_group(name: str):  # type: ignore
-        def decorator(f):  # type: ignore
-            @functools.wraps(f)
-            def wrapper(self, *args, **kwargs):  # type: ignore
-                self._spark.sparkContext.setJobGroup(name, name)  # type: ignore
-                start_time = time.time()
-                ret = f(self, *args, **kwargs)
-                _logger.info(f"Elapsed time (name: {name}) is {time.time() - start_time}(s)")
-                self._clear_job_group()
-
-                return ret
-            return wrapper
-        return decorator
+    def _delete_view_on_exit(self, view_name: str) -> None:
+        self._intermediate_views_on_runtime.append(view_name)
 
     def _create_temp_view(self, df: Any, prefix: str) -> str:
         assert isinstance(df, DataFrame)
-        temp_name = self._create_temp_name(prefix)
-        df.createOrReplaceTempView(temp_name)
-        self._intermediate_views_on_runtime.append(temp_name)
-        return temp_name
-
-    def _register_table(self, view_name: str) -> str:
-        self._intermediate_views_on_runtime.append(view_name)
+        view_name = get_random_string(prefix)
+        df.createOrReplaceTempView(view_name)
+        self._delete_view_on_exit(view_name)
         return view_name
 
     def _release_resources(self) -> None:
@@ -453,7 +423,7 @@ class ErrorModel():
     def _filter_columns_from(self, df: DataFrame, targets: List[str], negate: bool = False) -> DataFrame:
         return df.where("attribute {} ({})".format("NOT IN" if negate else "IN", to_list_str(targets, quote=True)))
 
-    @_spark_job_group(name="error detection")
+    @spark_job_group(name="error detection")
     def _detect_errors(self, input_table: str, continous_columns: List[str]) -> Tuple[DataFrame, List[str]]:
         # If `self.error_cells` provided, just uses it
         if self.error_cells is not None:
@@ -485,7 +455,7 @@ class ErrorModel():
 
         return noisy_cells_df, noisy_columns
 
-    @_spark_job_group(name="cell domain analysis")
+    @spark_job_group(name="cell domain analysis")
     def _analyze_error_cell_domain(
             self, discretized_table: str, noisy_cells_df: DataFrame,
             continous_columns: List[str], target_columns: List[str],
@@ -528,8 +498,11 @@ class ErrorModel():
             self._get_option_value(*self._opt_attr_stat_sample_ratio),
             self._get_option_value(*self._opt_attr_stat_threshold)))
 
-        return self._register_table(ret_as_json['freq_attr_stats']), \
-            ret_as_json['pairwise_attr_stats']
+        freq_attr_stats = ret_as_json['freq_attr_stats']
+        pairwise_attr_stats = ret_as_json['pairwise_attr_stats']
+        self._delete_view_on_exit(freq_attr_stats)
+
+        return freq_attr_stats, pairwise_attr_stats
 
     def _extract_error_cells(self, input_table: str, noisy_cells_df: DataFrame,
                              discretized_table: str, continous_columns: List[str], target_columns: List[str],
@@ -565,7 +538,10 @@ class ErrorModel():
         # discrete if necessary.
         ret_as_json = json.loads(self._repair_api.convertToDiscretizedTable(
             input_table, str(self.row_id), self.discrete_thres))
-        discretized_table = self._register_table(ret_as_json["discretized_table"])
+
+        discretized_table = ret_as_json["discretized_table"]
+        self._delete_view_on_exit(discretized_table)
+
         domain_stats = {k: int(v) for k, v in ret_as_json["domain_stats"].items()}
         return discretized_table, domain_stats
 

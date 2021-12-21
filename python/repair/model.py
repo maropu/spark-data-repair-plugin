@@ -18,14 +18,12 @@
 #
 
 import copy
-import datetime
 import functools
 import heapq
 import json
 import pickle
 import numpy as np   # type: ignore[import]
 import pandas as pd  # type: ignore[import]
-import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pyspark.sql import DataFrame, SparkSession, functions  # type: ignore[import]
@@ -36,7 +34,8 @@ from pyspark.sql.types import ByteType, IntegerType, LongType, ShortType, \
 from repair.costs import UpdateCostFunction
 from repair.errors import ConstraintErrorDetector, ErrorDetector, ErrorModel, RegExErrorDetector
 from repair.train import build_model, compute_class_nrow_stdv, train_option_keys, rebalance_training_data
-from repair.utils import argtype_check, elapsed_time, get_option_value, setup_logger, to_list_str
+from repair.utils import argtype_check, elapsed_time, get_option_value, get_random_string, \
+    setup_logger, spark_job_group, to_list_str
 
 
 _logger = setup_logger()
@@ -200,8 +199,6 @@ class RepairModel():
 
         # Temporary views to keep intermediate results; these views are automatically
         # created when repairing data, and then dropped finally.
-        #
-        # TODO: Move this variable into a runtime env
         self._intermediate_views_on_runtime: List[str] = []
 
         # JVM interfaces for Data Repair/Graph APIs
@@ -492,46 +489,15 @@ class RepairModel():
         return not bool(self._get_option_value(*self._opt_repair_by_functional_deps_disabled)) \
             and self.repair_by_rules
 
-    def _clear_job_group(self) -> None:
-        # TODO: Uses `SparkContext.clearJobGroup()` instead
-        self._spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)  # type: ignore
-        self._spark.sparkContext.setLocalProperty("spark.job.description", None)  # type: ignore
-        self._spark.sparkContext.setLocalProperty("spark.job.interruptOnCancel", None)  # type: ignore
-
-    def _spark_job_group(name: str):  # type: ignore
-        def decorator(f):  # type: ignore
-            @functools.wraps(f)
-            def wrapper(self, *args, **kwargs):  # type: ignore
-                self._spark.sparkContext.setJobGroup(name, name)  # type: ignore
-                start_time = time.time()
-                ret = f(self, *args, **kwargs)
-                _logger.info(f"Elapsed time (name: {name}) is {time.time() - start_time}(s)")
-                self._clear_job_group()
-
-                return ret
-            return wrapper
-        return decorator
-
-    def _create_temp_name(self, prefix: str) -> str:
-        return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
+    def _delete_view_on_exit(self, view_name: str) -> None:
+        self._intermediate_views_on_runtime.append(view_name)
 
     def _create_temp_view(self, df: Any, prefix: str) -> str:
         assert isinstance(df, DataFrame)
-        temp_name = self._create_temp_name(prefix)
-        df.createOrReplaceTempView(temp_name)
-        self._intermediate_views_on_runtime.append(temp_name)
-        return temp_name
-
-    def _register_and_get_df(self, view_name: str) -> DataFrame:
-        self._intermediate_views_on_runtime.append(view_name)
-        return self._spark.table(view_name)
-
-    def _register_df(self, df: DataFrame, prefix: str) -> DataFrame:
-        assert isinstance(df, DataFrame)
-        temp_name = self._create_temp_name(prefix)
-        df.createOrReplaceTempView(temp_name)
-        self._intermediate_views_on_runtime.append(temp_name)
-        return self._spark.table(temp_name)
+        view_name = get_random_string(prefix)
+        df.createOrReplaceTempView(view_name)
+        self._delete_view_on_exit(view_name)
+        return view_name
 
     def _release_resources(self) -> None:
         while self._intermediate_views_on_runtime:
@@ -548,7 +514,8 @@ class RepairModel():
             'error_cells': self.error_cells,
             'opts': self.opts
         }
-        return ErrorModel(**error_model_params).detect(input_table, continous_columns)  # type: ignore
+        error_model = ErrorModel(**error_model_params)  # type: ignore
+        return error_model.detect(input_table, continous_columns)
 
     def _prepare_repair_base_cells(
             self, input_table: str, noisy_cells_df: DataFrame, target_columns: List[str]) -> DataFrame:
@@ -560,15 +527,18 @@ class RepairModel():
             noisy_cells_df.count(), num_input_rows * num_attrs))
         noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v2")
         ret_as_json = json.loads(self._repair_api.convertErrorCellsToNull(
-            input_table, noisy_cells, str(self.row_id), ",".join(target_columns)))
+            input_table, noisy_cells, self._row_id, ",".join(target_columns)))
 
-        return self._register_and_get_df(ret_as_json["repair_base_cells"])
+        repair_base_cells = ret_as_json["repair_base_cells"]
+        self._delete_view_on_exit(repair_base_cells)
+
+        return self._spark.table(repair_base_cells)
 
     def _split_clean_and_dirty_rows(
             self, repair_base_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame]:
-        error_rows_df = error_cells_df.selectExpr(f"`{self.row_id}`")
-        clean_rows_df = repair_base_df.join(error_rows_df, str(self.row_id), "left_anti")
-        dirty_rows_df = repair_base_df.join(error_rows_df, str(self.row_id), "left_semi")
+        error_rows_df = error_cells_df.selectExpr(f"`{self._row_id}`")
+        clean_rows_df = repair_base_df.join(error_rows_df, self._row_id, "left_anti")
+        dirty_rows_df = repair_base_df.join(error_rows_df, self._row_id, "left_semi")
         return clean_rows_df, dirty_rows_df
 
     def _empty_dataframe(self, schema: StructType) -> DataFrame:
@@ -606,7 +576,7 @@ class RepairModel():
         targets = list(filter(lambda c: c in cf_targets, target_columns)) \
             if cf_targets else target_columns
         if not targets:
-            row_id_field = error_cells_df.schema[str(self.row_id)]
+            row_id_field = error_cells_df.schema[self._row_id]
             return error_cells_df, self._empty_repaired_cells_dataframe(row_id_field)
 
         cost_func = self._create_cost_func()
@@ -626,15 +596,15 @@ class RepairModel():
             'dvs[0].value, null) repaired'
         error_cells_df = error_cells_df.join(domain_df, 'attribute', 'left_outer') \
             .withColumn("costs", cost_func(col("current_value"), col("dvs"))) \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", 'dvs value', 'costs cost') \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", 'arrays_zip(value, cost) dvs') \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", sorted_domain_value_expr) \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", repair_expr)
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value", 'dvs value', 'costs cost') \
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value", 'arrays_zip(value, cost) dvs') \
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value", sorted_domain_value_expr) \
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value", repair_expr)
 
         repaired_df = error_cells_df.where('repaired IS NOT NULL') \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "repaired")
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value", "repaired")
         error_cells_df = error_cells_df.where('repaired IS NULL') \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value")
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value")
 
         return error_cells_df, repaired_df
 
@@ -643,14 +613,14 @@ class RepairModel():
                          target_columns: List[str]) -> Tuple[DataFrame, DataFrame]:
         regex_detectors = list(filter(lambda x: isinstance(x, RegExErrorDetector), self.error_detectors))
         if not regex_detectors:
-            row_id_field = error_cells_df.schema[str(self.row_id)]
+            row_id_field = error_cells_df.schema[self._row_id]
             return error_cells_df, self._empty_repaired_cells_dataframe(row_id_field)
 
         regexs = list(map(lambda d: (d.attr, d.regex), regex_detectors))  # type: ignore
         _logger.info(f'[Repairing Phase] Repairing data using regexs: {to_list_str(regexs)}')
 
         # TODO: Needs to Implement a repair strategy using regular expressions (See [17])
-        row_id_field = error_cells_df.schema[str(self.row_id)]
+        row_id_field = error_cells_df.schema[self._row_id]
         return error_cells_df, self._empty_repaired_cells_dataframe(row_id_field)
 
     def _repair_by_rules(self, repair_base_df: DataFrame,
@@ -659,7 +629,7 @@ class RepairModel():
         repaired_cells_dfs: List[DataFrame] = []
 
         # Adds an empty dataframe for unioning result repaired dataframes
-        row_id_field = error_cells_df.schema[str(self.row_id)]
+        row_id_field = error_cells_df.schema[self._row_id]
         repaired_cells_dfs.append(self._empty_repaired_cells_dataframe(row_id_field))
 
         if self._repair_by_nearest_values_enabled:
@@ -841,7 +811,7 @@ class RepairModel():
 
         # To build repair models in parallel, it assigns each model training into a single task
         train_dfs_per_target: List[DataFrame] = []
-        target_column = self._create_temp_name("target_column")
+        target_column = get_random_string("target_column")
 
         for y in target_columns:
             if y in models:
@@ -951,7 +921,7 @@ class RepairModel():
 
         return logs
 
-    @_spark_job_group(name="repair model training")
+    @spark_job_group(name="repair model training")
     def _build_repair_models(self, train_df: DataFrame, target_columns: List[str], continous_columns: List[str],
                              domain_stats: Dict[str, str],
                              pairwise_attr_stats: Dict[str, str]) -> List[Any]:
@@ -981,7 +951,7 @@ class RepairModel():
         # that is, we can assume that non-blank cells are clean. Therefore, if c[x] -> e[y] in P(e[y]\|c)
         # and c[x] \in c (the value e[y] is determined by the value c[x]), we simply folow
         # this rule to skip expensive training costs.
-        train_df = train_df.drop(str(self.row_id)).cache()
+        train_df = train_df.drop(self._row_id).cache()
 
         # Selects features among input columns if necessary
         feature_map: Dict[str, List[str]] = {}
@@ -1082,13 +1052,13 @@ class RepairModel():
 
     def _group_apply(self, df: DataFrame, udf: Any) -> DataFrame:
         num_parallelism = self._spark.sparkContext.defaultParallelism
-        grouping_key = self._create_temp_name("grouping_key")
+        grouping_key = get_random_string("grouping_key")
         return df.withColumn(grouping_key, (functions.rand() * functions.lit(num_parallelism)).cast("int")) \
             .groupBy(grouping_key).apply(udf)
 
     # TODO: What is the best way to repair appended new data if we have already
     # clean (or repaired) data?
-    @_spark_job_group(name="repairing")
+    @spark_job_group(name="repairing")
     def _repair(self, models: List[Any], continous_columns: List[str],
                 dirty_rows_df: DataFrame, error_cells_df: DataFrame,
                 compute_repair_candidate_prob: bool, maximal_likelihood_repair: bool) -> pd.DataFrame:
@@ -1186,14 +1156,14 @@ class RepairModel():
         sum_probs = "aggregate(probs, double(0.0), (acc, x) -> acc + x) norm"
         normalize_probs = "transform(probs, p -> p / norm) probs"
         weighted_pmf_df = pmf_df.withColumn("costs", cost_func(col("current_value"), col("classes"))) \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes", f"{to_weighted_probs} probs") \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes", "probs", sum_probs) \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "classes", normalize_probs)
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value", "classes", f"{to_weighted_probs} probs") \
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value", "classes", "probs", sum_probs) \
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value", "classes", normalize_probs)
 
         return weighted_pmf_df
 
     def _flatten(self, input_table: str) -> DataFrame:
-        jdf = self._jvm.RepairMiscApi.flattenTable("", input_table, str(self.row_id))
+        jdf = self._jvm.RepairMiscApi.flattenTable("", input_table, self._row_id)
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
     def _filter_columns_from(self, df: DataFrame, targets: List[str], negate: bool = False) -> DataFrame:
@@ -1203,7 +1173,7 @@ class RepairModel():
                             continous_columns: List[str]) -> DataFrame:
         # Extracts predicted cells from `repaired_rows_df`
         repaired_cells_df = self._flatten(self._create_temp_view(repaired_rows_df, 'repaired')) \
-            .join(error_cells_df, [str(self.row_id), "attribute"], "inner")
+            .join(error_cells_df, [self._row_id, "attribute"], "inner")
 
         # Since we cannot compute pmfs for continouos values, their columns need
         # to be filtered out first.
@@ -1213,8 +1183,8 @@ class RepairModel():
         parse_pmf_json_expr = "from_json(value, 'classes array<string>, probs array<double>') pmf"
         slice_probs = "slice(pmf.probs, 1, size(pmf.classes)) probs"
         pmf_df = discrete_repaired_cells_df \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", parse_pmf_json_expr) \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "pmf.classes classes", slice_probs)
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value", parse_pmf_json_expr) \
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value", "pmf.classes classes", slice_probs)
 
         # If `self.cf` defined, computes weighted probs using it
         if self.cf is not None:
@@ -1228,16 +1198,16 @@ class RepairModel():
             f"when {x}.prob > {y}.prob then -1 " \
             "else 0 end"
         sorted_pmf_expr = f'array_sort(pmf, (left, right) -> {compare_probs("left", "right")}) pmf'
-        pmf_df = pmf_df.selectExpr(f"`{self.row_id}`", "attribute", 'current_value', 'classes class', 'probs prob') \
-            .selectExpr(f"`{self.row_id}`", "attribute", to_current_expr, 'arrays_zip(class, prob) pmf') \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", sorted_pmf_expr)
+        pmf_df = pmf_df.selectExpr(f"`{self._row_id}`", "attribute", 'current_value', 'classes class', 'probs prob') \
+            .selectExpr(f"`{self._row_id}`", "attribute", to_current_expr, 'arrays_zip(class, prob) pmf') \
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value", sorted_pmf_expr)
 
         # Filters less-confident candidates in `pmf`
         pmf_threshold = self._get_option_value(*self._opt_prob_threshold)
         pmf_top_k = self._get_option_value(*self._opt_prob_top_k)
         filtered_prob_expr = f"slice(filter(pmf, x -> x.prob > {pmf_threshold}), 1, {pmf_top_k}) pmf"
         pmf_df = pmf_df.selectExpr(
-            f"`{self.row_id}`", "attribute", "current_value",
+            f"`{self._row_id}`", "attribute", "current_value",
             filtered_prob_expr)
 
         # Appends rows for continous values if necessary
@@ -1246,7 +1216,7 @@ class RepairModel():
             continous_to_pmf_expr = "array(named_struct('class', value, 'prob', 1.0D)) pmf"
             to_current_expr = "named_struct('value', current_value, 'prob', 0.0D) current_value"
             continous_pmf_df = continous_repaired_cells_df \
-                .selectExpr(f"`{self.row_id}`", "attribute", to_current_expr, continous_to_pmf_expr)
+                .selectExpr(f"`{self._row_id}`", "attribute", to_current_expr, continous_to_pmf_expr)
             pmf_df = pmf_df.union(continous_pmf_df)
 
         assert pmf_df.count() == error_cells_df.count()
@@ -1268,9 +1238,9 @@ class RepairModel():
         score_expr = "ln(repaired.prob / IF(current_value.prob > 0.0, current_value.prob, 1e-6)) *" \
             "(1.0 / (1.0 + coalesce(cost, 256.0))) score"
         score_df = pmf_df \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", maximal_likelihood_repair_expr) \
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value", maximal_likelihood_repair_expr) \
             .withColumn("cost", cost_func(expr(current_expr), col("repaired.value"))) \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value.value current_value",
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value.value current_value",
                         "repaired.value repaired", score_expr)
 
         return score_df
@@ -1281,7 +1251,7 @@ class RepairModel():
         base_table = self._create_temp_view(base_table, "base_table") \
             if type(base_table) is DataFrame else base_table
         jdf = self._jvm.RepairMiscApi.repairAttrsFrom(
-            repair_updates, "", base_table, str(self.row_id))
+            repair_updates, "", base_table, self._row_id)
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
     def _maximal_likelihood_repair(self, score_df: DataFrame, error_cells_df: DataFrame) -> DataFrame:
@@ -1306,7 +1276,7 @@ class RepairModel():
 
     # Since statistical models notoriously ignore specified integrity constraints,
     # this methods checks if constraints hold in the repair candidates.
-    @_spark_job_group(name="validating")
+    @spark_job_group(name="validating")
     def _validate_repairs(self, repair_candidates: DataFrame, clean_rows: DataFrame) -> DataFrame:
         _logger.info("[Validation Phase] Validating {} repair candidates...".format(repair_candidates.count()))
         # TODO: Implements a logic to check if constraints hold on the repair candidates
@@ -1380,13 +1350,13 @@ class RepairModel():
                 'repairing data by nearest values not supported in this path'
 
             pmf_df = self._compute_repair_pmf(repaired_rows_df, error_cells_df, continous_columns)
-            pmf_df = pmf_df.selectExpr(f"`{self.row_id}`", "attribute", "current_value.value AS current_value", "pmf")
+            pmf_df = pmf_df.selectExpr(f"`{self._row_id}`", "attribute", "current_value.value AS current_value", "pmf")
 
             # If `compute_repair_prob` is true, returns a predicted repair with
             # the highest probability only.
             if compute_repair_prob:
                 return pmf_df.selectExpr(
-                    f"`{self.row_id}`", "attribute", "current_value",
+                    f"`{self._row_id}`", "attribute", "current_value",
                     "pmf[0].class AS repaired",
                     "pmf[0].prob AS prob")
 
@@ -1419,13 +1389,13 @@ class RepairModel():
         if repair_data:
             clean_df = clean_rows_df.union(repaired_rows_df)
             assert clean_df.count() == self._spark.table(input_table).count()
-            return self._register_df(clean_df.cache(), 'output')
+            return clean_df.cache()
 
         # If `repair_data` is False, returns repair candidates whoes
         # value is not the same with `current_value`.
         repair_candidates_df = self._flatten(self._create_temp_view(repaired_rows_df, 'repaired')) \
-            .join(error_cells_df, [str(self.row_id), "attribute"], "inner") \
-            .selectExpr(f"`{self.row_id}`", "attribute", "current_value", "value repaired") \
+            .join(error_cells_df, [self._row_id, "attribute"], "inner") \
+            .selectExpr(f"`{self._row_id}`", "attribute", "current_value", "value repaired") \
             .where("repaired IS NULL OR NOT(current_value <=> repaired)")
 
         repair_candidates_df = repair_candidates_df.union(repaired_by_rules_df) \
@@ -1433,10 +1403,10 @@ class RepairModel():
         repair_candidates_df = self._validate_repairs(repair_candidates_df, clean_rows_df) \
             if self.repair_validation_enabled else repair_candidates_df
 
-        return self._register_df(repair_candidates_df.cache(), 'output')
+        return repair_candidates_df.cache()
 
     def _check_input_table(self) -> Tuple[str, List[str]]:
-        ret_as_json = json.loads(self._repair_api.checkInputTable(self.db_name, self._input_table, str(self.row_id)))
+        ret_as_json = json.loads(self._repair_api.checkInputTable(self.db_name, self._input_table, self._row_id))
         input_table = ret_as_json["input_table"]
         continous_columns = ret_as_json["continous_attrs"].split(",")
 

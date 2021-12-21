@@ -17,12 +17,15 @@
 # limitations under the License.
 #
 
+import datetime
 import functools
 import inspect
 import os
 import time
 import typing
 from typing import Any, Dict, List, Optional
+
+from pyspark.sql import SparkSession
 
 
 def setup_logger() -> Any:
@@ -38,6 +41,10 @@ _logger = setup_logger()
 
 def to_list_str(d: List[Any], sep: str = ',', quote: bool = False) -> str:
     return f'{sep}'.join(map(lambda e: f"'{e}'" if quote else str(e), d))
+
+
+def get_random_string(prefix: str) -> str:
+    return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
 
 
 def get_option_value(opts: Dict[str, str], key: str, default_value: Any, type_class: Any = str,
@@ -111,6 +118,32 @@ def _compare_type(v: Any, annot: Any) -> bool:
         return True
 
     return type(v) is annot or isinstance(v, annot)
+
+
+def _clear_job_group(spark: SparkSession) -> None:
+    # TODO: Uses `SparkContext.clearJobGroup()` instead
+    spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)  # type: ignore
+    spark.sparkContext.setLocalProperty("spark.job.description", None)  # type: ignore
+    spark.sparkContext.setLocalProperty("spark.job.interruptOnCancel", None)  # type: ignore
+
+
+def spark_job_group(name: str):  # type: ignore
+    def decorator(f):  # type: ignore
+        @functools.wraps(f)
+        def wrapper(self, *args, **kwargs):  # type: ignore
+            session = SparkSession.getActiveSession()
+            if not session:
+                return f(self, *args, **kwargs)
+
+            session.sparkContext.setJobGroup(name, name)  # type: ignore
+            start_time = time.time()
+            ret = f(self, *args, **kwargs)
+            _logger.info(f"Elapsed time (name: {name}) is {time.time() - start_time}(s)")
+            _clear_job_group(session)
+
+            return ret
+        return wrapper
+    return decorator
 
 
 def argtype_check(f):  # type: ignore
