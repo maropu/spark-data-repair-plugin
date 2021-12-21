@@ -34,7 +34,7 @@ from pyspark.sql.types import ByteType, IntegerType, LongType, ShortType, \
     StringType, StructField, StructType  # type: ignore[import]
 
 from repair.costs import UpdateCostFunction
-from repair.detectors import ConstraintErrorDetector, DomainValues, ErrorDetector, NullErrorDetector
+from repair.detectors import ConstraintErrorDetector, DomainValues, ErrorDetector, NullErrorDetector, RegExErrorDetector
 from repair.train import build_model, compute_class_nrow_stdv, model_configuration_keys, rebalance_training_data
 from repair.utils import argtype_check, elapsed_time, is_testing, setup_logger
 
@@ -624,14 +624,16 @@ class RepairModel():
 
         return error_detectors
 
+    def _to_str(self, d: List[Any], sep: str = ',', quote: bool = False) -> str:
+        return f'{sep}'.join(map(lambda e: f"'{e}'" if quote else str(e), d))
+
     # TODO: Needs to implement an error detector based on edit distances
     def _detect_error_cells(self, input_table: str, continous_columns: List[str]) -> DataFrame:
         error_detectors = self.error_detectors
         if not error_detectors:
             error_detectors = self._get_default_error_detectors(input_table)
 
-        _logger.info('[Error Detection Phase] Used error detectors: {}'.format(
-            ','.join(list(map(lambda x: str(x), error_detectors)))))
+        _logger.info(f'[Error Detection Phase] Used error detectors: {self._to_str(error_detectors)}')
 
         # Computes target attributes for error detection
         target_attrs = self._target_attrs(self._spark.table(input_table).columns)
@@ -646,13 +648,11 @@ class RepairModel():
 
     def _with_current_values(self, input_table: str, noisy_cells_df: DataFrame, targetAttrs: List[str]) -> DataFrame:
         noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v1")
-        jdf = self._repair_api.withCurrentValues(
-            input_table, noisy_cells, str(self.row_id), ",".join(targetAttrs))
+        jdf = self._repair_api.withCurrentValues(input_table, noisy_cells, str(self.row_id), ','.join(targetAttrs))
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
     def _filter_columns_from(self, df: DataFrame, targets: List[str], negate: bool = False) -> DataFrame:
-        return df.where("attribute {} ({})".format(
-            "NOT IN" if negate else "IN", ",".join(map(lambda x: f"'{x}'", targets))))
+        return df.where("attribute {} ({})".format("NOT IN" if negate else "IN", self._to_str(targets, quote=True)))
 
     @_spark_job_group(name="error detection")
     def _detect_errors(self, input_table: str, continous_columns: List[str]) -> Tuple[DataFrame, List[str]]:
@@ -883,10 +883,17 @@ class RepairModel():
     def _repair_by_regex(self, repair_base_df: DataFrame,
                          error_cells_df: DataFrame,
                          target_columns: List[str]) -> Tuple[DataFrame, DataFrame]:
+        regex_detectors = list(filter(lambda x: isinstance(x, RegExErrorDetector), self.error_detectors))
+        if not regex_detectors:
+            row_id_field = error_cells_df.schema[str(self.row_id)]
+            return error_cells_df, self._empty_repaired_cells_dataframe(row_id_field)
+
+        regexs = list(map(lambda d: (d.attr, d.regex), regex_detectors))  # type: ignore
+        _logger.info(f'[Repairing Phase] Repairing data using regexs: {self._to_str(regexs)}')
+
         # TODO: Needs to Implement a repair strategy using regular expressions (See [17])
         row_id_field = error_cells_df.schema[str(self.row_id)]
-        empty_repaired_cells_df = self._empty_repaired_cells_dataframe(row_id_field)
-        return error_cells_df, empty_repaired_cells_df
+        return error_cells_df, self._empty_repaired_cells_dataframe(row_id_field)
 
     def _repair_by_rules(self, repair_base_df: DataFrame,
                          error_cells_df: DataFrame,
@@ -931,7 +938,7 @@ class RepairModel():
                     top_k_fts.append((float(corr), f))
 
             _logger.info("[Repair Model Training Phase] {} features ({}) selected from {} features".format(
-                len(top_k_fts), ",".join(map(lambda f: f"{f[1]}:{-f[0]}", top_k_fts)), len(features)))
+                len(top_k_fts), self._to_str(list(map(lambda f: f"{f[1]}:{-f[0]}", top_k_fts))), len(features)))
 
             features = list(map(lambda f: f[1], top_k_fts))
 
@@ -1039,7 +1046,7 @@ class RepairModel():
             for transformer in transformer_map[y]:
                 X = transformer.fit_transform(X)
             _logger.debug("{} encoders transform ({})=>({})".format(
-                len(transformer_map[y]), ",".join(feature_map[y]), ",".join(X.columns)))
+                len(transformer_map[y]), self._to_str(feature_map[y]), self._to_str(X.columns)))
 
             # Re-balance target classes in training data
             X, y_ = rebalance_training_data(X, train_pdf[y], y) \
@@ -1048,7 +1055,7 @@ class RepairModel():
 
             _logger.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
                 index, len(target_columns), model_type,
-                y, ",".join(feature_map[y]),
+                y, self._to_str(feature_map[y]),
                 len(train_pdf),
                 f" #class={num_class_map[y]}" if num_class_map[y] > 0 else ""))
             (model, score), elapsed_time = build_model(X, y_, is_discrete, num_class_map[y], n_jobs=-1, opts=self.opts)
@@ -1102,12 +1109,12 @@ class RepairModel():
             for transformer in transformers:
                 X = transformer.fit_transform(X)
             _logger.debug("{} encoders transform ({})=>({})".format(
-                len(transformers), ",".join(feature_map[y]), ",".join(X.columns)))
+                len(transformers), self._to_str(feature_map[y]), self._to_str(X.columns)))
 
             _logger.info("Start building {}/{} model in parallel... type={} y={} features={} #rows={}{}".format(
                 index, len(target_columns),
                 "classfier" if y not in continous_columns else "regressor",
-                y, ",".join(feature_map[y]),
+                y, self._to_str(feature_map[y]),
                 len(train_pdf),
                 f" #class={num_class_map[y]}" if num_class_map[y] > 0 else ""))
 
@@ -1236,7 +1243,7 @@ class RepairModel():
         # Builds multiple repair models to repair error cells
         _logger.info("[Repair Model Training Phase] Building {} models "
                      "to repair the cells in {}"
-                     .format(len(target_columns), ",".join(target_columns)))
+                     .format(len(target_columns), self._to_str(target_columns)))
 
         models: Dict[str, Any] = {}
         num_class_map: Dict[str, int] = {}
@@ -1309,7 +1316,7 @@ class RepairModel():
                 assert len(error_columns) < len(columns)
 
             _logger.info("Resolved prediction order dependencies: {}".format(
-                ",".join(map(lambda x: x[0], pred_ordered_models))))
+                self._to_str(list(map(lambda x: x[0], pred_ordered_models)))))
             assert len(pred_ordered_models) == len(target_columns)
             return pred_ordered_models
 
@@ -1415,7 +1422,7 @@ class RepairModel():
             f"(p, c) -> p * (1.0 / (1.0 + {pmf_weight} * c))), probs)"
         if self.cf.targets:  # type: ignore
             _logger.info(f'[Repairing Phase] {self.cf} computing weighting probs...')
-            cf_targets = ",".join(map(lambda x: f"'{x}'", self.cf.targets))  # type: ignore
+            cf_targets = self._to_str(self.cf.targets, quote=True)  # type: ignore
             to_weighted_probs = f"if(attribute IN ({cf_targets}), {to_weighted_probs}, probs)"
 
         sum_probs = "aggregate(probs, double(0.0), (acc, x) -> acc + x) norm"
@@ -1744,7 +1751,7 @@ class RepairModel():
         selected_param = list(map(lambda x: x[0], filter(lambda x: x[1], exclusive_param_list)))
         if len(selected_param) > 1:
             raise ValueError("{} cannot be set to true simultaneously".format(
-                "/".join(map(lambda x: f"`{x}`", selected_param))))
+                self._to_str(selected_param, sep='/', quote=True)))
 
         # TODO: Support these mixed modes in future
         if self._repair_by_nearest_values_enabled and \
@@ -1772,7 +1779,7 @@ class RepairModel():
                                  "when continous attributes found")
 
             if self.targets and len(set(self.targets) & set(self._spark.table(input_table).columns)) == 0:
-                raise ValueError(f"Target attributes not found in {input_table}: {','.join(self.targets)}")
+                raise ValueError(f"Target attributes not found in {input_table}: {self._to_str(self.targets)}")
 
             df, elapsed_time = self._run(
                 input_table, continous_columns, detect_errors_only, compute_repair_candidate_prob,
