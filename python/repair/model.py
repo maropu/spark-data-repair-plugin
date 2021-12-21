@@ -545,10 +545,10 @@ class RepairModel():
             'targets': self.targets,
             'discrete_thres': self.discrete_thres,
             'error_detectors': self.error_detectors,
-            'error_cells': self.error_cells
+            'error_cells': self.error_cells,
+            'opts': self.opts
         }
-        error_model = ErrorModel(**error_model_params)  # type: ignore
-        return error_model.detect(input_table, continous_columns)
+        return ErrorModel(**error_model_params).detect(input_table, continous_columns)  # type: ignore
 
     def _prepare_repair_base_cells(
             self, input_table: str, noisy_cells_df: DataFrame, target_columns: List[str]) -> DataFrame:

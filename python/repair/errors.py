@@ -337,7 +337,8 @@ class ErrorModel():
 
     def __init__(self, row_id: str, targets: List[str], discrete_thres: int,
                  error_detectors: List[ErrorDetector],
-                 error_cells: Optional[Union[str, DataFrame]]) -> None:
+                 error_cells: Optional[Union[str, DataFrame]],
+                 opts: Dict[str, str]) -> None:
         self.row_id: str = str(row_id)
         self.targets: List[str] = targets
         self.discrete_thres: int = discrete_thres
@@ -345,7 +346,7 @@ class ErrorModel():
         self.error_cells: Optional[Union[str, DataFrame]] = error_cells
 
         # Options for internal behaviours
-        self.opts: Dict[str, str] = {}
+        self.opts: Dict[str, str] = opts
 
         # Temporary views to keep intermediate results; these views are automatically
         # created when repairing data, and then dropped finally.
@@ -594,5 +595,7 @@ class ErrorModel():
                 return error_cells_df, target_columns, pairwise_attr_stats, domain_stats
 
             return noisy_cells_df, target_columns, {}, domain_stats
+        except:
+            raise
         finally:
             self._release_resources()
