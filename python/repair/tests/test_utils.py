@@ -19,7 +19,7 @@ import re
 import unittest
 from typing import Dict, List, Union
 
-from repair.utils import argtype_check
+from repair.utils import argtype_check, get_option_value
 
 
 class BaseClass:
@@ -80,6 +80,30 @@ def test_dict(v: Dict[str, int]) -> Dict[str, int]:
 
 
 class UtilsTests(unittest.TestCase):
+
+    def test_get_option_value(self):
+        options = {'key1': 'abcd', 'key2': '1', 'key3': '3.2'}
+        self.assertEqual(get_option_value(options, 'key1', 'efgh', type_class=str), 'abcd')
+        self.assertEqual(get_option_value(options, 'key2', 3, type_class=int), 1)
+        self.assertEqual(get_option_value(options, 'key3', 0.0, type_class=float), 3.2)
+        self.assertEqual(get_option_value(options, 'key2', False, type_class=bool), True)
+        self.assertEqual(get_option_value(options, 'non.existent', 'efgh', type_class=str), 'efgh')
+        self.assertEqual(get_option_value(options, 'non.existent', 3, type_class=int), 3)
+        self.assertEqual(get_option_value(options, 'non.existent', 0.0, type_class=float), 0.0)
+        self.assertEqual(get_option_value(options, 'non.existent', False, type_class=bool), False)
+
+        self.assertRaisesRegexp(
+            ValueError,
+            'Failed to cast "abcd" into int data: key=key1',
+            lambda: get_option_value(options, 'key1', 2, type_class=int))
+        self.assertRaisesRegexp(
+            ValueError,
+            'Failed to cast "abcd" into float data: key=key1',
+            lambda: get_option_value(options, 'key1', 0.0, type_class=float))
+        self.assertRaisesRegexp(
+            ValueError,
+            'Failed to cast "3.2" into int data: key=key3',
+            lambda: get_option_value(options, 'key3', 2, type_class=int))
 
     def test_primitive_type_check(self):
         self.assertRaisesRegexp(

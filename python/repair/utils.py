@@ -22,7 +22,50 @@ import inspect
 import os
 import time
 import typing
-from typing import Any
+from typing import Any, Dict, List, Optional
+
+
+def setup_logger() -> Any:
+    from logging import getLogger, NullHandler, INFO
+    logger = getLogger(__name__)
+    logger.setLevel(INFO)
+    logger.addHandler(NullHandler())
+    return logger
+
+
+_logger = setup_logger()
+
+
+def to_list_str(d: List[Any], sep: str = ',', quote: bool = False) -> str:
+    return f'{sep}'.join(map(lambda e: f"'{e}'" if quote else str(e), d))
+
+
+def get_option_value(opts: Dict[str, str], key: str, default_value: Any, type_class: Any = str,
+                     validator: Optional[Any] = None, err_msg: Optional[str] = None) -> Any:
+    assert type(default_value) is type_class, f'key={key}'
+
+    if key not in opts:
+        return default_value
+
+    try:
+        value = type_class(opts[key])
+    except:
+        msg = f'Failed to cast "{opts[key]}" into {type_class.__name__} data: key={key}'
+        if is_testing():
+            raise ValueError(msg)
+
+        _logger.warning(msg)
+        return default_value
+
+    if validator and not validator(value):
+        msg = f'{str(err_msg).format(key)}, got {value}'
+        if is_testing():
+            raise ValueError(msg)
+
+        _logger.warning(msg)
+        return default_value
+
+    return value
 
 
 def _to_pretty_type_name(v: Any) -> str:
@@ -138,14 +181,6 @@ def argtype_check(f):  # type: ignore
         return f(self, *args, **kwargs)
 
     return wrapper
-
-
-def setup_logger() -> Any:
-    from logging import getLogger, NullHandler, INFO
-    logger = getLogger(__name__)
-    logger.setLevel(INFO)
-    logger.addHandler(NullHandler())
-    return logger
 
 
 def elapsed_time(f):  # type: ignore

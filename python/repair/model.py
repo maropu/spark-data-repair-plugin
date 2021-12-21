@@ -34,9 +34,9 @@ from pyspark.sql.types import ByteType, IntegerType, LongType, ShortType, \
     StringType, StructField, StructType  # type: ignore[import]
 
 from repair.costs import UpdateCostFunction
-from repair.detectors import ConstraintErrorDetector, DomainValues, ErrorDetector, NullErrorDetector, RegExErrorDetector
-from repair.train import build_model, compute_class_nrow_stdv, model_configuration_keys, rebalance_training_data
-from repair.utils import argtype_check, elapsed_time, is_testing, setup_logger
+from repair.detectors import ConstraintErrorDetector, ErrorDetector, ErrorModel, RegExErrorDetector
+from repair.train import build_model, compute_class_nrow_stdv, train_option_keys, rebalance_training_data
+from repair.utils import argtype_check, elapsed_time, get_option_value, setup_logger, to_list_str
 
 
 _logger = setup_logger()
@@ -109,6 +109,59 @@ class RepairModel():
     .. versionchanged:: 0.1.0
     """
 
+    # List of internal configurations
+    from collections import namedtuple
+    _option = namedtuple('_option', 'key default_value type_class validator err_msg')
+
+    _opt_max_training_row_num = \
+        _option('model.max_training_row_num', 10000, int,
+                lambda v: v >= 10, '`{}` should be greater than and equal to 10')
+    _opt_max_training_column_num = \
+        _option('model.max_training_column_num', 65536, int,
+                lambda v: v >= 2, '`{}` should be greater than 1')
+    _opt_small_domain_threshold = \
+        _option('model.small_domain_threshold', 12, int,
+                lambda v: v >= 3, '`{}` should be greater than 2')
+    _opt_repair_by_nearest_values_disabled = \
+        _option('model.rule.repair_by_nearest_values.disabled', False, bool,
+                None, None)
+    _opt_merge_threshold = \
+        _option('model.rule.merge_threshold', 2.0, float,
+                None, None)
+    _opt_repair_by_regex_disabled = \
+        _option('model.rule.repair_by_regex.disabled', False, bool,
+                None, None)
+    _opt_repair_by_functional_deps_disabled = \
+        _option('model.rule.repair_by_functional_deps.disabled', False, bool,
+                None, None)
+    _opt_max_domain_size = \
+        _option('model.rule.max_domain_size', 1000, int,
+                lambda v: v > 10, '`{}` should be greater than 10')
+    _opt_cost_weight = \
+        _option('repair.pmf.cost_weight', 0.1, float,
+                lambda v: v > 0.0, '`{}` should be positive')
+    _opt_prob_threshold = \
+        _option('repair.pmf.prob_threshold', 0.0, float,
+                None, None)
+    _opt_prob_top_k = \
+        _option('repair.pmf.prob_top_k', 32, int,
+                lambda v: v >= 3, '`{}` should be greater than 2')
+
+    option_keys = set([
+        _opt_max_training_row_num.key,
+        _opt_max_training_column_num.key,
+        _opt_small_domain_threshold.key,
+        _opt_repair_by_nearest_values_disabled.key,
+        _opt_merge_threshold.key,
+        _opt_repair_by_regex_disabled.key,
+        _opt_repair_by_functional_deps_disabled.key,
+        _opt_max_domain_size.key,
+        _opt_cost_weight.key,
+        _opt_prob_threshold.key,
+        _opt_prob_top_k.key,
+        *ErrorModel.option_keys,
+        *train_option_keys])
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -144,82 +197,6 @@ class RepairModel():
 
         # Options for internal behaviours
         self.opts: Dict[str, str] = {}
-
-        # List of internal configurations
-        from collections import namedtuple
-        option = namedtuple('option', 'key default_value type_class validator err_msg')
-
-        self._opt_min_corr_thres = \
-            option('error.min_corr_thres', 0.70, float,
-                   lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
-        self._opt_domain_threshold_alpha = \
-            option('error.domain_threshold_alph', 0.0, float,
-                   lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
-        self._opt_domain_threshold_beta = \
-            option('error.domain_threshold_beta', 0.70, float,
-                   lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
-        self._opt_max_attrs_to_compute_domains = \
-            option('error.max_attrs_to_compute_domains', 4, int,
-                   lambda v: v >= 2, '`{}` should be greater than 1')
-        self._opt_attr_stat_sample_ratio = \
-            option('error.attr_stat_sample_ratio', 1.0, float,
-                   lambda v: 0.0 <= v and v <= 1.0, '`{}` should be in [0.0, 1.0]')
-        self._opt_attr_stat_threshold = \
-            option('error.attr_stat_threshold', 0.0, float,
-                   lambda v: 0.0 <= v and v <= 1.0, '`{}` should be in [0.0, 1.0]')
-        self._opt_max_training_row_num = \
-            option('model.max_training_row_num', 10000, int,
-                   lambda v: v >= 10, '`{}` should be greater than and equal to 10')
-        self._opt_max_training_column_num = \
-            option('model.max_training_column_num', 65536, int,
-                   lambda v: v >= 2, '`{}` should be greater than 1')
-        self._opt_small_domain_threshold = \
-            option('model.small_domain_threshold', 12, int,
-                   lambda v: v >= 3, '`{}` should be greater than 2')
-        self._opt_repair_by_nearest_values_disabled = \
-            option('model.rule.repair_by_nearest_values.disabled', False, bool,
-                   None, None)
-        self._opt_merge_threshold = \
-            option('model.rule.merge_threshold', 2.0, float,
-                   None, None)
-        self._opt_repair_by_regex_disabled = \
-            option('model.rule.repair_by_regex.disabled', False, bool,
-                   None, None)
-        self._opt_repair_by_functional_deps_disabled = \
-            option('model.rule.repair_by_functional_deps.disabled', False, bool,
-                   None, None)
-        self._opt_max_domain_size = \
-            option('model.rule.max_domain_size', 1000, int,
-                   lambda v: v > 10, '`{}` should be greater than 10')
-        self._opt_cost_weight = \
-            option('repair.pmf.cost_weight', 0.1, float,
-                   lambda v: v > 0.0, '`{}` should be positive')
-        self._opt_prob_threshold = \
-            option('repair.pmf.prob_threshold', 0.0, float,
-                   None, None)
-        self._opt_prob_top_k = \
-            option('repair.pmf.prob_top_k', self.discrete_thres, int,
-                   lambda v: v >= 3, '`{}` should be greater than 2')
-
-        self._repair_model_option_keys = set([
-            self._opt_min_corr_thres.key,
-            self._opt_domain_threshold_alpha.key,
-            self._opt_domain_threshold_beta.key,
-            self._opt_max_attrs_to_compute_domains.key,
-            self._opt_attr_stat_sample_ratio.key,
-            self._opt_attr_stat_threshold.key,
-            self._opt_max_training_row_num.key,
-            self._opt_max_training_column_num.key,
-            self._opt_small_domain_threshold.key,
-            self._opt_repair_by_nearest_values_disabled.key,
-            self._opt_merge_threshold.key,
-            self._opt_repair_by_regex_disabled.key,
-            self._opt_repair_by_functional_deps_disabled.key,
-            self._opt_max_domain_size.key,
-            self._opt_cost_weight.key,
-            self._opt_prob_threshold.key,
-            self._opt_prob_top_k.key,
-            *model_configuration_keys()])
 
         # Temporary views to keep intermediate results; these views are automatically
         # created when repairing data, and then dropped finally.
@@ -480,7 +457,7 @@ class RepairModel():
 
         .. versionchanged:: 0.1.0
         """
-        if key not in self._repair_model_option_keys:
+        if key not in self.option_keys:
             raise ValueError(f'Non-existent key specified: key={key}')
         if len(value) == 0:
             raise ValueError("`value` should have at least character")
@@ -488,19 +465,17 @@ class RepairModel():
         self.opts[key] = value
         return self
 
+    def _get_option_value(self, *args) -> Any:  # type: ignore
+        return get_option_value(self.opts, *args)
+
+    @property
+    def _row_id(self) -> str:
+        return str(self.row_id)
+
     @property
     def _input_table(self) -> str:
         return self._create_temp_view(self.input, "input") if type(self.input) is DataFrame \
             else str(self.input)
-
-    @property
-    def _error_cells(self) -> str:
-        df = self.error_cells if type(self.error_cells) is DataFrame \
-            else self._spark.table(str(self.error_cells))
-        if not all(c in df.columns for c in (str(self.row_id), "attribute")):  # type: ignore
-            raise ValueError(f"Error cells should have `{self.row_id}` and "
-                             "`attribute` in columns")
-        return self._create_temp_view(df, "error_cells")
 
     @property
     def _repair_by_nearest_values_enabled(self) -> bool:
@@ -516,39 +491,6 @@ class RepairModel():
     def _repair_by_functional_deps_enabled(self) -> bool:
         return not bool(self._get_option_value(*self._opt_repair_by_functional_deps_disabled)) \
             and self.repair_by_rules
-
-    def _get_option_value(self, key: str, default_value: Any, type_class: Any = str,
-                          validator: Optional[Any] = None, err_msg: Optional[str] = None) -> Any:
-        assert type(default_value) is type_class
-
-        if key not in self.opts:
-            return default_value
-
-        try:
-            value = type_class(self.opts[key])
-        except:
-            msg = f'Failed to cast "{self.opts[key]}" into {type_class.__name__} data: key={key}'
-            if is_testing():
-                raise ValueError(msg)
-
-            _logger.warning(msg)
-            return default_value
-
-        if validator and not validator(value):
-            msg = f'{str(err_msg).format(key)}, got {value}'
-            if is_testing():
-                raise ValueError(msg)
-
-            _logger.warning(msg)
-            return default_value
-
-        return value
-
-    def _target_attrs(self, input_columns: List[str]) -> List[str]:
-        target_attrs = list(filter(lambda c: c != self.row_id, input_columns))
-        if self.targets:
-            target_attrs = list(set(self.targets) & set(target_attrs))  # type: ignore
-        return target_attrs
 
     def _clear_job_group(self) -> None:
         # TODO: Uses `SparkContext.clearJobGroup()` instead
@@ -580,10 +522,6 @@ class RepairModel():
         self._intermediate_views_on_runtime.append(temp_name)
         return temp_name
 
-    def _register_table(self, view_name: str) -> str:
-        self._intermediate_views_on_runtime.append(view_name)
-        return view_name
-
     def _register_and_get_df(self, view_name: str) -> DataFrame:
         self._intermediate_views_on_runtime.append(view_name)
         return self._spark.table(view_name)
@@ -595,175 +533,11 @@ class RepairModel():
         self._intermediate_views_on_runtime.append(temp_name)
         return self._spark.table(temp_name)
 
-    def _empty_dataframe(self, schema: StructType) -> DataFrame:
-        return self._spark.createDataFrame(self._spark.sparkContext.emptyRDD(), schema)
-
     def _release_resources(self) -> None:
         while self._intermediate_views_on_runtime:
             v = self._intermediate_views_on_runtime.pop()
             _logger.debug(f"Dropping an auto-generated view: {v}")
             self._spark.sql(f"DROP VIEW IF EXISTS {v}")
-
-    def _check_input_table(self) -> Tuple[str, List[str]]:
-        ret_as_json = json.loads(self._repair_api.checkInputTable(self.db_name, self._input_table, str(self.row_id)))
-        input_table = ret_as_json["input_table"]
-        continous_columns = ret_as_json["continous_attrs"].split(",")
-
-        _logger.info("input_table: {} ({} rows x {} columns)".format(
-            input_table, self._spark.table(input_table).count(),
-            len(self._spark.table(input_table).columns) - 1))
-
-        return input_table, continous_columns if continous_columns != [""] else []
-
-    def _get_default_error_detectors(self, input_table: str) -> List[ErrorDetector]:
-        error_detectors: List[ErrorDetector] = [NullErrorDetector()]
-        targets = self.targets if self.targets else \
-            [c for c in self._spark.table(input_table).columns if c != self.row_id]
-        for c in targets:
-            error_detectors.append(DomainValues(attr=c, autofill=True, min_count_thres=4))
-
-        return error_detectors
-
-    def _to_str(self, d: List[Any], sep: str = ',', quote: bool = False) -> str:
-        return f'{sep}'.join(map(lambda e: f"'{e}'" if quote else str(e), d))
-
-    # TODO: Needs to implement an error detector based on edit distances
-    def _detect_error_cells(self, input_table: str, continous_columns: List[str]) -> DataFrame:
-        error_detectors = self.error_detectors
-        if not error_detectors:
-            error_detectors = self._get_default_error_detectors(input_table)
-
-        _logger.info(f'[Error Detection Phase] Used error detectors: {self._to_str(error_detectors)}')
-
-        # Computes target attributes for error detection
-        target_attrs = self._target_attrs(self._spark.table(input_table).columns)
-
-        # Initializes the given error detectors with the input params
-        for d in error_detectors:
-            d.setUp(str(self.row_id), input_table, continous_columns, target_attrs)  # type: ignore
-
-        error_cells_dfs = [d.detect() for d in error_detectors]
-        err_cells_df = functools.reduce(lambda x, y: x.union(y), error_cells_dfs)
-        return err_cells_df.distinct().cache()
-
-    def _with_current_values(self, input_table: str, noisy_cells_df: DataFrame, targetAttrs: List[str]) -> DataFrame:
-        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v1")
-        jdf = self._repair_api.withCurrentValues(input_table, noisy_cells, str(self.row_id), ','.join(targetAttrs))
-        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
-
-    def _filter_columns_from(self, df: DataFrame, targets: List[str], negate: bool = False) -> DataFrame:
-        return df.where("attribute {} ({})".format("NOT IN" if negate else "IN", self._to_str(targets, quote=True)))
-
-    @_spark_job_group(name="error detection")
-    def _detect_errors(self, input_table: str, continous_columns: List[str]) -> Tuple[DataFrame, List[str]]:
-        # If `self.error_cells` provided, just uses it
-        if self.error_cells is not None:
-            # TODO: Even in this case, we need to use a NULL detector because
-            # `_build_stat_model` will fail if `y` has NULL.
-            noisy_cells_df = self._spark.table(self._error_cells)
-            _logger.info(f'[Error Detection Phase] Error cells provided by `{self._error_cells}`')
-
-            if len(self.targets) == 0:
-                # Filters out non-existent columns in `input_table`
-                noisy_cells_df = self._filter_columns_from(
-                    noisy_cells_df, self._spark.table(input_table).columns)
-            else:
-                # Filters target attributes if `self.targets` defined
-                noisy_cells_df = self._filter_columns_from(noisy_cells_df, self.targets)
-        else:
-            # Applies error detectors to get noisy cells
-            noisy_cells_df = self._detect_error_cells(input_table, continous_columns)
-
-        noisy_columns: List[str] = []
-        num_noisy_cells = noisy_cells_df.count()
-        if num_noisy_cells > 0:
-            noisy_columns = noisy_cells_df \
-                .selectExpr("collect_set(attribute) columns") \
-                .collect()[0] \
-                .columns
-            noisy_cells_df = self._with_current_values(
-                input_table, noisy_cells_df, noisy_columns)
-
-        return noisy_cells_df, noisy_columns
-
-    @_spark_job_group(name="cell domain analysis")
-    def _analyze_error_cell_domain(
-            self, discretized_table: str, noisy_cells_df: DataFrame,
-            continous_columns: List[str], target_columns: List[str],
-            domain_stats: Dict[str, int],
-            freq_attr_stats: str,
-            pairwise_attr_stats: Dict[str, int]) -> str:
-        _logger.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
-
-        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v3")
-        jdf = self._repair_api.computeDomainInErrorCells(
-            discretized_table, noisy_cells, str(self.row_id),
-            ",".join(continous_columns),
-            ",".join(target_columns),
-            freq_attr_stats,
-            json.dumps(pairwise_attr_stats),
-            json.dumps(domain_stats),
-            self._get_option_value(*self._opt_max_attrs_to_compute_domains),
-            self._get_option_value(*self._opt_min_corr_thres),
-            self._get_option_value(*self._opt_domain_threshold_alpha),
-            self._get_option_value(*self._opt_domain_threshold_beta))
-
-        cell_domain_df = DataFrame(jdf, self._spark._wrapped)  # type: ignore
-        cell_domain = self._create_temp_view(cell_domain_df.cache(), "cell_domain")
-        return cell_domain
-
-    def _extract_error_cells(self, input_table: str, noisy_cells_df: DataFrame,
-                             discretized_table: str, continous_columns: List[str], target_columns: List[str],
-                             domain_stats: Dict[str, int]) -> Tuple[DataFrame, Any]:
-        freq_attr_stats, pairwise_attr_stats = self._compute_attr_stats(
-            discretized_table, target_columns, domain_stats)
-
-        if self.error_cells is not None:
-            return noisy_cells_df, pairwise_attr_stats
-
-        cell_domain = self._analyze_error_cell_domain(
-            discretized_table, noisy_cells_df, continous_columns, target_columns,
-            domain_stats, freq_attr_stats, pairwise_attr_stats)
-
-        # Fixes cells if a predicted value is the same with an initial one
-        fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) repaired"
-        weak_labeled_cells_df = self._spark.table(cell_domain) \
-            .selectExpr(f"`{self.row_id}`", "attribute", fix_cells_expr) \
-            .where("repaired IS NOT NULL")
-
-        # Removes weak labeled cells from the noisy cells
-        error_cells_df = noisy_cells_df.join(weak_labeled_cells_df, [str(self.row_id), "attribute"], "left_anti")
-        assert noisy_cells_df.count() == error_cells_df.count() + weak_labeled_cells_df.count()
-
-        _logger.info('[Error Detection Phase] {} noisy cells fixed and '
-                     '{} error cells remaining...'.format(weak_labeled_cells_df.count(), error_cells_df.count()))
-
-        return error_cells_df, pairwise_attr_stats
-
-    def _do_error_detection(self, input_table: str, continous_columns: List[str]) -> Tuple[DataFrame, Any, Any, Any]:
-        # If no error found, we don't need to do nothing
-        noisy_cells_df, noisy_columns = self._detect_errors(input_table, continous_columns)
-        if noisy_cells_df.count() == 0:  # type: ignore
-            return noisy_cells_df, [], {}, {}
-
-        discretized_table, domain_stats = self._discretize_attrs(input_table)
-        discretized_columns = self._spark.table(discretized_table).columns
-        if len(discretized_columns) == 0:
-            return noisy_cells_df, [], {}, {}
-
-        # Target repairable(discretizable) columns
-        target_columns = list(filter(lambda c: c in discretized_columns, noisy_columns))
-
-        # Defines true error cells based on the result of domain analysis
-        if len(target_columns) > 0 and len(discretized_columns) > 1:
-            error_cells_df, pairwise_attr_stats = self._extract_error_cells(
-                input_table, noisy_cells_df, discretized_table,
-                continous_columns, target_columns,
-                domain_stats)
-
-            return error_cells_df, target_columns, pairwise_attr_stats, domain_stats
-
-        return noisy_cells_df, target_columns, {}, domain_stats
 
     def _prepare_repair_base_cells(
             self, input_table: str, noisy_cells_df: DataFrame, target_columns: List[str]) -> DataFrame:
@@ -779,42 +553,20 @@ class RepairModel():
 
         return self._register_and_get_df(ret_as_json["repair_base_cells"])
 
-    # Checks if attributes are discrete or not, and discretizes continous ones
-    def _discretize_attrs(self, input_table: str) -> Tuple[str, Dict[str, int]]:
-        # Filters out attributes having large domains and makes continous values
-        # discrete if necessary.
-        ret_as_json = json.loads(self._repair_api.convertToDiscretizedTable(
-            input_table, str(self.row_id), self.discrete_thres))
-        discretized_table = self._register_table(ret_as_json["discretized_table"])
-        domain_stats = {k: int(v) for k, v in ret_as_json["domain_stats"].items()}
-        return discretized_table, domain_stats
-
-    def _compute_attr_stats(self, discretized_table: str, target_columns: List[str],
-                            domain_stats: Dict[str, int]) -> Tuple[str, Dict[str, Any]]:
-        # Computes attribute statistics to calculate domains with posteriori probability
-        # based on naïve independence assumptions.
-        _logger.debug("Collecting and sampling attribute stats (ratio={} threshold={}) "
-                      "before computing error domains...".format(
-                          self._get_option_value(*self._opt_attr_stat_sample_ratio),
-                          self._get_option_value(*self._opt_attr_stat_threshold)))
-
-        ret_as_json = json.loads(self._repair_api.computeAttrStats(
-            discretized_table,
-            str(self.row_id),
-            ','.join(target_columns),
-            json.dumps(domain_stats),
-            self._get_option_value(*self._opt_attr_stat_sample_ratio),
-            self._get_option_value(*self._opt_attr_stat_threshold)))
-
-        return self._register_table(ret_as_json['freq_attr_stats']), \
-            ret_as_json['pairwise_attr_stats']
-
     def _split_clean_and_dirty_rows(
             self, repair_base_df: DataFrame, error_cells_df: DataFrame) -> Tuple[DataFrame, DataFrame]:
         error_rows_df = error_cells_df.selectExpr(f"`{self.row_id}`")
         clean_rows_df = repair_base_df.join(error_rows_df, str(self.row_id), "left_anti")
         dirty_rows_df = repair_base_df.join(error_rows_df, str(self.row_id), "left_semi")
         return clean_rows_df, dirty_rows_df
+
+    def _empty_dataframe(self, schema: StructType) -> DataFrame:
+        return self._spark.createDataFrame(self._spark.sparkContext.emptyRDD(), schema)
+
+    def _empty_repaired_cells_dataframe(self, row_id_field: StructField) -> DataFrame:
+        field_names = ['attribute', 'current_value', 'repaired']
+        fields = [row_id_field] + list(map(lambda n: StructField(n, StringType()), field_names))
+        return self._empty_dataframe(StructType(fields))
 
     def _create_cost_func(self) -> Any:
         broadcasted_cf = self._spark.sparkContext.broadcast(self.cf)
@@ -833,11 +585,6 @@ class RepairModel():
             return pd.Series(result)
 
         return cost_func
-
-    def _empty_repaired_cells_dataframe(self, row_id_field: StructField) -> DataFrame:
-        field_names = ['attribute', 'current_value', 'repaired']
-        fields = [row_id_field] + list(map(lambda n: StructField(n, StringType()), field_names))
-        return self._empty_dataframe(StructType(fields))
 
     def _repair_by_nearest_values(self, repair_base_df: DataFrame,
                                   error_cells_df: DataFrame,
@@ -889,7 +636,7 @@ class RepairModel():
             return error_cells_df, self._empty_repaired_cells_dataframe(row_id_field)
 
         regexs = list(map(lambda d: (d.attr, d.regex), regex_detectors))  # type: ignore
-        _logger.info(f'[Repairing Phase] Repairing data using regexs: {self._to_str(regexs)}')
+        _logger.info(f'[Repairing Phase] Repairing data using regexs: {to_list_str(regexs)}')
 
         # TODO: Needs to Implement a repair strategy using regular expressions (See [17])
         row_id_field = error_cells_df.schema[str(self.row_id)]
@@ -938,7 +685,7 @@ class RepairModel():
                     top_k_fts.append((float(corr), f))
 
             _logger.info("[Repair Model Training Phase] {} features ({}) selected from {} features".format(
-                len(top_k_fts), self._to_str(list(map(lambda f: f"{f[1]}:{-f[0]}", top_k_fts))), len(features)))
+                len(top_k_fts), to_list_str(list(map(lambda f: f"{f[1]}:{-f[0]}", top_k_fts))), len(features)))
 
             features = list(map(lambda f: f[1], top_k_fts))
 
@@ -1046,7 +793,7 @@ class RepairModel():
             for transformer in transformer_map[y]:
                 X = transformer.fit_transform(X)
             _logger.debug("{} encoders transform ({})=>({})".format(
-                len(transformer_map[y]), self._to_str(feature_map[y]), self._to_str(X.columns)))
+                len(transformer_map[y]), to_list_str(feature_map[y]), to_list_str(X.columns)))
 
             # Re-balance target classes in training data
             X, y_ = rebalance_training_data(X, train_pdf[y], y) \
@@ -1055,7 +802,7 @@ class RepairModel():
 
             _logger.info("Building {}/{} model... type={} y={} features={} #rows={}{}".format(
                 index, len(target_columns), model_type,
-                y, self._to_str(feature_map[y]),
+                y, to_list_str(feature_map[y]),
                 len(train_pdf),
                 f" #class={num_class_map[y]}" if num_class_map[y] > 0 else ""))
             (model, score), elapsed_time = build_model(X, y_, is_discrete, num_class_map[y], n_jobs=-1, opts=self.opts)
@@ -1109,12 +856,12 @@ class RepairModel():
             for transformer in transformers:
                 X = transformer.fit_transform(X)
             _logger.debug("{} encoders transform ({})=>({})".format(
-                len(transformers), self._to_str(feature_map[y]), self._to_str(X.columns)))
+                len(transformers), to_list_str(feature_map[y]), to_list_str(X.columns)))
 
             _logger.info("Start building {}/{} model in parallel... type={} y={} features={} #rows={}{}".format(
                 index, len(target_columns),
                 "classfier" if y not in continous_columns else "regressor",
-                y, self._to_str(feature_map[y]),
+                y, to_list_str(feature_map[y]),
                 len(train_pdf),
                 f" #class={num_class_map[y]}" if num_class_map[y] > 0 else ""))
 
@@ -1243,7 +990,7 @@ class RepairModel():
         # Builds multiple repair models to repair error cells
         _logger.info("[Repair Model Training Phase] Building {} models "
                      "to repair the cells in {}"
-                     .format(len(target_columns), self._to_str(target_columns)))
+                     .format(len(target_columns), to_list_str(target_columns)))
 
         models: Dict[str, Any] = {}
         num_class_map: Dict[str, int] = {}
@@ -1316,7 +1063,7 @@ class RepairModel():
                 assert len(error_columns) < len(columns)
 
             _logger.info("Resolved prediction order dependencies: {}".format(
-                self._to_str(list(map(lambda x: x[0], pred_ordered_models)))))
+                to_list_str(list(map(lambda x: x[0], pred_ordered_models)))))
             assert len(pred_ordered_models) == len(target_columns)
             return pred_ordered_models
 
@@ -1422,7 +1169,7 @@ class RepairModel():
             f"(p, c) -> p * (1.0 / (1.0 + {pmf_weight} * c))), probs)"
         if self.cf.targets:  # type: ignore
             _logger.info(f'[Repairing Phase] {self.cf} computing weighting probs...')
-            cf_targets = self._to_str(self.cf.targets, quote=True)  # type: ignore
+            cf_targets = to_list_str(self.cf.targets, quote=True)  # type: ignore
             to_weighted_probs = f"if(attribute IN ({cf_targets}), {to_weighted_probs}, probs)"
 
         sum_probs = "aggregate(probs, double(0.0), (acc, x) -> acc + x) norm"
@@ -1437,6 +1184,9 @@ class RepairModel():
     def _flatten(self, input_table: str) -> DataFrame:
         jdf = self._jvm.RepairMiscApi.flattenTable("", input_table, str(self.row_id))
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
+
+    def _filter_columns_from(self, df: DataFrame, targets: List[str], negate: bool = False) -> DataFrame:
+        return df.where("attribute {} ({})".format("NOT IN" if negate else "IN", to_list_str(targets, quote=True)))
 
     def _compute_repair_pmf(self, repaired_rows_df: DataFrame, error_cells_df: DataFrame,
                             continous_columns: List[str]) -> DataFrame:
@@ -1562,8 +1312,16 @@ class RepairModel():
         #################################################################################
         _logger.info(f'[Error Detection Phase] Detecting errors in a table `{input_table}`... ')
 
+        error_model_params = {
+            'row_id': self._row_id,
+            'targets': self.targets,
+            'discrete_thres': self.discrete_thres,
+            'error_detectors': self.error_detectors,
+            'error_cells': self.error_cells
+        }
+        error_model = ErrorModel(**error_model_params)  # type: ignore
         error_cells_df, target_columns, pairwise_attr_stats, domain_stats = \
-            self._do_error_detection(input_table, continous_columns)
+            error_model.detect(input_table, continous_columns)
 
         # If `detect_errors_only` is True, returns found error cells
         if detect_errors_only:
@@ -1674,6 +1432,17 @@ class RepairModel():
 
         return self._register_df(repair_candidates_df.cache(), 'output')
 
+    def _check_input_table(self) -> Tuple[str, List[str]]:
+        ret_as_json = json.loads(self._repair_api.checkInputTable(self.db_name, self._input_table, str(self.row_id)))
+        input_table = ret_as_json["input_table"]
+        continous_columns = ret_as_json["continous_attrs"].split(",")
+
+        _logger.info("input_table: {} ({} rows x {} columns)".format(
+            input_table, self._spark.table(input_table).count(),
+            len(self._spark.table(input_table).columns) - 1))
+
+        return input_table, continous_columns if continous_columns != [""] else []
+
     def run(self, detect_errors_only: bool = False, compute_repair_candidate_prob: bool = False,
             compute_repair_prob: bool = False, compute_repair_score: bool = False,
             repair_data: bool = False, maximal_likelihood_repair: bool = False) -> DataFrame:
@@ -1751,7 +1520,7 @@ class RepairModel():
         selected_param = list(map(lambda x: x[0], filter(lambda x: x[1], exclusive_param_list)))
         if len(selected_param) > 1:
             raise ValueError("{} cannot be set to true simultaneously".format(
-                self._to_str(selected_param, sep='/', quote=True)))
+                to_list_str(selected_param, sep='/', quote=True)))
 
         # TODO: Support these mixed modes in future
         if self._repair_by_nearest_values_enabled and \
@@ -1779,7 +1548,7 @@ class RepairModel():
                                  "when continous attributes found")
 
             if self.targets and len(set(self.targets) & set(self._spark.table(input_table).columns)) == 0:
-                raise ValueError(f"Target attributes not found in {input_table}: {self._to_str(self.targets)}")
+                raise ValueError(f"Target attributes not found in {input_table}: {to_list_str(self.targets)}")
 
             df, elapsed_time = self._run(
                 input_table, continous_columns, detect_errors_only, compute_repair_candidate_prob,

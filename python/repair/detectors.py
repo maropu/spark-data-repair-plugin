@@ -19,13 +19,20 @@
 
 import datetime
 import functools
+import json
+import time
 import numpy as np
 import pandas as pd
 from abc import ABCMeta, abstractmethod
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pyspark.sql import DataFrame, SparkSession, functions  # type: ignore
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+
+from repair.utils import get_option_value, setup_logger, to_list_str
+
+
+_logger = setup_logger()
 
 
 class ErrorDetector(metaclass=ABCMeta):
@@ -293,3 +300,299 @@ class LOFOutlierErrorDetector(ScikitLearnBasedErrorDetector):
     def _outlier_detector_impl(self) -> Any:
         from sklearn.neighbors import LocalOutlierFactor
         return LocalOutlierFactor(novelty=False)
+
+
+class ErrorModel():
+
+    # List of internal configurations
+    from collections import namedtuple
+    _option = namedtuple('_option', 'key default_value type_class validator err_msg')
+
+    _opt_min_corr_thres = \
+        _option('error.min_corr_thres', 0.70, float,
+                lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
+    _opt_domain_threshold_alpha = \
+        _option('error.domain_threshold_alph', 0.0, float,
+                lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
+    _opt_domain_threshold_beta = \
+        _option('error.domain_threshold_beta', 0.70, float,
+                lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
+    _opt_max_attrs_to_compute_domains = \
+        _option('error.max_attrs_to_compute_domains', 4, int,
+                lambda v: v >= 2, '`{}` should be greater than 1')
+    _opt_attr_stat_sample_ratio = \
+        _option('error.attr_stat_sample_ratio', 1.0, float,
+                lambda v: 0.0 <= v and v <= 1.0, '`{}` should be in [0.0, 1.0]')
+    _opt_attr_stat_threshold = \
+        _option('error.attr_stat_threshold', 0.0, float,
+                lambda v: 0.0 <= v and v <= 1.0, '`{}` should be in [0.0, 1.0]')
+
+    option_keys = set([
+        _opt_min_corr_thres.key,
+        _opt_domain_threshold_alpha.key,
+        _opt_domain_threshold_beta.key,
+        _opt_max_attrs_to_compute_domains.key,
+        _opt_attr_stat_sample_ratio.key,
+        _opt_attr_stat_threshold.key])
+
+    def __init__(self, row_id: str, targets: List[str], discrete_thres: int,
+                 error_detectors: List[ErrorDetector],
+                 error_cells: Optional[Union[str, DataFrame]]) -> None:
+        self.row_id: str = str(row_id)
+        self.targets: List[str] = targets
+        self.discrete_thres: int = discrete_thres
+        self.error_detectors: List[ErrorDetector] = error_detectors
+        self.error_cells: Optional[Union[str, DataFrame]] = error_cells
+
+        # Options for internal behaviours
+        self.opts: Dict[str, str] = {}
+
+        # Temporary views to keep intermediate results; these views are automatically
+        # created when repairing data, and then dropped finally.
+        #
+        # TODO: Move this variable into a runtime env
+        self._intermediate_views_on_runtime: List[str] = []
+
+        # JVM interfaces for Data Repair/Graph APIs
+        self._spark = SparkSession.builder.getOrCreate()
+        self._jvm = self._spark.sparkContext._active_spark_context._jvm  # type: ignore
+        self._repair_api = self._jvm.RepairApi
+
+    def _get_option_value(self, *args) -> Any:  # type: ignore
+        return get_option_value(self.opts, *args)
+
+    @property
+    def _error_cells(self) -> str:
+        df = self.error_cells if type(self.error_cells) is DataFrame \
+            else self._spark.table(str(self.error_cells))
+        if not all(c in df.columns for c in (str(self.row_id), "attribute")):  # type: ignore
+            raise ValueError(f"Error cells should have `{self.row_id}` and "
+                             "`attribute` in columns")
+        return self._create_temp_view(df, "error_cells")
+
+    def _create_temp_name(self, prefix: str) -> str:
+        return f'{prefix}_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}'
+
+    def _clear_job_group(self) -> None:
+        # TODO: Uses `SparkContext.clearJobGroup()` instead
+        self._spark.sparkContext.setLocalProperty("spark.jobGroup.id", None)  # type: ignore
+        self._spark.sparkContext.setLocalProperty("spark.job.description", None)  # type: ignore
+        self._spark.sparkContext.setLocalProperty("spark.job.interruptOnCancel", None)  # type: ignore
+
+    def _spark_job_group(name: str):  # type: ignore
+        def decorator(f):  # type: ignore
+            @functools.wraps(f)
+            def wrapper(self, *args, **kwargs):  # type: ignore
+                self._spark.sparkContext.setJobGroup(name, name)  # type: ignore
+                start_time = time.time()
+                ret = f(self, *args, **kwargs)
+                _logger.info(f"Elapsed time (name: {name}) is {time.time() - start_time}(s)")
+                self._clear_job_group()
+
+                return ret
+            return wrapper
+        return decorator
+
+    def _create_temp_view(self, df: Any, prefix: str) -> str:
+        assert isinstance(df, DataFrame)
+        temp_name = self._create_temp_name(prefix)
+        df.createOrReplaceTempView(temp_name)
+        self._intermediate_views_on_runtime.append(temp_name)
+        return temp_name
+
+    def _register_table(self, view_name: str) -> str:
+        self._intermediate_views_on_runtime.append(view_name)
+        return view_name
+
+    def _release_resources(self) -> None:
+        while self._intermediate_views_on_runtime:
+            v = self._intermediate_views_on_runtime.pop()
+            _logger.debug(f"Dropping an auto-generated view: {v}")
+            self._spark.sql(f"DROP VIEW IF EXISTS {v}")
+
+    def _get_default_error_detectors(self, input_table: str) -> List[ErrorDetector]:
+        error_detectors: List[ErrorDetector] = [NullErrorDetector()]
+        targets = self.targets if self.targets else \
+            [c for c in self._spark.table(input_table).columns if c != self.row_id]
+        for c in targets:
+            error_detectors.append(DomainValues(attr=c, autofill=True, min_count_thres=4))
+
+        return error_detectors
+
+    def _target_attrs(self, input_columns: List[str]) -> List[str]:
+        target_attrs = list(filter(lambda c: c != self.row_id, input_columns))
+        if self.targets:
+            target_attrs = list(set(self.targets) & set(target_attrs))  # type: ignore
+        return target_attrs
+
+    # TODO: Needs to implement an error detector based on edit distances
+    def _detect_error_cells(self, input_table: str, continous_columns: List[str]) -> DataFrame:
+        error_detectors = self.error_detectors
+        if not error_detectors:
+            error_detectors = self._get_default_error_detectors(input_table)
+
+        _logger.info(f'[Error Detection Phase] Used error detectors: {to_list_str(error_detectors)}')
+
+        # Computes target attributes for error detection
+        target_attrs = self._target_attrs(self._spark.table(input_table).columns)
+
+        # Initializes the given error detectors with the input params
+        for d in error_detectors:
+            d.setUp(self.row_id, input_table, continous_columns, target_attrs)  # type: ignore
+
+        error_cells_dfs = [d.detect() for d in error_detectors]
+        err_cells_df = functools.reduce(lambda x, y: x.union(y), error_cells_dfs)
+        return err_cells_df.distinct().cache()
+
+    def _with_current_values(self, input_table: str, noisy_cells_df: DataFrame, targetAttrs: List[str]) -> DataFrame:
+        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v1")
+        jdf = self._repair_api.withCurrentValues(input_table, noisy_cells, self.row_id, ','.join(targetAttrs))
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
+
+    def _filter_columns_from(self, df: DataFrame, targets: List[str], negate: bool = False) -> DataFrame:
+        return df.where("attribute {} ({})".format("NOT IN" if negate else "IN", to_list_str(targets, quote=True)))
+
+    @_spark_job_group(name="error detection")
+    def _detect_errors(self, input_table: str, continous_columns: List[str]) -> Tuple[DataFrame, List[str]]:
+        # If `self.error_cells` provided, just uses it
+        if self.error_cells is not None:
+            # TODO: Even in this case, we need to use a NULL detector because
+            # `_build_stat_model` will fail if `y` has NULL.
+            noisy_cells_df = self._spark.table(self._error_cells)
+            _logger.info(f'[Error Detection Phase] Error cells provided by `{self._error_cells}`')
+
+            if len(self.targets) == 0:
+                # Filters out non-existent columns in `input_table`
+                noisy_cells_df = self._filter_columns_from(
+                    noisy_cells_df, self._spark.table(input_table).columns)
+            else:
+                # Filters target attributes if `self.targets` defined
+                noisy_cells_df = self._filter_columns_from(noisy_cells_df, self.targets)
+        else:
+            # Applies error detectors to get noisy cells
+            noisy_cells_df = self._detect_error_cells(input_table, continous_columns)
+
+        noisy_columns: List[str] = []
+        num_noisy_cells = noisy_cells_df.count()
+        if num_noisy_cells > 0:
+            noisy_columns = noisy_cells_df \
+                .selectExpr("collect_set(attribute) columns") \
+                .collect()[0] \
+                .columns
+            noisy_cells_df = self._with_current_values(
+                input_table, noisy_cells_df, noisy_columns)
+
+        return noisy_cells_df, noisy_columns
+
+    @_spark_job_group(name="cell domain analysis")
+    def _analyze_error_cell_domain(
+            self, discretized_table: str, noisy_cells_df: DataFrame,
+            continous_columns: List[str], target_columns: List[str],
+            domain_stats: Dict[str, int],
+            freq_attr_stats: str,
+            pairwise_attr_stats: Dict[str, int]) -> str:
+        _logger.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
+
+        noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v3")
+        jdf = self._repair_api.computeDomainInErrorCells(
+            discretized_table, noisy_cells, self.row_id,
+            ",".join(continous_columns),
+            ",".join(target_columns),
+            freq_attr_stats,
+            json.dumps(pairwise_attr_stats),
+            json.dumps(domain_stats),
+            self._get_option_value(*self._opt_max_attrs_to_compute_domains),
+            self._get_option_value(*self._opt_min_corr_thres),
+            self._get_option_value(*self._opt_domain_threshold_alpha),
+            self._get_option_value(*self._opt_domain_threshold_beta))
+
+        cell_domain_df = DataFrame(jdf, self._spark._wrapped)  # type: ignore
+        cell_domain = self._create_temp_view(cell_domain_df.cache(), "cell_domain")
+        return cell_domain
+
+    def _compute_attr_stats(self, discretized_table: str, target_columns: List[str],
+                            domain_stats: Dict[str, int]) -> Tuple[str, Dict[str, Any]]:
+        # Computes attribute statistics to calculate domains with posteriori probability
+        # based on naïve independence assumptions.
+        _logger.debug("Collecting and sampling attribute stats (ratio={} threshold={}) "
+                      "before computing error domains...".format(
+                          self._get_option_value(*self._opt_attr_stat_sample_ratio),
+                          self._get_option_value(*self._opt_attr_stat_threshold)))
+
+        ret_as_json = json.loads(self._repair_api.computeAttrStats(
+            discretized_table,
+            str(self.row_id),
+            ','.join(target_columns),
+            json.dumps(domain_stats),
+            self._get_option_value(*self._opt_attr_stat_sample_ratio),
+            self._get_option_value(*self._opt_attr_stat_threshold)))
+
+        return self._register_table(ret_as_json['freq_attr_stats']), \
+            ret_as_json['pairwise_attr_stats']
+
+    def _extract_error_cells(self, input_table: str, noisy_cells_df: DataFrame,
+                             discretized_table: str, continous_columns: List[str], target_columns: List[str],
+                             domain_stats: Dict[str, int]) -> Tuple[DataFrame, Any]:
+        freq_attr_stats, pairwise_attr_stats = self._compute_attr_stats(
+            discretized_table, target_columns, domain_stats)
+
+        if self.error_cells is not None:
+            return noisy_cells_df, pairwise_attr_stats
+
+        cell_domain = self._analyze_error_cell_domain(
+            discretized_table, noisy_cells_df, continous_columns, target_columns,
+            domain_stats, freq_attr_stats, pairwise_attr_stats)
+
+        # Fixes cells if a predicted value is the same with an initial one
+        fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) repaired"
+        weak_labeled_cells_df = self._spark.table(cell_domain) \
+            .selectExpr(f"`{self.row_id}`", "attribute", fix_cells_expr) \
+            .where("repaired IS NOT NULL")
+
+        # Removes weak labeled cells from the noisy cells
+        error_cells_df = noisy_cells_df.join(weak_labeled_cells_df, [self.row_id, "attribute"], "left_anti")
+        assert noisy_cells_df.count() == error_cells_df.count() + weak_labeled_cells_df.count()
+
+        _logger.info('[Error Detection Phase] {} noisy cells fixed and '
+                     '{} error cells remaining...'.format(weak_labeled_cells_df.count(), error_cells_df.count()))
+
+        return error_cells_df, pairwise_attr_stats
+
+    # Checks if attributes are discrete or not, and discretizes continous ones
+    def _discretize_attrs(self, input_table: str) -> Tuple[str, Dict[str, int]]:
+        # Filters out attributes having large domains and makes continous values
+        # discrete if necessary.
+        ret_as_json = json.loads(self._repair_api.convertToDiscretizedTable(
+            input_table, str(self.row_id), self.discrete_thres))
+        discretized_table = self._register_table(ret_as_json["discretized_table"])
+        domain_stats = {k: int(v) for k, v in ret_as_json["domain_stats"].items()}
+        return discretized_table, domain_stats
+
+    def detect(self, input_table: str, continous_columns: List[str]) \
+            -> Tuple[DataFrame, List[str], Dict[str, int], Dict[str, int]]:
+        try:
+            # If no error found, we don't need to do nothing
+            noisy_cells_df, noisy_columns = self._detect_errors(input_table, continous_columns)
+            if noisy_cells_df.count() == 0:  # type: ignore
+                return noisy_cells_df, [], {}, {}
+
+            discretized_table, domain_stats = self._discretize_attrs(input_table)
+            discretized_columns = self._spark.table(discretized_table).columns
+            if len(discretized_columns) == 0:
+                return noisy_cells_df, [], {}, {}
+
+            # Target repairable(discretizable) columns
+            target_columns = list(filter(lambda c: c in discretized_columns, noisy_columns))
+
+            # Defines true error cells based on the result of domain analysis
+            if len(target_columns) > 0 and len(discretized_columns) > 1:
+                error_cells_df, pairwise_attr_stats = self._extract_error_cells(
+                    input_table, noisy_cells_df, discretized_table,
+                    continous_columns, target_columns,
+                    domain_stats)
+
+                return error_cells_df, target_columns, pairwise_attr_stats, domain_stats
+
+            return noisy_cells_df, target_columns, {}, domain_stats
+        finally:
+            self._release_resources()

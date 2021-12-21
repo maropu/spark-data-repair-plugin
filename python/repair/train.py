@@ -24,7 +24,7 @@ import pandas as pd  # type: ignore[import]
 from collections import namedtuple
 from typing import Any, Dict, List, Optional, Tuple
 
-from repair.utils import elapsed_time, is_testing, setup_logger
+from repair.utils import elapsed_time, get_option_value, setup_logger
 
 
 _logger = setup_logger()
@@ -69,38 +69,30 @@ _opt_no_progress_loss = \
     _option('model.hp.no_progress_loss', 50, int,
             lambda v: v > 0, '`{}` should be positive')
 
+train_option_keys = [
+    _opt_boosting_type.key,
+    _opt_class_weight.key,
+    _opt_learning_rate.key,
+    _opt_max_depth.key,
+    _opt_max_bin.key,
+    _opt_reg_alpha.key,
+    _opt_min_split_gain.key,
+    _opt_n_estimators.key,
+    _opt_importance_type.key,
+    _opt_n_splits.key,
+    _opt_timeout.key,
+    _opt_max_evals.key,
+    _opt_no_progress_loss.key
+]
+
 
 @elapsed_time  # type: ignore
 def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class: int, n_jobs: int,
                      opts: Dict[str, str]) -> Tuple[Any, float]:
     import lightgbm as lgb  # type: ignore[import]
 
-    def _get_option_value(key: str, default_value: Any, type_class: Any = str,
-                          validator: Optional[Any] = None, err_msg: Optional[str] = None) -> Any:
-        assert type(default_value) is type_class
-
-        if key not in opts:
-            return default_value
-
-        try:
-            value = type_class(opts[key])
-        except:
-            msg = f'Failed to cast "{opts[key]}" into {type_class.__name__} data: key={key}'
-            if is_testing():
-                raise ValueError(msg)
-
-            _logger.warning(msg)
-            return default_value
-
-        if validator and not validator(value):
-            msg = f'{str(err_msg).format(key)}, got {value}'
-            if is_testing():
-                raise ValueError(msg)
-
-            _logger.warning(msg)
-            return default_value
-
-        return value
+    def _get_option_value(*args) -> Any:  # type: ignore
+        return get_option_value(opts, *args)
 
     if is_discrete:
         objective = "binary" if num_class <= 2 else "multiclass"
@@ -235,24 +227,6 @@ def _build_lgb_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class
     except Exception as e:
         _logger.warning(f"Failed to build a stat model because: {e}")
         return None, 0.0
-
-
-def model_configuration_keys() -> List[str]:
-    return [
-        _opt_boosting_type.key,
-        _opt_class_weight.key,
-        _opt_learning_rate.key,
-        _opt_max_depth.key,
-        _opt_max_bin.key,
-        _opt_reg_alpha.key,
-        _opt_min_split_gain.key,
-        _opt_n_estimators.key,
-        _opt_importance_type.key,
-        _opt_n_splits.key,
-        _opt_timeout.key,
-        _opt_max_evals.key,
-        _opt_no_progress_loss.key
-    ]
 
 
 def build_model(X: pd.DataFrame, y: pd.Series, is_discrete: bool, num_class: int, n_jobs: int,
