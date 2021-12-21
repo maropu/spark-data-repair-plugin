@@ -22,7 +22,7 @@ from pyspark import SparkConf
 
 from repair.costs import Levenshtein
 from repair.model import RepairModel
-from repair.detectors import NullErrorDetector
+from repair.errors import ConstraintErrorDetector, NullErrorDetector, RegExErrorDetector
 from repair.tests.requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
 from repair.tests.testutils import ReusedSQLTestCase, load_testdata
@@ -201,7 +201,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         ]
 
         # Sets params for a hospital repair model
-        from repair.detectors import ConstraintErrorDetector, RegExErrorDetector
         constraint_path = "{}/hospital_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
         error_detectors = [
             ConstraintErrorDetector(constraint_path, targets=rule_based_model_targets),

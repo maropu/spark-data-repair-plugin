@@ -21,7 +21,7 @@ import unittest
 from pyspark import SparkConf
 from pyspark.sql import Row
 
-from repair.detectors import ConstraintErrorDetector, DomainValues, NullErrorDetector, \
+from repair.errors import ConstraintErrorDetector, DomainValues, NullErrorDetector, \
     LOFOutlierErrorDetector, GaussianOutlierErrorDetector, ScikitLearnBackedErrorDetector, RegExErrorDetector
 from repair.tests.testutils import ReusedSQLTestCase, load_testdata
 

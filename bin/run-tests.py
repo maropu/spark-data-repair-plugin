@@ -34,7 +34,7 @@ from multiprocessing import Manager
 
 python_test_goals = [
     "repair.tests.test_costs",
-    "repair.tests.test_detectors",
+    "repair.tests.test_errors",
     "repair.tests.test_misc",
     "repair.tests.test_model",
     "repair.tests.test_model_perf",

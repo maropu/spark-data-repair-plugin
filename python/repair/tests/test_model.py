@@ -26,9 +26,9 @@ from pyspark.sql import Row
 from pyspark.sql.utils import AnalysisException
 
 from repair.costs import Levenshtein
+from repair.errors import ConstraintErrorDetector, DomainValues, NullErrorDetector, RegExErrorDetector
 from repair.misc import RepairMisc
 from repair.model import FunctionalDepModel, RepairModel, PoorModel
-from repair.detectors import ConstraintErrorDetector, DomainValues, NullErrorDetector, RegExErrorDetector
 from repair.tests.requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
 from repair.tests.testutils import Eventually, ReusedSQLTestCase, load_testdata

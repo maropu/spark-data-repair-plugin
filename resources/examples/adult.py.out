@@ -72,7 +72,7 @@ only showing top 1 row
 only showing top 1 row
 
 >>> # Detects error cells then repairs them
-... from repair.detectors import NullErrorDetector, ConstraintErrorDetector
+... from repair.errors import NullErrorDetector, ConstraintErrorDetector
 ... error_detectors = [
 ...     ConstraintErrorDetector(constraint_path="./testdata/adult_constraints.txt"),
 ...     NullErrorDetector()

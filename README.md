@@ -64,7 +64,7 @@ Delphi APIs (version 0.1.0-spark3.2-EXPERIMENTAL) available as 'delphi'.
 
 # Runs a job to compute repair updates for the seven NULL cells above in `dirty_df`
 # A `repaired` column represents proposed updates to repiar them
->>> from repair.detectors import NullErrorDetector
+>>> from repair.errors import NullErrorDetector
 >>> repair_updates_df = delphi.repair \
 ...   .setInput("adult") \
 ...   .setRowId("tid") \

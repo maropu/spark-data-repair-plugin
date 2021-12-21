@@ -34,7 +34,7 @@ from pyspark.sql.types import ByteType, IntegerType, LongType, ShortType, \
     StringType, StructField, StructType  # type: ignore[import]
 
 from repair.costs import UpdateCostFunction
-from repair.detectors import ConstraintErrorDetector, ErrorDetector, ErrorModel, RegExErrorDetector
+from repair.errors import ConstraintErrorDetector, ErrorDetector, ErrorModel, RegExErrorDetector
 from repair.train import build_model, compute_class_nrow_stdv, train_option_keys, rebalance_training_data
 from repair.utils import argtype_check, elapsed_time, get_option_value, setup_logger, to_list_str
 
@@ -538,6 +538,17 @@ class RepairModel():
             v = self._intermediate_views_on_runtime.pop()
             _logger.debug(f"Dropping an auto-generated view: {v}")
             self._spark.sql(f"DROP VIEW IF EXISTS {v}")
+
+    def _detect_errors(self, input_table: str, continous_columns: List[str]) -> Any:  # type: ignore
+        error_model_params = {
+            'row_id': self._row_id,
+            'targets': self.targets,
+            'discrete_thres': self.discrete_thres,
+            'error_detectors': self.error_detectors,
+            'error_cells': self.error_cells
+        }
+        error_model = ErrorModel(**error_model_params)  # type: ignore
+        return error_model.detect(input_table, continous_columns)
 
     def _prepare_repair_base_cells(
             self, input_table: str, noisy_cells_df: DataFrame, target_columns: List[str]) -> DataFrame:
@@ -1312,16 +1323,8 @@ class RepairModel():
         #################################################################################
         _logger.info(f'[Error Detection Phase] Detecting errors in a table `{input_table}`... ')
 
-        error_model_params = {
-            'row_id': self._row_id,
-            'targets': self.targets,
-            'discrete_thres': self.discrete_thres,
-            'error_detectors': self.error_detectors,
-            'error_cells': self.error_cells
-        }
-        error_model = ErrorModel(**error_model_params)  # type: ignore
         error_cells_df, target_columns, pairwise_attr_stats, domain_stats = \
-            error_model.detect(input_table, continous_columns)
+            self._detect_errors(input_table, continous_columns)
 
         # If `detect_errors_only` is True, returns found error cells
         if detect_errors_only:

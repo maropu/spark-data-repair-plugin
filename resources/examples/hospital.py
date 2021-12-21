@@ -31,7 +31,7 @@ spark.table("hospital_clean").show(1)
 spark.table("error_cells_ground_truth").show(1)
 
 # Detects error cells then repairs them
-from repair.detectors import NullErrorDetector, ConstraintErrorDetector
+from repair.errors import NullErrorDetector, ConstraintErrorDetector
 error_detectors = [
     ConstraintErrorDetector(constraint_path="./testdata/hospital_constraints.txt"),
     NullErrorDetector()

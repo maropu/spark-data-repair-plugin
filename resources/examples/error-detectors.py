@@ -22,7 +22,7 @@ spark.read \
     .saveAsTable("boston")
 
 # Imports all the built-in error detectors
-from repair.detectors import *
+from repair.errors import NullErrorDetector
 
 # For `NullErrorDetector`
 error_cells_df = delphi.repair \
