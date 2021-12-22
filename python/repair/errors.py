@@ -22,7 +22,7 @@ import json
 import numpy as np
 import pandas as pd
 from abc import ABCMeta, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 from pyspark.sql import DataFrame, SparkSession, functions  # type: ignore
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType
@@ -333,13 +333,13 @@ class ErrorModel():
 
     def __init__(self, row_id: str, targets: List[str], discrete_thres: int,
                  error_detectors: List[ErrorDetector],
-                 error_cells: Optional[Union[str, DataFrame]],
+                 error_cells: Optional[str],
                  opts: Dict[str, str]) -> None:
         self.row_id: str = str(row_id)
         self.targets: List[str] = targets
         self.discrete_thres: int = discrete_thres
         self.error_detectors: List[ErrorDetector] = error_detectors
-        self.error_cells: Optional[Union[str, DataFrame]] = error_cells
+        self.error_cells: Optional[str] = error_cells
 
         # Options for internal behaviours
         self.opts: Dict[str, str] = opts
@@ -355,15 +355,6 @@ class ErrorModel():
 
     def _get_option_value(self, *args) -> Any:  # type: ignore
         return get_option_value(self.opts, *args)
-
-    @property
-    def _error_cells(self) -> str:
-        df = self.error_cells if type(self.error_cells) is DataFrame \
-            else self._spark.table(str(self.error_cells))
-        if not all(c in df.columns for c in (str(self.row_id), "attribute")):  # type: ignore
-            raise ValueError(f"Error cells should have `{self.row_id}` and "
-                             "`attribute` in columns")
-        return self._create_temp_view(df, "error_cells")
 
     def _delete_view_on_exit(self, view_name: str) -> None:
         self._intermediate_views_on_runtime.append(view_name)
@@ -429,8 +420,8 @@ class ErrorModel():
         if self.error_cells is not None:
             # TODO: Even in this case, we need to use a NULL detector because
             # `_build_stat_model` will fail if `y` has NULL.
-            noisy_cells_df = self._spark.table(self._error_cells)
-            _logger.info(f'[Error Detection Phase] Error cells provided by `{self._error_cells}`')
+            noisy_cells_df = self._spark.table(self.error_cells)
+            _logger.info(f'[Error Detection Phase] Error cells provided by `{self.error_cells}`')
 
             if len(self.targets) == 0:
                 # Filters out non-existent columns in `input_table`
@@ -492,7 +483,7 @@ class ErrorModel():
 
         ret_as_json = json.loads(self._repair_api.computeAttrStats(
             discretized_table,
-            str(self.row_id),
+            self.row_id,
             ','.join(target_columns),
             json.dumps(domain_stats),
             self._get_option_value(*self._opt_attr_stat_sample_ratio),
@@ -504,15 +495,12 @@ class ErrorModel():
 
         return freq_attr_stats, pairwise_attr_stats
 
-    def _extract_error_cells(self, input_table: str, noisy_cells_df: DataFrame,
-                             discretized_table: str, continous_columns: List[str], target_columns: List[str],
-                             domain_stats: Dict[str, int]) -> Tuple[DataFrame, Any]:
-        freq_attr_stats, pairwise_attr_stats = self._compute_attr_stats(
-            discretized_table, target_columns, domain_stats)
-
-        if self.error_cells is not None:
-            return noisy_cells_df, pairwise_attr_stats
-
+    def _extract_error_cells_from(self, noisy_cells_df: DataFrame, input_table: str,
+                                  discretized_table: str, continous_columns: List[str], target_columns: List[str],
+                                  pairwise_attr_stats: Dict[str, Tuple[str, float]],
+                                  freq_attr_stats: str,
+                                  domain_stats: Dict[str, int]) -> Tuple[DataFrame, Any]:
+        # Defines true error cells based on the result of domain analysis
         cell_domain = self._analyze_error_cell_domain(
             discretized_table, noisy_cells_df, continous_columns, target_columns,
             domain_stats, freq_attr_stats, pairwise_attr_stats)
@@ -537,7 +525,7 @@ class ErrorModel():
         # Filters out attributes having large domains and makes continous values
         # discrete if necessary.
         ret_as_json = json.loads(self._repair_api.convertToDiscretizedTable(
-            input_table, str(self.row_id), self.discrete_thres))
+            input_table, self.row_id, self.discrete_thres))
 
         discretized_table = ret_as_json["discretized_table"]
         self._delete_view_on_exit(discretized_table)
@@ -546,7 +534,7 @@ class ErrorModel():
         return discretized_table, domain_stats
 
     def detect(self, input_table: str, continous_columns: List[str]) \
-            -> Tuple[DataFrame, List[str], Dict[str, int], Dict[str, int]]:
+            -> Tuple[DataFrame, List[str], Dict[str, Any], Dict[str, int]]:
         try:
             # If no error found, we don't need to do nothing
             noisy_cells_df, noisy_columns = self._detect_errors(input_table, continous_columns)
@@ -561,16 +549,24 @@ class ErrorModel():
             # Target repairable(discretizable) columns
             target_columns = list(filter(lambda c: c in discretized_columns, noisy_columns))
 
-            # Defines true error cells based on the result of domain analysis
-            if len(target_columns) > 0 and len(discretized_columns) > 1:
-                error_cells_df, pairwise_attr_stats = self._extract_error_cells(
-                    input_table, noisy_cells_df, discretized_table,
+            # Cannot compute pair-wise stats when `len(discretized_columns) <= 1`
+            if len(target_columns) == 0 or len(discretized_columns) <= 1:
+                return noisy_cells_df, target_columns, {}, domain_stats
+
+            # Computes attribute stats for the discretized table
+            freq_attr_stats, pairwise_attr_stats = self._compute_attr_stats(
+                discretized_table, target_columns, domain_stats)
+
+            error_cells_df = noisy_cells_df
+            if not self.error_cells:
+                error_cells_df = self._extract_error_cells_from(
+                    noisy_cells_df, input_table, discretized_table,
                     continous_columns, target_columns,
+                    pairwise_attr_stats,
+                    freq_attr_stats,
                     domain_stats)
 
-                return error_cells_df, target_columns, pairwise_attr_stats, domain_stats
-
-            return noisy_cells_df, target_columns, {}, domain_stats
+            return error_cells_df, target_columns, pairwise_attr_stats, domain_stats
         except:
             raise
         finally:

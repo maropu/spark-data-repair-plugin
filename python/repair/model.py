@@ -475,6 +475,15 @@ class RepairModel():
             else str(self.input)
 
     @property
+    def _error_cells(self) -> str:
+        df = self.error_cells if type(self.error_cells) is DataFrame \
+            else self._spark.table(str(self.error_cells))
+        if not all(c in df.columns for c in (self.row_id, "attribute")):  # type: ignore
+            raise ValueError(f"Error cells should have `{self.row_id}` and "
+                             "`attribute` in columns")
+        return self._create_temp_view(df, "error_cells")
+
+    @property
     def _repair_by_nearest_values_enabled(self) -> bool:
         return not bool(self._get_option_value(*self._opt_repair_by_nearest_values_disabled)) \
             and self.repair_by_rules and self.cf is not None
@@ -511,7 +520,7 @@ class RepairModel():
             'targets': self.targets,
             'discrete_thres': self.discrete_thres,
             'error_detectors': self.error_detectors,
-            'error_cells': self.error_cells,
+            'error_cells': self._error_cells if self.error_cells else None,
             'opts': self.opts
         }
         error_model = ErrorModel(**error_model_params)  # type: ignore
