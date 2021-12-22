@@ -44,6 +44,7 @@
     <scala.binary.version>2.12</scala.binary.version>
     <spark.version>3.2.0</spark.version>
     <spark.binary.version>3.2</spark.binary.version>
+    <antlr4.version>4.8</antlr4.version>
     <scalatest.version>3.2.3</scalatest.version>
 
     <test.java.home>${java.home}</test.java.home>
@@ -62,7 +63,6 @@
       <scope>provided</scope>
     </dependency>
 
-
     <dependency>
       <groupId>org.apache.spark</groupId>
       <artifactId>spark-sql_${scala.binary.version}</artifactId>
@@ -80,6 +80,13 @@
       <artifactId>spark-mllib_${scala.binary.version}</artifactId>
       <version>${spark.version}</version>
       <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.antlr</groupId>
+      <artifactId>antlr4-runtime</artifactId>
+      <version>${antlr4.version}</version>
+      <scope>compile</scope>
     </dependency>
 
     <dependency>
@@ -244,6 +251,22 @@
           <compilerArgs>
             <arg>-Xlint:all,-serial,-path</arg>
           </compilerArgs>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.antlr</groupId>
+        <artifactId>antlr4-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>antlr4</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <visitor>true</visitor>
+          <sourceDirectory>src/main/antlr4</sourceDirectory>
+          <treatWarningsAsErrors>true</treatWarningsAsErrors>
         </configuration>
       </plugin>
       <!-- Surefire runs all Java tests -->

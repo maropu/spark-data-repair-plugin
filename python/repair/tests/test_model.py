@@ -277,10 +277,6 @@ class RepairModelTests(ReusedSQLTestCase):
             ValueError,
             "Non-existent key specified: key=non-existent",
             lambda: RepairModel().option('non-existent', '1'))
-        self.assertRaisesRegexp(
-            ValueError,
-            "`value` should have at least character",
-            lambda: RepairModel().option('model.rule.merge_threshold', ''))
 
         test_option_keys = [
             ('error.min_corr_thres', '0.7'),
@@ -294,8 +290,8 @@ class RepairModelTests(ReusedSQLTestCase):
             ('model.small_domain_threshold', '12'),
             ('model.rule.repair_by_nearest_values.disabled', '1'),
             ('model.rule.merge_threshold', '2.0'),
-            ('model.rule.repair_by_regex.disabled', '1'),
-            ('model.rule.repair_by_functional_deps.disabled', '1'),
+            ('model.rule.repair_by_regex.disabled', ''),
+            ('model.rule.repair_by_functional_deps.disabled', ''),
             ('model.rule.max_domain_size', '1000'),
             ('repair.pmf.cost_weight', '0.1'),
             ('repair.pmf.prob_threshold', '0.0'),

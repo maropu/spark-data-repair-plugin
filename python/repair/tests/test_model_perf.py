@@ -214,6 +214,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setErrorDetectors(error_detectors) \
             .setRepairByRules(True) \
             .setUpdateCostFunction(Levenshtein(targets=weighted_prob_targets)) \
+            .option("model.rule.repair_by_regex.disabled", "") \
             .option("model.rule.merge_threshold", "2.0") \
             .option("repair.pmf.cost_weight", "1000.0") \
             .run()

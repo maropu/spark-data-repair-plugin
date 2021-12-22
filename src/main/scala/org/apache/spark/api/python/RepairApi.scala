@@ -17,9 +17,12 @@
 
 package org.apache.spark.api.python
 
+import scala.util.control.NonFatal
+
 import org.json4s._
 import org.json4s.jackson.JsonMethods._
 
+import org.apache.spark.python.RegexStructureRepair
 import org.apache.spark.sql.ExceptionUtils.AnalysisException
 import org.apache.spark.sql._
 import org.apache.spark.util.RepairUtils._
@@ -630,6 +633,35 @@ object RepairApi extends RepairBase {
           }
         }
       }.reduce(_.union(_))
+    }
+  }
+
+  def repairByRegularExpression(
+      regex: String,
+      targetAttr: String,
+      errCellView: String,
+      rowId: String): DataFrame = {
+    logBasedOnLevel(s"repairByRegularExpression called with: " +
+      s"regex=$regex targetAttr=$targetAttr errCellView=$errCellView rowId=$rowId")
+
+    assert(regex.nonEmpty)
+    assert(targetAttr.nonEmpty)
+    assert(checkSchema(errCellView, "attribute STRING, current_value STRING", rowId, strict = true))
+    assert(rowId.nonEmpty)
+
+    import functions._
+    val inputDf = spark.table(errCellView)
+    try {
+      val repair = RegexStructureRepair(regex)
+      val repairUdf = udf((s: String) => repair(s).orNull)
+      inputDf.select(col(rowId), col("attribute"), col("current_value"),
+        when(expr(s"attribute = '$targetAttr'"), repairUdf(col("current_value")))
+          .otherwise(expr("null")).as("repaired"))
+    } catch {
+      case NonFatal(e) =>
+        logWarning(s"Repairing using regex '$regex' (attr='$targetAttr') " +
+          s"failed because: ${e.getMessage}")
+        inputDf.withColumn("repaired", expr("string(null)"))
     }
   }
 }

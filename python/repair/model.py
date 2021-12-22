@@ -128,7 +128,7 @@ class RepairModel():
         _option('model.rule.merge_threshold', 2.0, float,
                 None, None)
     _opt_repair_by_regex_disabled = \
-        _option('model.rule.repair_by_regex.disabled', False, bool,
+        _option('model.rule.repair_by_regex.disabled', True, bool,
                 None, None)
     _opt_repair_by_functional_deps_disabled = \
         _option('model.rule.repair_by_functional_deps.disabled', False, bool,
@@ -463,8 +463,6 @@ class RepairModel():
         """
         if key not in self.option_keys:
             raise ValueError(f'Non-existent key specified: key={key}')
-        if len(value) == 0:
-            raise ValueError("`value` should have at least character")
 
         self.opts[key] = value
         return self
@@ -623,9 +621,14 @@ class RepairModel():
 
         return error_cells_df, repaired_df
 
-    def _repair_by_regex(self, repair_base_df: DataFrame,
-                         error_cells_df: DataFrame,
-                         target_columns: List[str]) -> Tuple[DataFrame, DataFrame]:
+    def _repair_by_regex(self, regex: str, target: str, error_cells_df: DataFrame) -> DataFrame:
+        error_cells = self._create_temp_view(error_cells_df, 'error_cells')
+        jdf = self._repair_api.repairByRegularExpression(regex, target, error_cells, self._row_id)
+        return DataFrame(jdf, self._spark._wrapped)  # type: ignore
+
+    def _repair_by_regexs(self, repair_base_df: DataFrame,
+                          error_cells_df: DataFrame,
+                          target_columns: List[str]) -> Tuple[DataFrame, DataFrame]:
         regex_detectors = list(filter(lambda x: isinstance(x, RegExErrorDetector), self.error_detectors))
         if not regex_detectors:
             row_id_field = error_cells_df.schema[self._row_id]
@@ -634,9 +637,16 @@ class RepairModel():
         regexs = list(map(lambda d: (d.attr, d.regex), regex_detectors))  # type: ignore
         _logger.info(f'[Repairing Phase] Repairing data using regexs: {to_list_str(regexs)}')
 
-        # TODO: Needs to Implement a repair strategy using regular expressions (See [17])
-        row_id_field = error_cells_df.schema[self._row_id]
-        return error_cells_df, self._empty_repaired_cells_dataframe(row_id_field)
+        dfs: List[DataFrame] = []
+        for attr, regex in regexs:
+            target_error_cells_df = error_cells_df.where(f"attribute = '{attr}'")
+            df = self._repair_by_regex(regex, attr, target_error_cells_df)
+            dfs.append(df.where('repaired IS NOT NULL'))
+
+        repaired_cells_df = functools.reduce(lambda x, y: x.union(y), dfs)
+        error_cells_df = error_cells_df.join(repaired_cells_df, [self._row_id, 'attribute'], "left_anti")
+
+        return error_cells_df, repaired_cells_df
 
     def _repair_by_rules(self, repair_base_df: DataFrame,
                          error_cells_df: DataFrame,
@@ -654,7 +664,7 @@ class RepairModel():
 
         if self._repair_by_regex_enabled:
             error_cells_df, repaired_by_regex_df = \
-                self._repair_by_regex(repair_base_df, error_cells_df, target_columns)
+                self._repair_by_regexs(repair_base_df, error_cells_df, target_columns)
             repaired_cells_dfs.append(repaired_by_regex_df)
 
         repaired_by_rules_df = functools.reduce(lambda x, y: x.union(y), repaired_cells_dfs)

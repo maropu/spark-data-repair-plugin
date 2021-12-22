@@ -89,7 +89,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
   test("withCurrentValues") {
     import testImplicits._
     Seq(("tid", "c0", "c1", "c2"), ("t i d", "c 0", "c 1", "c 2")).foreach { case (tid, c0, c1, c2) =>
-      withTempView("inputView", "errCell") {
+      withTempView("inputView", "errCellView") {
         Seq(
           (1, 100, "abc", 1.2),
           (2, 200, "def", 3.2),
@@ -99,9 +99,9 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         ).toDF(tid, c0, c1, c2).createOrReplaceTempView("inputView")
 
         Seq((2, c1), (2, c2), (3, c0), (5, c2))
-          .toDF(tid, "attribute").createOrReplaceTempView("errCell")
+          .toDF(tid, "attribute").createOrReplaceTempView("errCellView")
 
-        val df = RepairApi.withCurrentValues("inputView", "errCell", tid, s"$c0,$c1,$c2")
+        val df = RepairApi.withCurrentValues("inputView", "errCellView", tid, s"$c0,$c1,$c2")
         checkAnswer(df, Seq(
           Row(2, s"$c1", "def"),
           Row(2, s"$c2", "3.2"),
@@ -178,7 +178,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
   test("convertToDiscretizedTable - escaped column names") {
     import testImplicits._
-    withTempView("inputView", "errCell") {
+    withTempView("inputView", "errCellView") {
       Seq(
         (1, 100, "abc", 1.2),
         (2, 200, "def", 3.2),
@@ -205,7 +205,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
   test("convertErrorCellsToNull") {
     import testImplicits._
     Seq(("tid", "c0", "c1", "c2"), ("t i d", "c 0", "c 1", "c 2")).foreach { case (tid, c0, c1, c2) =>
-      withTempView("inputView", "errCell") {
+      withTempView("inputView", "errCellView") {
         Seq(
           (1, 100, "abc", 1.2),
           (2, 200, "def", 3.2),
@@ -215,9 +215,9 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         ).toDF(tid, c0, c1, c2).createOrReplaceTempView("inputView")
 
         Seq((2, c1, "def"), (2, c2, "3.2"), (3, c0, "300"), (5, c2, "0.5"))
-          .toDF(tid, "attribute", "current_value").createOrReplaceTempView("errCell")
+          .toDF(tid, "attribute", "current_value").createOrReplaceTempView("errCellView")
 
-        val jsonString = RepairApi.convertErrorCellsToNull("inputView", "errCell", tid, s"$c0,$c1,$c2")
+        val jsonString = RepairApi.convertErrorCellsToNull("inputView", "errCellView", tid, s"$c0,$c1,$c2")
         val jsonObj = parse(jsonString)
         val data = jsonObj.asInstanceOf[JObject].values
 
@@ -392,7 +392,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
   test("computeDomainInErrorCells") {
     Seq(("tid", "xx", "yy", "zz"), ("t i d", "x x", "y y", "z z")).foreach { case (tid, x, y, z) =>
-      withTempView("inputView", "errCell", "freqAttrStats") {
+      withTempView("inputView", "errCellView", "freqAttrStats") {
         spark.sql(
           s"""
              |CREATE TEMPORARY VIEW inputView(`$tid`, `$x`, `$y`, `$z`) AS SELECT * FROM VALUES
@@ -409,7 +409,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
         spark.sql(
           s"""
-             |CREATE TEMPORARY VIEW errCell(`$tid`, attribute, current_value) AS SELECT * FROM VALUES
+             |CREATE TEMPORARY VIEW errCellView(`$tid`, attribute, current_value) AS SELECT * FROM VALUES
              |  (1, "$x", "2"),
              |  (3, "$y", "test-3"),
              |  (6, "$y", "test-2")
@@ -453,7 +453,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
         def testComputeDomain(minCorrThres: Double, domain_threshold_beta: Double, expected: Seq[Row]): Unit = {
           val domainDf = RepairApi.computeDomainInErrorCells(
-            "inputView", "errCell", tid, s"$z", s"$x,$y", "freqAttrStats", pairwiseStatMapAsJson, domainStatMapAsJson, 4, minCorrThres, 0.0, domain_threshold_beta)
+            "inputView", "errCellView", tid, s"$z", s"$x,$y", "freqAttrStats", pairwiseStatMapAsJson, domainStatMapAsJson, 4, minCorrThres, 0.0, domain_threshold_beta)
           assert(domainDf.columns.toSet === Set(tid, "attribute", "current_value", "domain"))
           val df = domainDf
             .selectExpr("*", "inline(domain)")
@@ -470,6 +470,41 @@ class RepairSuite extends QueryTest with SharedSparkSession {
           Row(6, s"$y", "test-2", "test-1"),
           Row(6, s"$y", "test-2", "test-2"),
           Row(6, s"$y", "test-2", "test-2a")
+        ))
+      }
+    }
+  }
+
+  test("repairByRegularExpression") {
+    Seq(("tid", "xx", "yy"), ("t i d", "x x", "y y")).foreach { case (tid, x, y) =>
+      withTempView("errCellView") {
+        spark.sql(
+          s"""
+             |CREATE TEMPORARY VIEW errCellView(`$tid`, attribute, current_value) AS SELECT * FROM VALUES
+             |  (1, "$x", "32 patxxnts"),
+             |  (2, "$x", "1xx patients"),
+             |  (3, "$x", null),
+             |  (3, "$y", "yyy1"),
+             |  (6, "$y", "yyy2")
+           """.stripMargin)
+
+
+        val df1 = RepairApi.repairByRegularExpression("^[0-9]{1,3} patients$", x, "errCellView", tid)
+        checkAnswer(df1, Seq(
+          Row(1, x, "32 patxxnts", "32 patients"),
+          Row(2, x, "1xx patients", null),
+          Row(3, x, null, null),
+          Row(3, y, "yyy1", null),
+          Row(6, y, "yyy2", null)
+        ))
+
+        val df2 = RepairApi.repairByRegularExpression("^[0-9]{1,", x, "errCellView", tid)
+        checkAnswer(df2, Seq(
+          Row(1, x, "32 patxxnts", null),
+          Row(2, x, "1xx patients", null),
+          Row(3, x, null, null),
+          Row(3, y, "yyy1", null),
+          Row(6, y, "yyy2", null)
         ))
       }
     }
