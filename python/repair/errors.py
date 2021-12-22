@@ -22,7 +22,7 @@ import json
 import numpy as np
 import pandas as pd
 from abc import ABCMeta, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from pyspark.sql import DataFrame, SparkSession, functions  # type: ignore
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType
@@ -267,7 +267,7 @@ class ScikitLearnBasedErrorDetector(ErrorDetector):
 
 class ScikitLearnBackedErrorDetector(ScikitLearnBasedErrorDetector):
 
-    def __init__(self, error_detector_cls: Any, parallel_mode_threshold: int = 10000,
+    def __init__(self, error_detector_cls: Callable[[], Any], parallel_mode_threshold: int = 10000,
                  num_parallelism: Optional[int] = None) -> None:
         ScikitLearnBasedErrorDetector.__init__(self, parallel_mode_threshold, num_parallelism)
 
@@ -359,7 +359,7 @@ class ErrorModel():
     def _delete_view_on_exit(self, view_name: str) -> None:
         self._intermediate_views_on_runtime.append(view_name)
 
-    def _create_temp_view(self, df: Any, prefix: str) -> str:
+    def _create_temp_view(self, df: DataFrame, prefix: str) -> str:
         assert isinstance(df, DataFrame)
         view_name = get_random_string(prefix)
         df.createOrReplaceTempView(view_name)
@@ -499,7 +499,7 @@ class ErrorModel():
                                   discretized_table: str, continous_columns: List[str], target_columns: List[str],
                                   pairwise_attr_stats: Dict[str, Tuple[str, float]],
                                   freq_attr_stats: str,
-                                  domain_stats: Dict[str, int]) -> Tuple[DataFrame, Any]:
+                                  domain_stats: Dict[str, int]) -> DataFrame:
         # Defines true error cells based on the result of domain analysis
         cell_domain = self._analyze_error_cell_domain(
             discretized_table, noisy_cells_df, continous_columns, target_columns,
@@ -518,7 +518,7 @@ class ErrorModel():
         _logger.info('[Error Detection Phase] {} noisy cells fixed and '
                      '{} error cells remaining...'.format(weak_labeled_cells_df.count(), error_cells_df.count()))
 
-        return error_cells_df, pairwise_attr_stats
+        return error_cells_df
 
     # Checks if attributes are discrete or not, and discretizes continous ones
     def _discretize_attrs(self, input_table: str) -> Tuple[str, Dict[str, int]]:

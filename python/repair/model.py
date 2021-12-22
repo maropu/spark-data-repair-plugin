@@ -485,7 +485,8 @@ class RepairModel():
     def _error_cells(self) -> Optional[str]:
         if self.error_cells:
             df = self.error_cells if type(self.error_cells) is DataFrame else self._spark.table(str(self.error_cells))
-            return self._create_temp_view(df.selectExpr(f'`{self._row_id}`', 'attribute'), "error_cells")  # type: ignore
+            df = df.selectExpr(f'`{self._row_id}`', 'attribute')  # type: ignore
+            return self._create_temp_view(df, "error_cells")
         return None
 
     @property

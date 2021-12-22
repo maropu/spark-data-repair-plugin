@@ -18,7 +18,7 @@
 #
 
 from abc import ABCMeta, abstractmethod
-from typing import Any, List, Optional, Union
+from typing import Callable, List, Optional, Union
 
 
 class UpdateCostFunction(metaclass=ABCMeta):
@@ -50,7 +50,7 @@ class Levenshtein(UpdateCostFunction):
 
 class UserDefinedUpdateCostFunction(UpdateCostFunction):
 
-    def __init__(self, f: Any, targets: List[str] = []) -> None:
+    def __init__(self, f: Callable[[str, str], float], targets: List[str] = []) -> None:
         UpdateCostFunction.__init__(self, targets)
 
         try:
