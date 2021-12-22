@@ -22,7 +22,7 @@ import unittest
 import pandas as pd  # type: ignore[import]
 
 from pyspark import SparkConf
-from pyspark.sql import Row
+from pyspark.sql import Row, functions as func
 from pyspark.sql.utils import AnalysisException
 
 from repair.costs import Levenshtein
@@ -448,6 +448,16 @@ class RepairModelTests(ReusedSQLTestCase):
             lambda: self._build_model().setInput("adult").setRowId("tid").setTargets(["Non-Existent"]).run())
 
     def test_setErrorCells(self):
+        self.assertRaisesRegexp(
+            ValueError,
+            '`setRowId` should be called before specifying error cells',
+            lambda: self._build_model().setErrorCells('adult_dirty').setInput("adult").setRowId("tid").run())
+
+        self.assertRaisesRegexp(
+            ValueError,
+            'Error cells should have `tid` and `attribute` in columns',
+            lambda: self._build_model().setInput("adult").setRowId("tid").setErrorCells('adult').run())
+
         def _test_setErrorCells(error_cells):
             test_model = self._build_model() \
                 .setTableName("adult") \
@@ -459,6 +469,22 @@ class RepairModelTests(ReusedSQLTestCase):
 
         _test_setErrorCells("adult_dirty")
         _test_setErrorCells(self.spark.table("adult_dirty"))
+        _test_setErrorCells(self.spark.table("adult_dirty").withColumn('unrelated', func.expr('1')))
+
+    def test_setErrorCells_and_detect_errors_only(self):
+        test_model = self._build_model() \
+            .setTableName("adult") \
+            .setRowId("tid") \
+            .setErrorCells(self.spark.table("adult_dirty").withColumn('unrelated', func.expr('1')))
+        self.assertEqual(
+            test_model.run(detect_errors_only=True).orderBy("tid", "attribute").collect(), [
+                Row(tid=3, attribute='Sex', current_value=None),
+                Row(tid=5, attribute='Age', current_value=None),
+                Row(tid=5, attribute='Income', current_value=None),
+                Row(tid=7, attribute='Sex', current_value=None),
+                Row(tid=12, attribute='Age', current_value=None),
+                Row(tid=12, attribute='Sex', current_value=None),
+                Row(tid=16, attribute='Income', current_value=None)])
 
     def _assert_adult_without_repaired(self, test_model):
         def _test(df):
