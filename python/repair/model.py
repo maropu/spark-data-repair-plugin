@@ -988,6 +988,7 @@ class RepairModel():
             transformer_map[y] = self._create_transformers(domain_stats, features, continous_columns)
 
         # If `self.repair_by_rules` is `True`, try to analyze functional deps on training data.
+        # TODO: Moves this block into `self._repair_by_rules``
         functional_deps = self._get_functional_deps(train_df, target_columns, continous_columns) \
             if self._repair_by_functional_deps_enabled else None
         if functional_deps is not None:
@@ -1171,6 +1172,7 @@ class RepairModel():
 
         pmf_weight = float(self._get_option_value(*self._opt_cost_weight))
         cost_func = self._create_cost_func()
+        # TODO: Rethinks the way to compute weighted probs here
         to_weighted_probs = "if(costs IS NOT NULL, zip_with(probs, costs, " \
             f"(p, c) -> p * (1.0 / (1.0 + {pmf_weight} * c))), probs)"
         if self.cf.targets:  # type: ignore
