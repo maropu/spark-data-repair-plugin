@@ -216,8 +216,8 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setUpdateCostFunction(Levenshtein(targets=weighted_prob_targets)) \
             .option("model.rule.repair_by_regex.disabled", "") \
             .option("model.rule.merge_threshold", "2.0") \
-            .option("model.hp.no_progress_loss", "10") \
-            .option("repair.pmf.cost_weight", "1000.0") \
+            .option("model.hp.no_progress_loss", "50") \
+            .option("repair.pmf.cost_weight", "0.1") \
             .run()
 
         repair_targets_set = ",".join(map(lambda x: f"'{x}'", repair_targets))
