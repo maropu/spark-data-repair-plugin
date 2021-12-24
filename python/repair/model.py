@@ -643,6 +643,8 @@ class RepairModel():
             df = self._repair_by_regex(regex, attr, target_error_cells_df)
             dfs.append(df.where('repaired IS NOT NULL'))
 
+        # TODO: Might need to check if edit distances between `current_value` and `repaired`
+        # are enough minimal for repairs.
         repaired_cells_df = functools.reduce(lambda x, y: x.union(y), dfs)
         error_cells_df = error_cells_df.join(repaired_cells_df, [self._row_id, 'attribute'], "left_anti")
 
