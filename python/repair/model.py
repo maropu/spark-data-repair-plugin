@@ -772,17 +772,10 @@ class RepairModel():
             num_class_map: Dict[str, int],
             feature_map: Dict[str, List[str]],
             transformer_map: Dict[str, List[Any]]) -> List[Any]:
-
-        if len(models) == len(target_columns):
-            return []
-
         # List to store the various logs of built stat models
         logs: List[Tuple[str, str, float, float, int, int, Any]] = []
 
-        for y in target_columns:
-            if y in models:
-                continue
-
+        for y in [c for c in target_columns if c not in models]:
             index = len(models) + 1
             df = train_df.where(f"`{y}` IS NOT NULL")
             training_data_num = df.count()
@@ -832,18 +825,11 @@ class RepairModel():
             num_class_map: Dict[str, int],
             feature_map: Dict[str, List[str]],
             transformer_map: Dict[str, List[Any]]) -> List[Any]:
-
-        if len(models) == len(target_columns):
-            return []
-
         # To build repair models in parallel, it assigns each model training into a single task
         train_dfs_per_target: List[DataFrame] = []
         target_column = get_random_string("target_column")
 
-        for y in target_columns:
-            if y in models:
-                continue
-
+        for y in [c for c in target_columns if c not in models]:
             index = len(models) + len(train_dfs_per_target) + 1
             df = train_df.where(f"`{y}` IS NOT NULL")
             training_data_num = df.count()
@@ -1040,11 +1026,12 @@ class RepairModel():
                     model = self._build_rule_model(train_df, target_columns, fx[0], y)
                     models[y] = (model, [fx[0]], None)
 
-        build_stat_models = self._build_repair_stat_models_in_parallel \
-            if self.parallel_stat_training_enabled else self._build_repair_stat_models_in_series
-        stat_model_logs = build_stat_models(
-            models, train_df, target_columns, continous_columns,
-            num_class_map, feature_map, transformer_map)
+        if len(models) != len(target_columns):
+            build_stat_models = self._build_repair_stat_models_in_parallel \
+                if self.parallel_stat_training_enabled else self._build_repair_stat_models_in_series
+            stat_model_logs = build_stat_models(
+                models, train_df, target_columns, continous_columns,
+                num_class_map, feature_map, transformer_map)
 
         assert len(models) == len(target_columns)
 
