@@ -985,15 +985,6 @@ class RepairModel():
         # this rule to skip expensive training costs.
         train_df = train_df.drop(self._row_id).cache()
 
-        # Selects features among input columns if necessary
-        feature_map: Dict[str, List[str]] = {}
-        transformer_map: Dict[str, List[Any]] = {}
-        for y in target_columns:
-            input_columns = [c for c in train_df.columns if c != y]  # type: ignore
-            features = self._select_features(pairwise_attr_stats, y, input_columns)  # type: ignore
-            feature_map[y] = features
-            transformer_map[y] = self._create_transformers(domain_stats, features, continous_columns)
-
         # If `self.repair_by_rules` is `True`, try to analyze functional deps on training data.
         # TODO: Moves this block into `self._repair_by_rules``
         functional_deps = self._get_functional_deps(train_df, target_columns, continous_columns) \
@@ -1010,6 +1001,7 @@ class RepairModel():
 
         for y in target_columns:
             index = len(models) + 1
+            input_columns = [c for c in train_df.columns if c != y]  # type: ignore
             is_discrete = y not in continous_columns
             num_class_map[y] = train_df.selectExpr(f"count(distinct `{y}`) cnt").collect()[0].cnt \
                 if is_discrete else 0
@@ -1020,15 +1012,14 @@ class RepairModel():
                     index, len(target_columns), y, num_class_map[y]))
                 v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
                     if num_class_map[y] == 1 else None
-                models[y] = (PoorModel(v), feature_map[y], None)
+                models[y] = (PoorModel(v), input_columns, None)
 
             # If `y` is functionally-dependent on one of clean attributes,
             # builds a model based on the rule.
             if y not in models and functional_deps is not None and y in functional_deps:
                 def _qualified(x: str) -> bool:
                     # Checks if the domain size of `x` is small enough
-                    return x in feature_map[y] and \
-                        int(domain_stats[x]) < int(self._get_option_value(*self._opt_max_domain_size))
+                    return int(domain_stats[x]) < int(self._get_option_value(*self._opt_max_domain_size))
 
                 fx = list(filter(lambda x: _qualified(x), functional_deps[y]))
                 if len(fx) > 0:
@@ -1038,6 +1029,15 @@ class RepairModel():
                     models[y] = (model, [fx[0]], None)
 
         if len(models) != len(target_columns):
+            # Selects features among input columns if necessary
+            feature_map: Dict[str, List[str]] = {}
+            transformer_map: Dict[str, List[Any]] = {}
+            for y in [c for c in target_columns if c not in models]:
+                input_columns = [c for c in train_df.columns if c != y]  # type: ignore
+                features = self._select_features(pairwise_attr_stats, y, input_columns)  # type: ignore
+                feature_map[y] = features
+                transformer_map[y] = self._create_transformers(domain_stats, features, continous_columns)
+
             build_stat_models = self._build_repair_stat_models_in_parallel \
                 if self.parallel_stat_training_enabled else self._build_repair_stat_models_in_series
             models = build_stat_models(
