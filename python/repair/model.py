@@ -685,7 +685,7 @@ class RepairModel():
                     # Converts to a negative value for extracting higher values
                     heapq.heappush(heap, (-float(corr), f))
 
-            fts = [heapq.heappop(heap) for i in range(len(features))]
+            fts = [heapq.heappop(heap) for i in range(len(heap))]
             top_k_fts: List[Tuple[float, str]] = []
             for corr, f in fts:  # type: ignore
                 # TODO: Parameterize a minimum corr to filter out irrelevant features

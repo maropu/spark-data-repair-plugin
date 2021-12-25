@@ -748,6 +748,17 @@ class RepairModelTests(ReusedSQLTestCase):
                 'Supported types are tinyint,float,smallint,string,double,int,bigint, but unsupported ones found: date',
                 lambda: test_model.run())
 
+    def test_max_training_column_num(self):
+        df = self._build_model() \
+            .setTableName("adult") \
+            .setRowId("tid") \
+            .setDiscreteThreshold(5) \
+            .option("model.max_training_column_num", "2") \
+            .run()
+        self.assertEqual(
+            df.orderBy("tid", "attribute").collect(),
+            self.expected_adult_result)
+
     def test_table_has_no_enough_columns(self):
         with self.tempView("inputView"):
             rows = [
