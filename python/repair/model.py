@@ -926,6 +926,33 @@ class RepairModel():
 
         return models
 
+    def _resolve_prediction_order(self, models: Dict[str, Any], target_columns: List[str]) -> List[Any]:
+        pred_ordered_models = []
+        error_columns = copy.deepcopy(target_columns)
+
+        # Appends no order-dependent models first
+        for y in target_columns:
+            (model, x, transformers) = models[y]
+            if not isinstance(model, FunctionalDepModel):
+                pred_ordered_models.append((y, models[y]))
+                error_columns.remove(y)
+
+        # Resolves an order for predictions
+        while len(error_columns) > 0:
+            columns = copy.deepcopy(error_columns)
+            for y in columns:
+                (model, x, transformers) = models[y]
+                if x[0] not in error_columns:
+                    pred_ordered_models.append((y, models[y]))
+                    error_columns.remove(y)
+
+            assert len(error_columns) < len(columns)
+
+        _logger.info("Resolved prediction order dependencies: {}".format(
+            to_list_str(list(map(lambda x: x[0], pred_ordered_models)))))
+        assert len(pred_ordered_models) == len(target_columns)
+        return pred_ordered_models
+
     @spark_job_group(name="repair model training")
     def _build_repair_models(self, train_df: DataFrame, target_columns: List[str], continous_columns: List[str],
                              domain_stats: Dict[str, str],
@@ -976,8 +1003,7 @@ class RepairModel():
 
         # Builds multiple repair models to repair error cells
         _logger.info("[Repair Model Training Phase] Building {} models "
-                     "to repair the cells in {}"
-                     .format(len(target_columns), to_list_str(target_columns)))
+                     "to repair the cells in {}".format(len(target_columns), to_list_str(target_columns)))
 
         models: Dict[str, Any] = {}
         num_class_map: Dict[str, int] = {}
@@ -1022,31 +1048,7 @@ class RepairModel():
 
         # Resolve the conflict dependencies of the predictions
         if self._repair_by_functional_deps_enabled:
-            pred_ordered_models = []
-            error_columns = copy.deepcopy(target_columns)
-
-            # Appends no order-dependent models first
-            for y in target_columns:
-                (model, x, transformers) = models[y]
-                if not isinstance(model, FunctionalDepModel):
-                    pred_ordered_models.append((y, models[y]))
-                    error_columns.remove(y)
-
-            # Resolves an order for predictions
-            while len(error_columns) > 0:
-                columns = copy.deepcopy(error_columns)
-                for y in columns:
-                    (model, x, transformers) = models[y]
-                    if x[0] not in error_columns:
-                        pred_ordered_models.append((y, models[y]))
-                        error_columns.remove(y)
-
-                assert len(error_columns) < len(columns)
-
-            _logger.info("Resolved prediction order dependencies: {}".format(
-                to_list_str(list(map(lambda x: x[0], pred_ordered_models)))))
-            assert len(pred_ordered_models) == len(target_columns)
-            return pred_ordered_models
+            return self._resolve_prediction_order(models, target_columns)
 
         return list(models.items())
 
