@@ -771,10 +771,7 @@ class RepairModel():
             target_columns: List[str], continous_columns: List[str],
             num_class_map: Dict[str, int],
             feature_map: Dict[str, List[str]],
-            transformer_map: Dict[str, List[Any]]) -> List[Any]:
-        # List to store the various logs of built stat models
-        logs: List[Tuple[str, str, float, float, int, int, Any]] = []
-
+            transformer_map: Dict[str, List[Any]]) -> Dict[str, Any]:
         for y in [c for c in target_columns if c not in models]:
             index = len(models) + 1
             df = train_df.where(f"`{y}` IS NOT NULL")
@@ -811,20 +808,19 @@ class RepairModel():
                 model = PoorModel(None)
 
             class_nrow_stdv = compute_class_nrow_stdv(y_, is_discrete)
-            logs.append((y, model_type, score, elapsed_time, len(X), num_class_map[y], class_nrow_stdv))
             _logger.info("Finishes building '{}' model...  score={} elapsed={}s".format(
                 y, score, elapsed_time))
 
             models[y] = (model, feature_map[y], transformer_map[y])
 
-        return logs
+        return models
 
     def _build_repair_stat_models_in_parallel(
             self, models: Dict[str, Any], train_df: DataFrame,
             target_columns: List[str], continous_columns: List[str],
             num_class_map: Dict[str, int],
             feature_map: Dict[str, List[str]],
-            transformer_map: Dict[str, List[Any]]) -> List[Any]:
+            transformer_map: Dict[str, List[Any]]) -> Dict[str, Any]:
         # To build repair models in parallel, it assigns each model training into a single task
         train_dfs_per_target: List[DataFrame] = []
         target_column = get_random_string("target_column")
@@ -861,7 +857,7 @@ class RepairModel():
 
         num_tasks = len(train_dfs_per_target)
         if num_tasks == 0:
-            return []
+            return models
 
         # TODO: A larger `training_n_jobs` value can cause high pressure on executors
         def _num_cores_per_executor() -> int:
@@ -915,15 +911,11 @@ class RepairModel():
             row = [y, pickle.dumps(model), score, elapsed_time, len(X), class_nrow_stdv]
             return pd.DataFrame([row])
 
-        # List to store the various logs of built stat models
-        logs: List[Tuple[str, str, float, float, int, int, Any]] = []
-
         # TODO: Any smart way to distribute tasks in different physical machines?
         built_models = functools.reduce(lambda x, y: x.union(y), train_dfs_per_target) \
             .groupBy(target_column).apply(train).collect()
         for row in built_models:
             tpe = "classfier" if row.target not in continous_columns else "regressor"
-            logs.append((row.target, tpe, row.score, row.elapsed, row.nrows, num_class_map[row.target], row.stdv))
             _logger.info("Finishes building '{}' model... score={} elapsed={}s".format(
                 row.target, row.score, row.elapsed))
 
@@ -932,7 +924,7 @@ class RepairModel():
             transformers = transformer_map[row.target]
             models[row.target] = (model, features, transformers)
 
-        return logs
+        return models
 
     @spark_job_group(name="repair model training")
     def _build_repair_models(self, train_df: DataFrame, target_columns: List[str], continous_columns: List[str],
@@ -990,11 +982,6 @@ class RepairModel():
         models: Dict[str, Any] = {}
         num_class_map: Dict[str, int] = {}
 
-        # List to store the various logs of built models. The list will be converted to a Spark temporary
-        # view named 'repair_model_xxx' and its schema is (attribute string, type string, score double,
-        # elapsed double, training_nrow int, nclass int, class_nrow_stdv double).
-        logs: List[Tuple[str, str, float, float, int, int, Any]] = []
-
         for y in target_columns:
             index = len(models) + 1
             is_discrete = y not in continous_columns
@@ -1003,7 +990,6 @@ class RepairModel():
 
             # Skips building a model if num_class <= 1
             if is_discrete and num_class_map[y] <= 1:
-                logs.append((y, "rule", None, None, 0, num_class_map[y], None))  # type: ignore
                 _logger.info("Skipping {}/{} model... type=rule y={} num_class={}".format(
                     index, len(target_columns), y, num_class_map[y]))
                 v = train_df.selectExpr(f"first(`{y}`) value").collect()[0].value \
@@ -1020,7 +1006,6 @@ class RepairModel():
 
                 fx = list(filter(lambda x: _qualified(x), functional_deps[y]))
                 if len(fx) > 0:
-                    logs.append((y, "rule", None, None, train_df.count(), num_class_map[y], None))  # type: ignore
                     _logger.info("Building {}/{} model... type=rule(FD: X->y)  y={}(|y|={}) X={}(|X|={})".format(
                         index, len(target_columns), y, num_class_map[y], fx[0], domain_stats[fx[0]]))
                     model = self._build_rule_model(train_df, target_columns, fx[0], y)
@@ -1029,7 +1014,7 @@ class RepairModel():
         if len(models) != len(target_columns):
             build_stat_models = self._build_repair_stat_models_in_parallel \
                 if self.parallel_stat_training_enabled else self._build_repair_stat_models_in_series
-            stat_model_logs = build_stat_models(
+            models = build_stat_models(
                 models, train_df, target_columns, continous_columns,
                 num_class_map, feature_map, transformer_map)
 
