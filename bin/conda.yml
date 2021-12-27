@@ -8,6 +8,7 @@ dependencies:
   - python=3.7.11
   - pyspark=3.2.0
   - pyarrow=6.0.1
+  - cloudpickle=2.0.0
   - pandas=0.25.3
   - lightgbm=3.3.1
   - scikit-learn=0.24.2
