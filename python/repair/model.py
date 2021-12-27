@@ -572,7 +572,7 @@ class RepairModel():
             result: List[Optional[List[float]]] = []
             for target, candidates in zip(s1, s2):
                 if target and candidates is not None:
-                    result.append([float(cf.compute(target, c)) for c in candidates])  # type: ignore
+                    result.append([cf.compute(target, c) for c in candidates])  # type: ignore
                 else:
                     result.append(None)
 

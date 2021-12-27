@@ -17,6 +17,7 @@
 # limitations under the License.
 #
 
+import cloudpickle
 from abc import ABCMeta, abstractmethod
 from typing import Callable, List, Optional, Union
 
@@ -60,14 +61,18 @@ class UserDefinedUpdateCostFunction(UpdateCostFunction):
         except:
             raise ValueError('`f` should take two values and return a float cost value')
 
-        self.f = f
+        # NOTE: Uses cloudpickle here because `Spark.broadcast` cannot serialize
+        # lambda functions using the built-in serializer.
+        self.pickled_f = cloudpickle.dumps(f)
 
     def __str__(self) -> str:
         params = f'targets={",".join(self.targets)}' if self.targets else ''
         return f'{self.__class__.__name__}({params})'
 
     def _compute_impl(self, x: Union[str, int, float], y: Union[str, int, float]) -> Optional[float]:
+        if not hasattr(self, "_f"):
+            self._f = cloudpickle.loads(self.pickled_f)
         try:
-            return float(self.f(str(x), str(y)))
+            return float(self._f(str(x), str(y)))
         except:
             return None

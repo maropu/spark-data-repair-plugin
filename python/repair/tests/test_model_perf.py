@@ -209,9 +209,8 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
 
         import Levenshtein
         from repair.costs import UserDefinedUpdateCostFunction
-
-        def compute_distance(x, y):
-            return float(abs(len(str(x)) - len(str(y))) + Levenshtein.distance(str(x), str(y)))
+        distance = lambda x, y: float(abs(len(str(x)) - len(str(y))) + Levenshtein.distance(str(x), str(y)))
+        cf = UserDefinedUpdateCostFunction(f=distance, targets=weighted_prob_targets)
 
         repaired_df = self._build_model("hospital") \
             .setErrorCells("hospital_error_cells") \
@@ -219,7 +218,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setTargets(repair_targets) \
             .setErrorDetectors(error_detectors) \
             .setRepairByRules(True) \
-            .setUpdateCostFunction(UserDefinedUpdateCostFunction(f=compute_distance, targets=weighted_prob_targets)) \
+            .setUpdateCostFunction(cf) \
             .option("model.rule.repair_by_regex.disabled", "") \
             .option("model.rule.merge_threshold", "2.0") \
             .option("model.max_training_column_num", "128") \
