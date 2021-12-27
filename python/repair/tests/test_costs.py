@@ -42,7 +42,7 @@ class CostsTests(ReusedSQLTestCase):
         self.assertLess(f.compute('1xx%', '100%'), f.compute('1xx%', '2%'))
 
     def test_UserDefinedUpdateCostFunction(self):
-        import Levenshtein  # type: ignore[import]
+        import Levenshtein
 
         distance = lambda x, y: float(abs(len(str(x)) - len(str(y))) + Levenshtein.distance(str(x), str(y)))
         f = UserDefinedUpdateCostFunction(f=distance)

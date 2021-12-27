@@ -20,7 +20,6 @@ import unittest
 
 from pyspark import SparkConf
 
-from repair.costs import Levenshtein
 from repair.model import RepairModel
 from repair.errors import ConstraintErrorDetector, NullErrorDetector, RegExErrorDetector
 from repair.tests.requirements import have_pandas, have_pyarrow, \
@@ -207,13 +206,20 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             RegExErrorDetector("Sample", "^[0-9]{1,3} patients$"),
             RegExErrorDetector("Score", "^[0-9]{1,3}%$")
         ]
+
+        import Levenshtein
+        from repair.costs import UserDefinedUpdateCostFunction
+
+        def compute_distance(x, y):
+            return float(abs(len(str(x)) - len(str(y))) + Levenshtein.distance(str(x), str(y)))
+
         repaired_df = self._build_model("hospital") \
             .setErrorCells("hospital_error_cells") \
             .setDiscreteThreshold(400) \
             .setTargets(repair_targets) \
             .setErrorDetectors(error_detectors) \
             .setRepairByRules(True) \
-            .setUpdateCostFunction(Levenshtein(targets=weighted_prob_targets)) \
+            .setUpdateCostFunction(UserDefinedUpdateCostFunction(f=compute_distance, targets=weighted_prob_targets)) \
             .option("model.rule.repair_by_regex.disabled", "") \
             .option("model.rule.merge_threshold", "2.0") \
             .option("model.max_training_column_num", "128") \

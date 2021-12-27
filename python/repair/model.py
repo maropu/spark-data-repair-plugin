@@ -614,12 +614,12 @@ class RepairModel():
             .selectExpr(f"`{self._row_id}`", "attribute", "current_value", sorted_domain_value_expr) \
             .selectExpr(f"`{self._row_id}`", "attribute", "current_value", repair_expr)
 
-        repaired_df = error_cells_df.where('repaired IS NOT NULL') \
+        repaired_cells_df = error_cells_df.where('repaired IS NOT NULL') \
             .selectExpr(f"`{self._row_id}`", "attribute", "current_value", "repaired")
         error_cells_df = error_cells_df.where('repaired IS NULL') \
             .selectExpr(f"`{self._row_id}`", "attribute", "current_value")
 
-        return error_cells_df, repaired_df
+        return error_cells_df, repaired_cells_df
 
     def _repair_by_regex(self, regex: str, target: str, error_cells_df: DataFrame) -> DataFrame:
         error_cells = self._create_temp_view(error_cells_df, 'error_cells')
@@ -659,15 +659,15 @@ class RepairModel():
         row_id_field = error_cells_df.schema[self._row_id]
         repaired_cells_dfs.append(self._empty_repaired_cells_dataframe(row_id_field))
 
-        if self._repair_by_nearest_values_enabled:
-            error_cells_df, repaired_by_nv_df = \
-                self._repair_by_nearest_values(repair_base_df, error_cells_df, target_columns)
-            repaired_cells_dfs.append(repaired_by_nv_df)
-
         if self._repair_by_regex_enabled:
             error_cells_df, repaired_by_regex_df = \
                 self._repair_by_regexs(repair_base_df, error_cells_df, target_columns)
             repaired_cells_dfs.append(repaired_by_regex_df)
+
+        if self._repair_by_nearest_values_enabled:
+            error_cells_df, repaired_by_nv_df = \
+                self._repair_by_nearest_values(repair_base_df, error_cells_df, target_columns)
+            repaired_cells_dfs.append(repaired_by_nv_df)
 
         repaired_by_rules_df = functools.reduce(lambda x, y: x.union(y), repaired_cells_dfs)
         return error_cells_df, repaired_by_rules_df

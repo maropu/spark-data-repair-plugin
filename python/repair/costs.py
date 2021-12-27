@@ -44,7 +44,7 @@ class Levenshtein(UpdateCostFunction):
         return f'{self.__class__.__name__}({params})'
 
     def _compute_impl(self, x: Union[str, int, float], y: Union[str, int, float]) -> Optional[float]:
-        import Levenshtein  # type: ignore[import]
+        import Levenshtein
         return float(Levenshtein.distance(str(x), str(y)))
 
 

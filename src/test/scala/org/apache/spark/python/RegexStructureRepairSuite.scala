@@ -40,6 +40,7 @@ class RegexStructureRepairSuite extends SparkFunSuite {
     Seq(
       ("^[0-9]{1,3} patients$", Seq(
         ("32 patixxts", Some("32 patients")),
+        ("619 paxienxs", Some("619 patients")),
         ("x2 patixxts", None))),
       ("^[0-9]{1,3}%", Seq(
         ("33x", Some("33%")),
