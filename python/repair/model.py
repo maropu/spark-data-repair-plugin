@@ -1047,7 +1047,7 @@ class RepairModel():
         assert len(models) == len(target_columns)
 
         # Resolve the conflict dependencies of the predictions
-        if self._repair_by_functional_deps_enabled:
+        if any(isinstance(m, FunctionalDepModel) for m, _, _ in models.values()):
             return self._resolve_prediction_order(models, target_columns)
 
         return list(models.items())
