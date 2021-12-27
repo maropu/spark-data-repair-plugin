@@ -43,18 +43,22 @@ class CostsTests(ReusedSQLTestCase):
 
     def test_UserDefinedUpdateCostFunction(self):
         import Levenshtein  # type: ignore[import]
-        f = UserDefinedUpdateCostFunction(f=lambda x, y: float(1.0 / (Levenshtein.jaro(str(x), str(y)) + 0.0000001)))
-        self.assertAlmostEqual(f.compute('111', '123'), 1.7999996760000587)
+
+        distance = lambda x, y: float(abs(len(str(x)) - len(str(y))) + Levenshtein.distance(str(x), str(y)))
+        f = UserDefinedUpdateCostFunction(f=distance)
+        self.assertAlmostEqual(f.compute('111', '123'), 2.0)
         self.assertAlmostEqual(f.compute(None, '123'), None)
         self.assertAlmostEqual(f.compute('111', None), None)
         self.assertAlmostEqual(f.compute(None, None), None)
-        self.assertAlmostEqual(f.compute(111, 123), 1.7999996760000587)
-        self.assertAlmostEqual(f.compute('111', 123), 1.7999996760000587)
-        self.assertAlmostEqual(f.compute(111, '123'), 1.7999996760000587)
-        self.assertAlmostEqual(f.compute(1.11, 1.23), 1.499999775000034)
-        self.assertAlmostEqual(f.compute('1.11', 1.23), 1.499999775000034)
-        self.assertAlmostEqual(f.compute(1.11, '1.23'), 1.499999775000034)
+        self.assertAlmostEqual(f.compute(111, 123), 2.0)
+        self.assertAlmostEqual(f.compute('111', 123), 2.0)
+        self.assertAlmostEqual(f.compute(111, '123'), 2.0)
+        self.assertAlmostEqual(f.compute(1.11, 1.23), 2.0)
+        self.assertAlmostEqual(f.compute('1.11', 1.23), 2.0)
+        self.assertAlmostEqual(f.compute(1.11, '1.23'), 2.0)
         self.assertLess(f.compute('1xx%', '100%'), f.compute('1xx%', 'abcdefg'))
+        self.assertLess(f.compute('1xx%', '100%'), f.compute('1xx%', '12%'))
+        self.assertLess(f.compute('1xx%', '100%'), f.compute('1xx%', '1%'))
         self.assertLess(f.compute('1xx%', '100%'), f.compute('1xx%', '2%'))
 
         self.assertRaisesRegexp(
