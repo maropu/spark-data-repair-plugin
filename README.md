@@ -306,6 +306,8 @@ delphi.repair
  - [15] El Kindi Rezig et al., Horizon: Scalable Dependency-driven Data Cleaning, Proceedings of the VLDB Endowment, vol.14, no.11, 2021.
  - [16] Peng Li et al., CleanML: A Study for Evaluating the Impact of Data Cleaning on ML Classification Tasks, Proceedings of ICDE, pp.13-24, 2021.
  - [17] Zeyu Li et al., Repairing data through regular expressions, Proceedings of the VLDB Endowment, vol.9, no.5, pp.432-443, 2016.
+ - [18] Leopoldo Bertossi, Database Repairing and Consistent Query Answering, Synthesis Lectures on Data Management, Morgan & Claypool Publishers, 2011.
+ - [19] Babak Salimi et al., Interventional Fairness: Causal Database Repair for Algorithmic Fairness, Proceedings of SIGMOD, pp.793–810, 2019.
 
 ## TODO
 
