@@ -968,6 +968,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setErrorCells("errorCells") \
                 .setRepairByRules(True) \
                 .setUpdateCostFunction(Levenshtein(targets=["v0", "v1"])) \
+                .option("model.rule.repair_by_nearest_values.disabled", "") \
                 .option("model.rule.merge_threshold", "2.0")
             self.assertEqual(
                 test_model.run().orderBy("tid", "attribute").collect(), [

@@ -254,7 +254,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             return ','.join(sorted(map(lambda r: f'{r.attribute}:{r.tid}', rows)))
 
         msg = f"target:hospital precision:{precision} recall:{recall} f1:{f1} " \
-            f"stats:{hospital_incorrect_rows(rdf)}"
+            f"errors:{hospital_incorrect_rows(rdf)}"
         _logger.info(msg)
         self.assertTrue(precision > 0.95 and recall > 0.95 and f1 > 0.95, msg=msg)
 
