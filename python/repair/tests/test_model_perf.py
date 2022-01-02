@@ -220,6 +220,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setRepairByRules(True) \
             .setUpdateCostFunction(cf) \
             .option("model.rule.repair_by_regex.disabled", "") \
+            .option("model.rule.repair_by_nearest_values.disabled", "") \
             .option("model.rule.merge_threshold", "2.0") \
             .option("model.max_training_column_num", "128") \
             .option("model.hp.no_progress_loss", "10") \

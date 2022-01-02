@@ -245,7 +245,8 @@ class RepairModelTests(ReusedSQLTestCase):
             .setRowId("tid") \
             .setRepairByRules(True) \
             .setUpdateCostFunction(Levenshtein()) \
-            .setRepairDelta(3)
+            .setRepairDelta(3) \
+            .option("model.rule.repair_by_nearest_values.disabled", "")
         expected_error_msg = "Cannot repair data by nearest values when enabling `maximal_likelihood_repair`, " \
             "`compute_repair_candidate_prob`, `compute_repair_prob`, or `compute_repair_score`"
         self.assertRaisesRegexp(
@@ -948,6 +949,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setErrorCells("errorCells") \
                 .setRepairByRules(True) \
                 .setUpdateCostFunction(Levenshtein(targets=["v0", "v1"])) \
+                .option("model.rule.repair_by_nearest_values.disabled", "") \
                 .option("model.rule.merge_threshold", "2.0")
             self.assertEqual(
                 test_model.run().orderBy("tid", "attribute").collect(), [

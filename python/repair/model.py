@@ -121,14 +121,14 @@ class RepairModel():
     _opt_small_domain_threshold = \
         _option('model.small_domain_threshold', 12, int,
                 lambda v: v >= 3, '`{}` should be greater than 2')
+    _opt_repair_by_regex_disabled = \
+        _option('model.rule.repair_by_regex.disabled', True, bool,
+                None, None)
     _opt_repair_by_nearest_values_disabled = \
-        _option('model.rule.repair_by_nearest_values.disabled', False, bool,
+        _option('model.rule.repair_by_nearest_values.disabled', True, bool,
                 None, None)
     _opt_merge_threshold = \
         _option('model.rule.merge_threshold', 2.0, float,
-                None, None)
-    _opt_repair_by_regex_disabled = \
-        _option('model.rule.repair_by_regex.disabled', True, bool,
                 None, None)
     _opt_repair_by_functional_deps_disabled = \
         _option('model.rule.repair_by_functional_deps.disabled', False, bool,
@@ -150,9 +150,9 @@ class RepairModel():
         _opt_max_training_row_num.key,
         _opt_max_training_column_num.key,
         _opt_small_domain_threshold.key,
+        _opt_repair_by_regex_disabled.key,
         _opt_repair_by_nearest_values_disabled.key,
         _opt_merge_threshold.key,
-        _opt_repair_by_regex_disabled.key,
         _opt_repair_by_functional_deps_disabled.key,
         _opt_max_domain_size.key,
         _opt_cost_weight.key,
@@ -488,14 +488,14 @@ class RepairModel():
         return None
 
     @property
-    def _repair_by_nearest_values_enabled(self) -> bool:
-        return not bool(self._get_option_value(*self._opt_repair_by_nearest_values_disabled)) \
-            and self.repair_by_rules and self.cf is not None
-
-    @property
     def _repair_by_regex_enabled(self) -> bool:
         return not bool(self._get_option_value(*self._opt_repair_by_regex_disabled)) \
             and self.repair_by_rules
+
+    @property
+    def _repair_by_nearest_values_enabled(self) -> bool:
+        return not bool(self._get_option_value(*self._opt_repair_by_nearest_values_disabled)) \
+            and self.repair_by_rules and self.cf is not None
 
     @property
     def _repair_by_functional_deps_enabled(self) -> bool:
