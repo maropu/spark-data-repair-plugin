@@ -246,10 +246,14 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
 
         def hospital_incorrect_cell_hist(rdf) -> str:
             pdf = rdf.where('NOT(repaired <=> correct_val)').groupBy('attribute').count().toPandas()
-            return ', '.join(map(lambda r: f'{r.attribute}:{r.count}', pdf.itertuples()))
+            return ','.join(map(lambda r: f'{r.attribute}:{r.count}', pdf.itertuples()))
+
+        def hospital_incorrect_rows(rdf) -> str:
+            rows = rdf.where('NOT(repaired <=> correct_val)').selectExpr('tid', 'attribute').collect()
+            return ','.join(sorted(map(lambda r: f'{r.attribute}:{r.tid}', rows)))
 
         msg = f"target:hospital precision:{precision} recall:{recall} f1:{f1} " \
-            f"stats:{hospital_incorrect_cell_hist(rdf)}"
+            f"stats:{hospital_incorrect_rows(rdf)}"
         _logger.info(msg)
         self.assertTrue(precision > 0.95 and recall > 0.95 and f1 > 0.95, msg=msg)
 
