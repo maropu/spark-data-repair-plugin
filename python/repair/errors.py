@@ -304,11 +304,12 @@ class ErrorModel():
     from collections import namedtuple
     _option = namedtuple('_option', 'key default_value type_class validator err_msg')
 
+    # TODO: Needs to check if an option `error.min_corr_thres` below work correctly
     _opt_min_corr_thres = \
         _option('error.min_corr_thres', 0.70, float,
                 lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
     _opt_domain_threshold_alpha = \
-        _option('error.domain_threshold_alph', 0.0, float,
+        _option('error.domain_threshold_alpha', 0.0, float,
                 lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
     _opt_domain_threshold_beta = \
         _option('error.domain_threshold_beta', 0.70, float,

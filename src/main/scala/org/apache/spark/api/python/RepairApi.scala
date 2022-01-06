@@ -289,6 +289,7 @@ object RepairApi extends RepairBase {
         attrPairKey -> {
           val Seq(a1, a2) = attrPairKey.toSeq
           val hXY = getRandomString(prefix="hXY")
+          // TODO: Needs to compute H(x|y) by taking into account missing frequency values
           val df = spark.sql(
             s"""
                |SELECT -SUM($hXY) $hXY
@@ -311,6 +312,7 @@ object RepairApi extends RepairBase {
       targetAttrs.map { attrKey =>
         attrKey -> {
           val hY = getRandomString(prefix="hY")
+          // TODO: Needs to compute H(y) by taking into account missing frequency values
           val df = spark.sql(
             s"""
                |SELECT -SUM($hY) $hY
