@@ -281,7 +281,7 @@ class RepairModelTests(ReusedSQLTestCase):
 
         test_option_keys = [
             ('error.min_corr_thres', '0.7'),
-            ('error.domain_threshold_alph', '0.0'),
+            ('error.domain_threshold_alpha', '0.0'),
             ('error.domain_threshold_beta', '0.7'),
             ('error.max_attrs_to_compute_domains', '4'),
             ('error.attr_stat_sample_ratio', '1.0'),
@@ -335,7 +335,7 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setTableName("adult") \
                 .setRowId("tid") \
                 .option('error.min_corr_thres', '0.70') \
-                .option('error.domain_threshold_alph', '0.0') \
+                .option('error.domain_threshold_alpha', '0.0') \
                 .option('error.domain_threshold_beta', '0.70') \
                 .option('error.max_attrs_to_compute_domains', '4') \
                 .option('error.attr_stat_sample_ratio', '1.0') \
