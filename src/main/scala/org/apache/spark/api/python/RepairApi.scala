@@ -228,9 +228,11 @@ object RepairApi extends RepairBase {
 
     val targetAttrs = targetAttrSets.flatten.distinct
     val distinctTargetAttrSet = targetAttrSets.map(_.toSet).distinct.map(_.toSeq)
-    // TODO: Needs to check the maximum size of grouping sets
-    // assert(distinctTargetAttrSet.length < 64,
-    //   "Cannot handle the target set whose size is more than 63")
+    // TODO: Needs to support more larger cases for grouping attributes
+    if (targetAttrs.length > 64) {
+      throw AnalysisException("Cannot handle the target attributes whose length is more than 64, " +
+        s"""but got: ${targetAttrs.mkString(",")}""")
+    }
 
     val groupingSetSeq = distinctTargetAttrSet.map {
       case Seq(a) => s"(`$a`)"

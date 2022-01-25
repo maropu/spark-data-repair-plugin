@@ -20,7 +20,7 @@ package org.apache.spark.api.python
 import org.json4s._
 import org.json4s.jackson.JsonMethods._
 
-import org.apache.spark.sql.{AnalysisException, QueryTest, Row}
+import org.apache.spark.sql.{AnalysisException, DataFrame, QueryTest, Row}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 
@@ -281,6 +281,30 @@ class RepairSuite extends QueryTest with SharedSparkSession {
           RepairApi.computeFreqStats("tempView", Seq(Seq(tid, x, y)), 0.0)
         }.getMessage
         assert(errMsg.contains(s"Cannot handle more than two entries: $tid,$x,$y"))
+      }
+    }
+  }
+
+  test("should support at least 63 attribute groups in computeFreqStats") {
+    withTempView("t") {
+      // TODO: If `WHOLESTAGE_CODEGEN_ENABLED` enabled, the Spark codegen mechanism fails
+      withSQLConf((SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key, "false")) {
+        def computeFreqStats(numColumns: Int): DataFrame = {
+          val (genColumnExpr, columns) = (0 until numColumns).map { i => (s"id c$i", s"c$i") }.unzip
+          val targetAttrSets = columns.combinations(2).toSeq
+          spark.range(1).selectExpr(genColumnExpr: _*).createOrReplaceTempView("t")
+          RepairApi.computeFreqStats("t", targetAttrSets, 0.0)
+        }
+
+        val df = computeFreqStats(64)
+        assert(df.count() === 2016)
+        checkAnswer(df.selectExpr("cnt").distinct(), Row(1))
+
+        val errMsg = intercept[AnalysisException] {
+          computeFreqStats(65)
+        }.getMessage
+        assert(errMsg.contains("Cannot handle the target attributes whose length " +
+          "is more than 64, but got:"))
       }
     }
   }
