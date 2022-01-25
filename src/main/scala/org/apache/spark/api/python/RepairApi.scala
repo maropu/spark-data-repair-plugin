@@ -272,21 +272,24 @@ object RepairApi extends RepairBase {
   }
 
   private[python] def computePairwiseStats(
-       inputView: String,
        rowCount: Long,
        freqStatView: String,
-       targetAttrs: Seq[String],
        targetAttrPairsToComputeStats: Seq[(String, String)],
        domainStatMap: Map[String, Long]): Map[String, Seq[(String, Double)]] = {
     assert(rowCount > 0)
-    assert(targetAttrs.nonEmpty && targetAttrPairsToComputeStats.nonEmpty)
+    assert(targetAttrPairsToComputeStats.nonEmpty)
+
+    val freqStatAttrs = spark.table(freqStatView).columns.filter(_ != "cnt")
+    val targetAttrs = targetAttrPairsToComputeStats.flatMap(p => Seq(p._1, p._2)).distinct
+
+    assert((freqStatAttrs.toSet & targetAttrs.toSet) == freqStatAttrs.toSet)
     assert(targetAttrs.forall(domainStatMap.contains))
 
     // Computes the conditional entropy: H(x|y) = H(x,y) - H(y).
     // If H(x|y) = 0, then y determines x, i.e., y -> x.
     val hXYs = withJobDescription("compute conditional entropy H(x,y)") {
-      val pairSets = targetAttrPairsToComputeStats.map(p => Set(p._1, p._2)).distinct
-      pairSets.map { attrPair =>
+      val attrPairSets = targetAttrPairsToComputeStats.map(p => Set(p._1, p._2)).distinct
+      attrPairSets.map { attrPair =>
         attrPair -> {
           val Seq(x, y) = attrPair.toSeq
           val corrTerm = {
@@ -328,21 +331,21 @@ object RepairApi extends RepairBase {
     }
 
     val hYs = withJobDescription("compute entropy H(y)") {
-      targetAttrs.map { attrKey =>
-        attrKey -> {
+      targetAttrs.map { attr =>
+        attr -> {
           val corrTerm = {
             val df = spark.sql(
               s"""
                  |SELECT COUNT(1), COALESCE(SUM(cnt), 0)
-                 |  FROM $freqStatView
-                 |  WHERE ${whereCaluseToFilterStat(attrKey, targetAttrs)}
+                 |FROM $freqStatView
+                 |WHERE ${whereCaluseToFilterStat(attr, freqStatAttrs)}
                """.stripMargin)
             val (domainSize, totalCount) = df.take(1).map {
               case Row(cnt: Long, sum: Long) => (cnt, sum)
             }.head
 
             if (rowCount > totalCount) {
-              val ubDomainSize = Math.max(domainStatMap(attrKey) - domainSize, 1)
+              val ubDomainSize = Math.max(domainStatMap(attr) - domainSize, 1)
               val avgCnt = Math.max((rowCount - totalCount + 0.0) / ubDomainSize, 1.0)
               -ubDomainSize * (avgCnt / rowCount) * log2(avgCnt / rowCount)
             } else {
@@ -355,12 +358,9 @@ object RepairApi extends RepairBase {
             s"""
                |SELECT -COALESCE(SUM($hY), 0.0) $hY
                |FROM (
-               |  /* TODO: Needs to reconsider how-to-handle NULL */
-               |  /* Use `MAX` to drop ($attrKey, null) tuples in `$inputView` */
-               |  SELECT `$attrKey` Y, (MAX(cnt) / $rowCount) * log2(MAX(cnt) / $rowCount) $hY
+               |  SELECT `$attr` Y, (cnt / $rowCount) * log2(cnt / $rowCount) $hY
                |  FROM $freqStatView
-               |  WHERE ${whereCaluseToFilterStat(attrKey, targetAttrs)}
-               |  GROUP BY `$attrKey`
+               |  WHERE ${whereCaluseToFilterStat(attr, freqStatAttrs)}
                |)
              """.stripMargin)
 
@@ -417,16 +417,14 @@ object RepairApi extends RepairBase {
       cache = true)
     val rowCount = spark.table(discretizedInputView).count()
     val pairwiseStatMap = computePairwiseStats(
-      discretizedInputView, rowCount, freqAttrStatView, discretizedAttrs,
-      attrPairs, domainStatMap)
-
+      rowCount, freqAttrStatView, attrPairs, domainStatMap)
     Seq(
       "freq_attr_stats" -> freqAttrStatView,
       "pairwise_attr_corr_stats" -> pairwiseStatMap.mapValues(seqToJson)
     ).asJson
   }
 
-  private[python] def filterCorrAttrs(
+  private[python] def filterPairwiseStatMap(
       pairwiseStatMap: Map[String, Seq[(String, Double)]],
       maxAttrsToComputeDomains: Int,
       pairwiseAttrCorrThreshold: Double): Map[String, Seq[(String, Double)]] = {
@@ -499,7 +497,7 @@ object RepairApi extends RepairBase {
     }
 
     withJobDescription("compute domain values with posteriori probability") {
-      val corrAttrMap = filterCorrAttrs(pairwiseStatMap, maxAttrsToComputeDomains, pairwiseAttrCorrThreshold)
+      val corrAttrMap = filterPairwiseStatMap(pairwiseStatMap, maxAttrsToComputeDomains, pairwiseAttrCorrThreshold)
       val domainInitValue = s"CAST(NULL AS ARRAY<STRUCT<n: STRING, cnt: DOUBLE>>)"
       val repairCellDf = spark.table(errCellView).where(
         s"attribute IN (${attrsToRepair.map(a => s"'$a'").mkString(", ")})")

@@ -126,7 +126,7 @@ private[python] object DepGraph extends RepairBase {
       val targetAttrs = domainStatMap.keys.toSeq
       val targetAttrPairs = attrPairsToComputeDeps.map { case Seq(x, y) => (x, y) }
       val pairwiseStatMap = RepairApi.computePairwiseStats(
-        inputView, rowCount, attrStatView, targetAttrs, targetAttrPairs, domainStatMap)
+        rowCount, attrStatView, targetAttrPairs, domainStatMap)
 
       val attrPairs = attrPairsToComputeDeps.filter { case Seq(x, y) =>
         pairwiseStatMap(x).exists { case (attr, h) =>

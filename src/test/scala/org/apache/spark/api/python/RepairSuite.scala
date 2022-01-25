@@ -346,7 +346,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
         val domainStatMap = Map(tid -> 9L, s"$x" -> 3L, s"$y" -> 4L)
         val pairwiseStatMap = RepairApi.computePairwiseStats(
-          "tempView", 9, "freqAttrStats", Seq(s"$x", s"$y"), Seq((s"$x", s"$y"), (s"$y", s"$x")), domainStatMap)
+          9, "freqAttrStats", Seq((s"$x", s"$y"), (s"$y", s"$x")), domainStatMap)
         assert(pairwiseStatMap.keySet === Set(s"$x", s"$y"))
         assert(pairwiseStatMap(s"$x").map(_._1) === Seq(s"$y"))
         assert(pairwiseStatMap(s"$x").head._2 > 0.0)
@@ -410,7 +410,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
   test("computeCorrAttrs") {
     val pairwiseStatMap = Map("y" -> Seq(("x", 0.9)), "x" -> Seq(("y", 0.9)))
-    val corrAttrs = RepairApi.filterCorrAttrs(pairwiseStatMap, 2, 1.0)
+    val corrAttrs = RepairApi.filterPairwiseStatMap(pairwiseStatMap, 2, 1.0)
     assert(corrAttrs === Map("y" -> Seq(("x", 0.9)), "x" -> Seq(("y", 0.9))))
   }
 
