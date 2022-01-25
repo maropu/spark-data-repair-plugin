@@ -92,7 +92,7 @@ private[python] object DepGraph extends RepairBase {
       maxAttrValueNum: Int,
       maxAttrValueLength: Int,
       samplingRatio: Double,
-      minCorrThres: Double,
+      pairwiseAttrCorrThreshold: Double,
       edgeLabel: Boolean): String = {
     assert(targetAttrs.nonEmpty)
 
@@ -131,13 +131,13 @@ private[python] object DepGraph extends RepairBase {
 
       val attrPairs = attrPairsToComputeDeps.filter { case Seq(x, y) =>
         pairwiseStatMap(x).exists { case (attr, h) =>
-          y == attr && Math.max(h, 0.0) >= minCorrThres
+          y == attr && Math.max(h, 0.0) <= pairwiseAttrCorrThreshold
         }
       }
 
       if (attrPairs.isEmpty) {
         throw AnalysisException("No highly-correlated attribute pair " +
-          s"(threshold: $minCorrThres) found")
+          s"(threshold: $pairwiseAttrCorrThreshold) found")
       }
 
       attrPairs.foreach { case Seq(x, y) =>
@@ -229,13 +229,13 @@ private[python] object DepGraph extends RepairBase {
       maxAttrValueNum: Int,
       maxAttrValueLength: Int,
       samplingRatio: Double,
-      minCorrThres: Double,
+      pairwiseAttrCorrThreshold: Double,
       edgeLabel: Boolean,
       filenamePrefix: String,
       overwrite: Boolean): Unit = {
     val graphString = computeDepGraph(
       inputView, targetAttrs, maxDomainSize, maxAttrValueNum, maxAttrValueLength,
-      samplingRatio, minCorrThres, edgeLabel)
+      samplingRatio, pairwiseAttrCorrThreshold, edgeLabel)
     if (!validImageFormatSet.contains(format.toLowerCase(Locale.ROOT))) {
       throw AnalysisException(s"Invalid image format: $format")
     }

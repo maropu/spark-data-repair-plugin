@@ -42,7 +42,7 @@ repaired_df = delphi.repair \
     .setRowId("tid") \
     .setErrorDetectors(error_detectors) \
     .setDiscreteThreshold(100) \
-    .setRuleBasedModelEnabled(True) \
+    .setRepairByRules(True) \
     .option("model.hp.no_progress_loss", "100") \
     .run()
 

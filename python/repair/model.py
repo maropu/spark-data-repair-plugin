@@ -682,18 +682,17 @@ class RepairModel():
             heap: List[Tuple[float, str]] = []
             for f, corr in map(lambda x: tuple(x), pairwise_attr_stats[y]):  # type: ignore
                 if f in features:
-                    # Converts to a negative value for extracting higher values
-                    heapq.heappush(heap, (-float(corr), f))
+                    heapq.heappush(heap, (float(corr), f))
 
             fts = [heapq.heappop(heap) for i in range(len(heap))]
             top_k_fts: List[Tuple[float, str]] = []
             for corr, f in fts:  # type: ignore
-                # TODO: Parameterize a minimum corr to filter out irrelevant features
-                if len(top_k_fts) <= 1 or (-float(corr) >= 0.0 and len(top_k_fts) < max_training_column_num):
+                # TODO: Parameterize a correlation threshold to filter out irrelevant features
+                if len(top_k_fts) <= 1 or (float(corr) >= 0.0 and len(top_k_fts) < max_training_column_num):
                     top_k_fts.append((float(corr), f))
 
             _logger.info("[Repair Model Training Phase] {} features ({}) selected from {} features".format(
-                len(top_k_fts), to_list_str(list(map(lambda f: f"{f[1]}:{-f[0]}", top_k_fts))), len(features)))
+                len(top_k_fts), to_list_str(list(map(lambda f: f"{f[1]}:{f[0]}", top_k_fts))), len(features)))
 
             features = list(map(lambda f: f[1], top_k_fts))
 

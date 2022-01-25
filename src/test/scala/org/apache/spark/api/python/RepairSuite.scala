@@ -349,10 +349,10 @@ class RepairSuite extends QueryTest with SharedSparkSession {
              |  (9, "2", "test-2a")
            """.stripMargin)
 
-        val statThreshold = 0.0
+        val freqAttrStatThreshold = 0.0
         val domainStatMapAsJson = s"""{"$tid": 9,"$x": 3,"$y": 4}"""
         val jsonString = RepairApi.computeAttrStats(
-          "tempView", tid, s"$x,$y", domainStatMapAsJson, 1.0, statThreshold)
+          "tempView", tid, s"$x,$y", domainStatMapAsJson, 1.0, freqAttrStatThreshold)
 
         val jsonObj = parse(jsonString)
         val data = jsonObj.asInstanceOf[JObject].values
@@ -372,21 +372,21 @@ class RepairSuite extends QueryTest with SharedSparkSession {
           Row("1", null, 3)
         ))
 
-        val pairwiseStatMap = data("pairwise_attr_stats")
+        val pairwiseStatMap = data("pairwise_attr_corr_stats")
           .asInstanceOf[Map[String, Seq[Seq[String]]]]
           .mapValues(_.map { case Seq(attr, sv) => (attr, sv.toDouble) })
         assert(pairwiseStatMap.keySet === Set(s"$x", s"$y"))
         assert(pairwiseStatMap(s"$x").head._1 === s"$y")
-        assert(pairwiseStatMap(s"$x").head._2 > statThreshold)
+        assert(pairwiseStatMap(s"$x").head._2 <= 1.0)
         assert(pairwiseStatMap(s"$y").head._1 === s"$x")
-        assert(pairwiseStatMap(s"$y").head._2 > statThreshold)
+        assert(pairwiseStatMap(s"$y").head._2 <= 1.0)
       }
     }
   }
 
   test("computeCorrAttrs") {
     val pairwiseStatMap = Map("y" -> Seq(("x", 0.9)), "x" -> Seq(("y", 0.9)))
-    val corrAttrs = RepairApi.filterCorrAttrs(pairwiseStatMap, 2, 0.80)
+    val corrAttrs = RepairApi.filterCorrAttrs(pairwiseStatMap, 2, 1.0)
     assert(corrAttrs === Map("y" -> Seq(("x", 0.9)), "x" -> Seq(("y", 0.9))))
   }
 
@@ -451,9 +451,9 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         val pairwiseStatMapAsJson = s"""{"$x": [["$y","1.0"]], "$y": [["$x","0.846950694324252"]]}"""
         val domainStatMapAsJson = s"""{"$tid": 9,"$x": 3,"$y": 4,"$z": 3}"""
 
-        def testComputeDomain(minCorrThres: Double, domain_threshold_beta: Double, expected: Seq[Row]): Unit = {
+        def testComputeDomain(pairwiseAttrCorrThreshold: Double, domain_threshold_beta: Double, expected: Seq[Row]): Unit = {
           val domainDf = RepairApi.computeDomainInErrorCells(
-            "inputView", "errCellView", tid, s"$z", s"$x,$y", "freqAttrStats", pairwiseStatMapAsJson, domainStatMapAsJson, 4, minCorrThres, 0.0, domain_threshold_beta)
+            "inputView", "errCellView", tid, s"$z", s"$x,$y", "freqAttrStats", pairwiseStatMapAsJson, domainStatMapAsJson, 4, pairwiseAttrCorrThreshold, 0.0, domain_threshold_beta)
           assert(domainDf.columns.toSet === Set(tid, "attribute", "current_value", "domain"))
           val df = domainDf
             .selectExpr("*", "inline(domain)")
@@ -461,7 +461,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
           checkAnswer(df, expected)
         }
 
-        testComputeDomain(0.0, 0.01, Seq(
+        testComputeDomain(100.0, 0.01, Seq(
           Row(1, s"$x", "2", "1"),
           Row(1, s"$x", "2", "2"),
           Row(1, s"$x", "2", "3"),

@@ -347,13 +347,13 @@ class RepairMisc():
         Examples
         --------
         >>> delphi.misc.options({"table_name": "adult", "path": "/tmp/adult",
-        ...    "min_corr_thres": "0.60"}).generateDepGraph()
+        ...    "pairwise_attr_stat_threshold": "1.0"}).generateDepGraph()
         """
         self._check_required_options(["path", "table_name"])
         param_max_domain_size = self._parse_option("max_domain_size", "100")
         param_max_attr_value_num = self._parse_option("max_attr_value_num", "30")
         param_max_attr_value_length = self._parse_option("max_attr_value_length", "70")
-        param_min_corr_thres = self._parse_option("min_corr_thres", "0.7")
+        param_pairwise_attr_stat_threshold = self._parse_option("pairwise_attr_stat_threshold", "1.0")
         param_edge_label = len(self._parse_option("edge_label", "")) > 0
         param_filename_prefix = self._parse_option("filename_prefix", "depgraph")
         param_overwrite = len(self._parse_option("overwrite", "")) > 0
@@ -361,5 +361,5 @@ class RepairMisc():
             self.opts["path"], self._db_name, self.opts["table_name"],
             "svg", self._target_attr_list, int(param_max_domain_size),
             int(param_max_attr_value_num), int(param_max_attr_value_length),
-            1.0, float(param_min_corr_thres), param_edge_label,
+            1.0, float(param_pairwise_attr_stat_threshold), param_edge_label,
             param_filename_prefix, param_overwrite)

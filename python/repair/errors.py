@@ -304,33 +304,32 @@ class ErrorModel():
     from collections import namedtuple
     _option = namedtuple('_option', 'key default_value type_class validator err_msg')
 
-    # TODO: Needs to check if an option `error.min_corr_thres` below work correctly
-    _opt_min_corr_thres = \
-        _option('error.min_corr_thres', 0.70, float,
-                lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
+    _opt_attr_stat_sample_ratio = \
+        _option('error.attr_stat_sample_ratio', 1.0, float,
+                lambda v: 0.0 <= v and v <= 1.0, '`{}` should be in [0.0, 1.0]')
+    _opt_freq_attr_stat_threshold = \
+        _option('error.freq_attr_stat_threshold', 0.0, float,
+                lambda v: 0.0 <= v and v <= 1.0, '`{}` should be in [0.0, 1.0]')
+    _opt_pairwise_attr_corr_threshold = \
+        _option('error.pairwise_attr_corr_threshold', 1.0, float,
+                lambda v: 0.0 < v, '`{}` should be positive')
+    _opt_max_attrs_to_compute_domains = \
+        _option('error.max_attrs_to_compute_domains', 4, int,
+                lambda v: v >= 2, '`{}` should be greater than 1')
     _opt_domain_threshold_alpha = \
         _option('error.domain_threshold_alpha', 0.0, float,
                 lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
     _opt_domain_threshold_beta = \
         _option('error.domain_threshold_beta', 0.70, float,
                 lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
-    _opt_max_attrs_to_compute_domains = \
-        _option('error.max_attrs_to_compute_domains', 4, int,
-                lambda v: v >= 2, '`{}` should be greater than 1')
-    _opt_attr_stat_sample_ratio = \
-        _option('error.attr_stat_sample_ratio', 1.0, float,
-                lambda v: 0.0 <= v and v <= 1.0, '`{}` should be in [0.0, 1.0]')
-    _opt_attr_stat_threshold = \
-        _option('error.attr_stat_threshold', 0.0, float,
-                lambda v: 0.0 <= v and v <= 1.0, '`{}` should be in [0.0, 1.0]')
 
     option_keys = set([
-        _opt_min_corr_thres.key,
-        _opt_domain_threshold_alpha.key,
-        _opt_domain_threshold_beta.key,
-        _opt_max_attrs_to_compute_domains.key,
         _opt_attr_stat_sample_ratio.key,
-        _opt_attr_stat_threshold.key])
+        _opt_freq_attr_stat_threshold.key,
+        _opt_pairwise_attr_corr_threshold.key,
+        _opt_max_attrs_to_compute_domains.key,
+        _opt_domain_threshold_alpha.key,
+        _opt_domain_threshold_beta.key])
 
     def __init__(self, row_id: str, targets: List[str], discrete_thres: int,
                  error_detectors: List[ErrorDetector],
@@ -453,7 +452,7 @@ class ErrorModel():
             continous_columns: List[str], target_columns: List[str],
             domain_stats: Dict[str, int],
             freq_attr_stats: str,
-            pairwise_attr_stats: Dict[str, int]) -> str:
+            pairwise_attr_corr_stats: Dict[str, int]) -> str:
         _logger.info("[Error Detection Phase] Analyzing cell domains to fix error cells...")
 
         noisy_cells = self._create_temp_view(noisy_cells_df, "noisy_cells_v3")
@@ -462,10 +461,10 @@ class ErrorModel():
             ",".join(continous_columns),
             ",".join(target_columns),
             freq_attr_stats,
-            json.dumps(pairwise_attr_stats),
+            json.dumps(pairwise_attr_corr_stats),
             json.dumps(domain_stats),
             self._get_option_value(*self._opt_max_attrs_to_compute_domains),
-            self._get_option_value(*self._opt_min_corr_thres),
+            self._get_option_value(*self._opt_pairwise_attr_corr_threshold),
             self._get_option_value(*self._opt_domain_threshold_alpha),
             self._get_option_value(*self._opt_domain_threshold_beta))
 
@@ -480,7 +479,7 @@ class ErrorModel():
         _logger.debug("Collecting and sampling attribute stats (ratio={} threshold={}) "
                       "before computing error domains...".format(
                           self._get_option_value(*self._opt_attr_stat_sample_ratio),
-                          self._get_option_value(*self._opt_attr_stat_threshold)))
+                          self._get_option_value(*self._opt_freq_attr_stat_threshold)))
 
         ret_as_json = json.loads(self._repair_api.computeAttrStats(
             discretized_table,
@@ -488,23 +487,23 @@ class ErrorModel():
             ','.join(target_columns),
             json.dumps(domain_stats),
             self._get_option_value(*self._opt_attr_stat_sample_ratio),
-            self._get_option_value(*self._opt_attr_stat_threshold)))
+            self._get_option_value(*self._opt_freq_attr_stat_threshold)))
 
         freq_attr_stats = ret_as_json['freq_attr_stats']
-        pairwise_attr_stats = ret_as_json['pairwise_attr_stats']
+        pairwise_attr_corr_stats = ret_as_json['pairwise_attr_corr_stats']
         self._delete_view_on_exit(freq_attr_stats)
 
-        return freq_attr_stats, pairwise_attr_stats
+        return freq_attr_stats, pairwise_attr_corr_stats
 
     def _extract_error_cells_from(self, noisy_cells_df: DataFrame, input_table: str,
                                   discretized_table: str, continous_columns: List[str], target_columns: List[str],
-                                  pairwise_attr_stats: Dict[str, Tuple[str, float]],
+                                  pairwise_attr_corr_stats: Dict[str, Tuple[str, float]],
                                   freq_attr_stats: str,
                                   domain_stats: Dict[str, int]) -> DataFrame:
         # Defines true error cells based on the result of domain analysis
         cell_domain = self._analyze_error_cell_domain(
             discretized_table, noisy_cells_df, continous_columns, target_columns,
-            domain_stats, freq_attr_stats, pairwise_attr_stats)
+            domain_stats, freq_attr_stats, pairwise_attr_corr_stats)
 
         # Fixes cells if a predicted value is the same with an initial one
         fix_cells_expr = "if(current_value = domain[0].n, current_value, NULL) repaired"
@@ -555,7 +554,7 @@ class ErrorModel():
                 return noisy_cells_df, target_columns, {}, domain_stats
 
             # Computes attribute stats for the discretized table
-            freq_attr_stats, pairwise_attr_stats = self._compute_attr_stats(
+            freq_attr_stats, pairwise_attr_corr_stats = self._compute_attr_stats(
                 discretized_table, target_columns, domain_stats)
 
             error_cells_df = noisy_cells_df
@@ -563,11 +562,11 @@ class ErrorModel():
                 error_cells_df = self._extract_error_cells_from(
                     noisy_cells_df, input_table, discretized_table,
                     continous_columns, target_columns,
-                    pairwise_attr_stats,
+                    pairwise_attr_corr_stats,
                     freq_attr_stats,
                     domain_stats)
 
-            return error_cells_df, target_columns, pairwise_attr_stats, domain_stats
+            return error_cells_df, target_columns, pairwise_attr_corr_stats, domain_stats
         except:
             raise
         finally:

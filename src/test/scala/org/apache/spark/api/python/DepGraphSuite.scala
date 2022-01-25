@@ -58,15 +58,15 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
 
         val path = s"${dirPath.getAbsolutePath}/d"
         val targetAttrs = Seq("tid", "x", "y", "z")
-        def genGraph(minCorrThres: Double): Unit =
-          DepGraph.generateDepGraph(path, "inputView", "svg", targetAttrs, 8, 100, 100, 1.0, minCorrThres, false, "g", false)
+        def genGraph(pairwiseAttrCorrThreshold: Double): Unit =
+          DepGraph.generateDepGraph(path, "inputView", "svg", targetAttrs, 8, 100, 100, 1.0, pairwiseAttrCorrThreshold, false, "g", false)
 
         val errMsg = intercept[AnalysisException] {
-          genGraph(minCorrThres = 0.90)
+          genGraph(pairwiseAttrCorrThreshold = 0.0)
         }.getMessage()
-        assert(errMsg.contains("No highly-correlated attribute pair (threshold: 0.9) found"))
+        assert(errMsg.contains("No highly-correlated attribute pair (threshold: 0.0) found"))
 
-        genGraph(minCorrThres = 0.0)
+        genGraph(pairwiseAttrCorrThreshold = 100.0)
         val graphString = fileToString(new File(s"${dirPath.getAbsolutePath}/d/g.dot"))
         checkOutputString(graphString,
           s"""
@@ -180,7 +180,7 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
         val targetAttrs = Seq("tid", "x", "y", "z")
         val outputPath = s"${dirPath.getAbsolutePath}/d"
         def genGraph(filename: String, overwrite: Boolean): Unit =
-          DepGraph.generateDepGraph(outputPath, "inputView", "svg", targetAttrs, 8, 100, 100, 1.0, 0.0, false, filename, overwrite)
+          DepGraph.generateDepGraph(outputPath, "inputView", "svg", targetAttrs, 8, 100, 100, 1.0, 1.0, false, filename, overwrite)
 
         genGraph("depgraph", overwrite = false)
         assert(new File(s"$outputPath/depgraph.dot").exists())
@@ -219,7 +219,7 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
 
         DepGraph.validImageFormatSet.foreach { format =>
           val outputPath = s"${dirPath.getAbsolutePath}/$format"
-          DepGraph.generateDepGraph(outputPath, "inputView", format, targetAttrs, 8, 100, 100, 1.0, 0.0, false, "depgraph", false)
+          DepGraph.generateDepGraph(outputPath, "inputView", format, targetAttrs, 8, 100, 100, 1.0, 1.0, false, "depgraph", false)
           val imgFile = new File(s"$outputPath/depgraph.$format")
           assert(imgFile.exists())
         }

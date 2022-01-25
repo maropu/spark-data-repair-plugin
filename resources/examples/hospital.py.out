@@ -84,7 +84,7 @@ only showing top 1 row
 ...   .setTableName("hospital") \
 ...   .setRowId("tid") \
 ...   .setErrorDetectors(error_detectors) \
-...   .setRuleBasedModelEnabled(True) \
+...   .setRepairByRules(True) \
 ...   .option("model.hp.no_progress_loss", "100") \
 ...   .setDiscreteThreshold(100) \
 ...   .run()
