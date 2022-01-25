@@ -309,23 +309,26 @@ class RepairSuite extends QueryTest with SharedSparkSession {
     }
   }
 
+  test("computePairwiseStats - no frequency stat") {
+    withTempView("emptyFreqAttrStats") {
+      spark.range(1).selectExpr("id AS x", "id AS y", "id AS cnt")
+        .where("1 == 0")
+        .createOrReplaceTempView("emptyFreqAttrStats")
+
+      val domainStatMap = Map("tid" -> 9L, "x" -> 2L, "y" -> 4L)
+      val pairwiseStatMap = RepairApi.computePairwiseStats(
+        1000, "emptyFreqAttrStats", Seq(("x", "y"), ("y", "x")), domainStatMap)
+      assert(pairwiseStatMap.keySet === Set("x", "y"))
+      assert(pairwiseStatMap("x").map(_._1) === Seq("y"))
+      assert(pairwiseStatMap("x").head._2 === 1.0) // the worst-case value
+      assert(pairwiseStatMap("y").map(_._1) === Seq("x"))
+      assert(pairwiseStatMap("y").head._2 === 2.0) // the worst-case value
+    }
+  }
+
   test("computePairwiseStats") {
     Seq(("tid", "xx", "yy"), ("t i d", "x x", "y y")).foreach { case (tid, x, y) =>
-      withTempView("tempView", "freqAttrStats") {
-        spark.sql(
-          s"""
-             |CREATE TEMPORARY VIEW tempView(`$tid`, `$x`, `$y`) AS SELECT * FROM VALUES
-             |  (1, "1", "test-1"),
-             |  (2, "2", "test-2"),
-             |  (3, "3", "test-3"),
-             |  (4, "2", "test-2"),
-             |  (5, "1", "test-1"),
-             |  (6, "1", "test-1"),
-             |  (7, "3", "test-3"),
-             |  (8, "3", "test-3"),
-             |  (9, "2", "test-2a")
-           """.stripMargin)
-
+      withTempView("freqAttrStats") {
         spark.sql(
           s"""
              |CREATE TEMPORARY VIEW freqAttrStats(`$x`, `$y`, cnt) AS SELECT * FROM VALUES
@@ -373,16 +376,16 @@ class RepairSuite extends QueryTest with SharedSparkSession {
              |  (9, "2", "test-2a")
            """.stripMargin)
 
-        val freqAttrStatThreshold = 0.0
-        val domainStatMapAsJson = s"""{"$tid": 9,"$x": 3,"$y": 4}"""
-        val jsonString = RepairApi.computeAttrStats(
-          "tempView", tid, s"$x,$y", domainStatMapAsJson, freqAttrStatThreshold)
+        def computeAttrStats(freqAttrStatThreshold: Double): Map[String, Any] = {
+          val domainStatMapAsJson = s"""{"$tid": 9,"$x": 3,"$y": 4}"""
+          val jsonString = RepairApi.computeAttrStats(
+            "tempView", tid, s"$x,$y", domainStatMapAsJson, freqAttrStatThreshold)
+          val jsonObj = parse(jsonString)
+          jsonObj.asInstanceOf[JObject].values
+        }
 
-        val jsonObj = parse(jsonString)
-        val data = jsonObj.asInstanceOf[JObject].values
-
-        val freqAttrStatView = data("freq_attr_stats").toString
-        checkAnswer(spark.table(freqAttrStatView), Seq(
+        val data1 = computeAttrStats(0.0)
+        checkAnswer(spark.table(data1("freq_attr_stats").toString), Seq(
           Row("1", "test-1", 3),
           Row("2", "test-2a", 1),
           Row(null, "test-2a", 1),
@@ -395,23 +398,33 @@ class RepairSuite extends QueryTest with SharedSparkSession {
           Row(null, "test-3", 3),
           Row("1", null, 3)
         ))
-
-        val pairwiseStatMap = data("pairwise_attr_corr_stats")
+        val pairwiseStatMap1 = data1("pairwise_attr_corr_stats")
           .asInstanceOf[Map[String, Seq[Seq[String]]]]
           .mapValues(_.map { case Seq(attr, sv) => (attr, sv.toDouble) })
-        assert(pairwiseStatMap.keySet === Set(s"$x", s"$y"))
-        assert(pairwiseStatMap(s"$x").head._1 === s"$y")
-        assert(pairwiseStatMap(s"$x").head._2 <= 1.0)
-        assert(pairwiseStatMap(s"$y").head._1 === s"$x")
-        assert(pairwiseStatMap(s"$y").head._2 <= 1.0)
+        assert(pairwiseStatMap1.keySet === Set(s"$x", s"$y"))
+        assert(pairwiseStatMap1(s"$x").head._1 === s"$y")
+        assert(pairwiseStatMap1(s"$x").head._2 <= 1.0)
+        assert(pairwiseStatMap1(s"$y").head._1 === s"$x")
+        assert(pairwiseStatMap1(s"$y").head._2 <= 1.0)
+
+        val data2 = computeAttrStats(1.0)
+        checkAnswer(spark.table(data2("freq_attr_stats").toString), Nil)
+        val pairwiseStatMap2 = data2("pairwise_attr_corr_stats")
+          .asInstanceOf[Map[String, Seq[Seq[String]]]]
+          .mapValues(_.map { case Seq(attr, sv) => (attr, sv.toDouble) })
+        assert(pairwiseStatMap2.keySet === Set(s"$x", s"$y"))
+        assert(pairwiseStatMap2(s"$x").head._1 === s"$y")
+        assert(pairwiseStatMap1(s"$x").head._2 < pairwiseStatMap2(s"$x").head._2)
+        assert(pairwiseStatMap2(s"$y").head._1 === s"$x")
+        assert(pairwiseStatMap1(s"$y").head._2 < pairwiseStatMap2(s"$x").head._2)
       }
     }
   }
 
-  test("computeCorrAttrs") {
-    val pairwiseStatMap = Map("y" -> Seq(("x", 0.9)), "x" -> Seq(("y", 0.9)))
-    val corrAttrs = RepairApi.filterPairwiseStatMap(pairwiseStatMap, 2, 1.0)
-    assert(corrAttrs === Map("y" -> Seq(("x", 0.9)), "x" -> Seq(("y", 0.9))))
+  test("filterPairwiseStatMap") {
+    val pairwiseStatMap = Map("y" -> Seq(("x", 0.3)), "x" -> Seq(("y", 0.9)))
+    val corrAttrs = RepairApi.filterPairwiseStatMap(pairwiseStatMap, 2, 0.8)
+    assert(corrAttrs === Map("y" -> Seq(("x", 0.3)), "x" -> Nil))
   }
 
   test("computeDomainInErrorCells") {
