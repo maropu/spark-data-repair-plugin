@@ -222,10 +222,8 @@ object RepairApi extends RepairBase {
   private[python] def computeFreqStats(
       inputView: String,
       targetAttrSets: Seq[Seq[String]],
-      statSampleRatio: Double,
       freqAttrStatThreshold: Double): DataFrame = {
     assert(targetAttrSets.nonEmpty)
-    assert(0.0 <= statSampleRatio && statSampleRatio <= 1.0)
     assert(0.0 <= freqAttrStatThreshold && freqAttrStatThreshold <= 1.0)
 
     val targetAttrs = targetAttrSets.flatten.distinct
@@ -241,14 +239,10 @@ object RepairApi extends RepairBase {
         throw new IllegalStateException(
           s"Cannot handle more than two entries: ${attrs.mkString(",")}")
     }
-    val inputDf = if (statSampleRatio < 1.0) {
-      spark.table(inputView).sample(statSampleRatio)
-    } else {
-      spark.table(inputView)
-    }
-    withTempView(inputDf, "input_to_compute_freq_stats") { inputView =>
+
+    withTempView(spark.table(inputView), "input_to_compute_freq_stats") { inputView =>
       val filterClauseOption = if (freqAttrStatThreshold > 0.0) {
-        val rowCount = inputDf.count
+        val rowCount = spark.table(inputView).count
         val cond = s"HAVING cnt > ${(rowCount * freqAttrStatThreshold).toInt}"
         logBasedOnLevel(s"Attributes stats filter enabled: $cond")
         cond
@@ -390,11 +384,10 @@ object RepairApi extends RepairBase {
       rowId: String,
       targetAttrList: String,
       domainStatMapAsJson: String,
-      statSampleRatio: Double,
       freqAttrStatThreshold: Double): String = {
     logBasedOnLevel(s"computeDomainInErrorCells called with: " +
-      s"discretizedInputView=$discretizedInputView rowId=$rowId targetAttrList=$targetAttrList " +
-      s"statSampleRatio=$statSampleRatio freqAttrStatThreshold=$freqAttrStatThreshold")
+      s"discretizedInputView=$discretizedInputView rowId=$rowId " +
+      s"targetAttrList=$targetAttrList freqAttrStatThreshold=$freqAttrStatThreshold")
 
     val attrsToRepair = SparkUtils.stringToSeq(targetAttrList)
     assert(attrsToRepair.nonEmpty)
@@ -417,7 +410,7 @@ object RepairApi extends RepairBase {
     }
 
     val freqAttrStatView = createTempView(
-      computeFreqStats(discretizedInputView, attrsToComputeFreqStats, statSampleRatio, freqAttrStatThreshold),
+      computeFreqStats(discretizedInputView, attrsToComputeFreqStats, freqAttrStatThreshold),
       "freq_attr_stats",
       cache = true)
     val rowCount = spark.table(discretizedInputView).count()

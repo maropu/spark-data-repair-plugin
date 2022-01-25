@@ -59,7 +59,7 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
         val path = s"${dirPath.getAbsolutePath}/d"
         val targetAttrs = Seq("tid", "x", "y", "z")
         def genGraph(pairwiseAttrCorrThreshold: Double): Unit =
-          DepGraph.generateDepGraph(path, "inputView", "svg", targetAttrs, 8, 100, 100, 1.0, pairwiseAttrCorrThreshold, false, "g", false)
+          DepGraph.generateDepGraph(path, "inputView", "svg", targetAttrs, 8, 100, 100, pairwiseAttrCorrThreshold, false, "g", false)
 
         val errMsg = intercept[AnalysisException] {
           genGraph(pairwiseAttrCorrThreshold = 0.0)
@@ -180,7 +180,7 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
         val targetAttrs = Seq("tid", "x", "y", "z")
         val outputPath = s"${dirPath.getAbsolutePath}/d"
         def genGraph(filename: String, overwrite: Boolean): Unit =
-          DepGraph.generateDepGraph(outputPath, "inputView", "svg", targetAttrs, 8, 100, 100, 1.0, 1.0, false, filename, overwrite)
+          DepGraph.generateDepGraph(outputPath, "inputView", "svg", targetAttrs, 8, 100, 100, 1.0, false, filename, overwrite)
 
         genGraph("depgraph", overwrite = false)
         assert(new File(s"$outputPath/depgraph.dot").exists())
@@ -219,7 +219,7 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
 
         DepGraph.validImageFormatSet.foreach { format =>
           val outputPath = s"${dirPath.getAbsolutePath}/$format"
-          DepGraph.generateDepGraph(outputPath, "inputView", format, targetAttrs, 8, 100, 100, 1.0, 1.0, false, "depgraph", false)
+          DepGraph.generateDepGraph(outputPath, "inputView", format, targetAttrs, 8, 100, 100, 1.0, false, "depgraph", false)
           val imgFile = new File(s"$outputPath/depgraph.$format")
           assert(imgFile.exists())
         }

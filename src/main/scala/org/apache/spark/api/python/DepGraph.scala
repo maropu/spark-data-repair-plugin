@@ -91,7 +91,6 @@ private[python] object DepGraph extends RepairBase {
       maxDomainSize: Int,
       maxAttrValueNum: Int,
       maxAttrValueLength: Int,
-      samplingRatio: Double,
       pairwiseAttrCorrThreshold: Double,
       edgeLabel: Boolean): String = {
     assert(targetAttrs.nonEmpty)
@@ -117,7 +116,7 @@ private[python] object DepGraph extends RepairBase {
     val rowCount = spark.table(inputView).count()
     val attrSetToComputeFreqStats = domainStatMap.keys.map(k => Seq(k)).toSeq ++ attrPairsToComputeDeps
     val attrFreqStatDf = RepairApi.computeFreqStats(
-      inputView, attrSetToComputeFreqStats, samplingRatio, 0.0)
+      inputView, attrSetToComputeFreqStats, 0.0)
 
     val hubNodes = mutable.ArrayBuffer[(String, String)]()
     val nodeDefs = mutable.ArrayBuffer[String]()
@@ -228,14 +227,13 @@ private[python] object DepGraph extends RepairBase {
       maxDomainSize: Int,
       maxAttrValueNum: Int,
       maxAttrValueLength: Int,
-      samplingRatio: Double,
       pairwiseAttrCorrThreshold: Double,
       edgeLabel: Boolean,
       filenamePrefix: String,
       overwrite: Boolean): Unit = {
     val graphString = computeDepGraph(
       inputView, targetAttrs, maxDomainSize, maxAttrValueNum, maxAttrValueLength,
-      samplingRatio, pairwiseAttrCorrThreshold, edgeLabel)
+      pairwiseAttrCorrThreshold, edgeLabel)
     if (!validImageFormatSet.contains(format.toLowerCase(Locale.ROOT))) {
       throw AnalysisException(s"Invalid image format: $format")
     }

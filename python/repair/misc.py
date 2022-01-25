@@ -361,5 +361,5 @@ class RepairMisc():
             self.opts["path"], self._db_name, self.opts["table_name"],
             "svg", self._target_attr_list, int(param_max_domain_size),
             int(param_max_attr_value_num), int(param_max_attr_value_length),
-            1.0, float(param_pairwise_attr_stat_threshold), param_edge_label,
+            float(param_pairwise_attr_stat_threshold), param_edge_label,
             param_filename_prefix, param_overwrite)

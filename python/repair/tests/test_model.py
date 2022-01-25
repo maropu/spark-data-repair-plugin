@@ -284,7 +284,6 @@ class RepairModelTests(ReusedSQLTestCase):
             ('error.domain_threshold_alpha', '0.0'),
             ('error.domain_threshold_beta', '0.7'),
             ('error.max_attrs_to_compute_domains', '4'),
-            ('error.attr_stat_sample_ratio', '1.0'),
             ('error.freq_attr_stat_threshold', '0.0'),
             ('model.max_training_row_num', '100000'),
             ('model.max_training_column_num', '65536'),
@@ -338,7 +337,6 @@ class RepairModelTests(ReusedSQLTestCase):
                 .option('error.domain_threshold_alpha', '0.0') \
                 .option('error.domain_threshold_beta', '0.70') \
                 .option('error.max_attrs_to_compute_domains', '4') \
-                .option('error.attr_stat_sample_ratio', '1.0') \
                 .option('error.freq_attr_stat_threshold', '0.0') \
                 .option('model.max_training_row_num', '10000') \
                 .option('model.max_training_column_num', '65536') \

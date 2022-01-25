@@ -304,9 +304,6 @@ class ErrorModel():
     from collections import namedtuple
     _option = namedtuple('_option', 'key default_value type_class validator err_msg')
 
-    _opt_attr_stat_sample_ratio = \
-        _option('error.attr_stat_sample_ratio', 1.0, float,
-                lambda v: 0.0 <= v and v <= 1.0, '`{}` should be in [0.0, 1.0]')
     _opt_freq_attr_stat_threshold = \
         _option('error.freq_attr_stat_threshold', 0.0, float,
                 lambda v: 0.0 <= v and v <= 1.0, '`{}` should be in [0.0, 1.0]')
@@ -324,7 +321,6 @@ class ErrorModel():
                 lambda v: 0.0 <= v and v < 1.0, '`{}` should be in [0.0, 1.0)')
 
     option_keys = set([
-        _opt_attr_stat_sample_ratio.key,
         _opt_freq_attr_stat_threshold.key,
         _opt_pairwise_attr_corr_threshold.key,
         _opt_max_attrs_to_compute_domains.key,
@@ -476,17 +472,11 @@ class ErrorModel():
                             domain_stats: Dict[str, int]) -> Tuple[str, Dict[str, Any]]:
         # Computes attribute statistics to calculate domains with posteriori probability
         # based on naïve independence assumptions.
-        _logger.debug("Collecting and sampling attribute stats (ratio={} threshold={}) "
-                      "before computing error domains...".format(
-                          self._get_option_value(*self._opt_attr_stat_sample_ratio),
-                          self._get_option_value(*self._opt_freq_attr_stat_threshold)))
-
         ret_as_json = json.loads(self._repair_api.computeAttrStats(
             discretized_table,
             self.row_id,
             ','.join(target_columns),
             json.dumps(domain_stats),
-            self._get_option_value(*self._opt_attr_stat_sample_ratio),
             self._get_option_value(*self._opt_freq_attr_stat_threshold)))
 
         freq_attr_stats = ret_as_json['freq_attr_stats']

@@ -355,7 +355,6 @@ object RepairMiscApi extends RepairBase {
       maxDomainSize: Int,
       maxAttrValueNum: Int,
       maxAttrValueLength: Int,
-      samplingRatio: Double,
       pairwiseAttrCorrThreshold: Double,
       edgeLabel: Boolean,
       filenamePrefix: String,
@@ -363,7 +362,7 @@ object RepairMiscApi extends RepairBase {
     logBasedOnLevel(s"generateDepGraph called with: path=$path dbName=$dbName tableName=$tableName " +
       s"format=$format targetAttrList=${if (targetAttrList.nonEmpty) targetAttrList else "<none>"} " +
       s"maxDomainSize=$maxDomainSize maxAttrValueNum=$maxAttrValueNum maxAttrValueLength=$maxAttrValueLength " +
-      s"samplingRatio=$samplingRatio pairwiseAttrCorrThreshold=$pairwiseAttrCorrThreshold edgeLabel=$edgeLabel " +
+      s"pairwiseAttrCorrThreshold=$pairwiseAttrCorrThreshold edgeLabel=$edgeLabel " +
       s"filenamePrefix=$filenamePrefix overwrite=$overwrite")
 
     val (inputDf, inputTable) = checkAndGetQualifiedInputName(dbName, tableName)
@@ -374,6 +373,6 @@ object RepairMiscApi extends RepairBase {
     }
     DepGraph.generateDepGraph(
       path, inputTable, format, targetAttrs, maxDomainSize, maxAttrValueNum, maxAttrValueLength,
-      samplingRatio, pairwiseAttrCorrThreshold, edgeLabel, filenamePrefix, overwrite)
+      pairwiseAttrCorrThreshold, edgeLabel, filenamePrefix, overwrite)
   }
 }

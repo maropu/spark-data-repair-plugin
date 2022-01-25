@@ -252,7 +252,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
            """.stripMargin)
 
         val attrsToComputeFreqStats = Seq(Seq(x), Seq(y), Seq(x, y))
-        val df1 = RepairApi.computeFreqStats("tempView", attrsToComputeFreqStats, 1.0, 0.0)
+        val df1 = RepairApi.computeFreqStats("tempView", attrsToComputeFreqStats, 0.0)
         checkAnswer(df1, Seq(
           Row("1", "test-1", 3),
           Row("2", "test-2a", 1),
@@ -266,7 +266,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
           Row(null, "test-3", 3),
           Row("1", null, 3)
         ))
-        val df2 = RepairApi.computeFreqStats("tempView", attrsToComputeFreqStats, 1.0, 0.3)
+        val df2 = RepairApi.computeFreqStats("tempView", attrsToComputeFreqStats, 0.3)
         checkAnswer(df2, Seq(
           Row("1", "test-1", 3),
           Row("3", null, 3),
@@ -278,7 +278,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         ))
 
         val errMsg = intercept[IllegalStateException] {
-          RepairApi.computeFreqStats("tempView", Seq(Seq(tid, x, y)), 1.0, 0.0)
+          RepairApi.computeFreqStats("tempView", Seq(Seq(tid, x, y)), 0.0)
         }.getMessage
         assert(errMsg.contains(s"Cannot handle more than two entries: $tid,$x,$y"))
       }
@@ -352,7 +352,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         val freqAttrStatThreshold = 0.0
         val domainStatMapAsJson = s"""{"$tid": 9,"$x": 3,"$y": 4}"""
         val jsonString = RepairApi.computeAttrStats(
-          "tempView", tid, s"$x,$y", domainStatMapAsJson, 1.0, freqAttrStatThreshold)
+          "tempView", tid, s"$x,$y", domainStatMapAsJson, freqAttrStatThreshold)
 
         val jsonObj = parse(jsonString)
         val data = jsonObj.asInstanceOf[JObject].values
