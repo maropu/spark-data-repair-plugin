@@ -424,28 +424,6 @@ object RepairApi extends RepairBase {
     ).asJson
   }
 
-  private[python] def filterPairwiseStatMap(
-      pairwiseStatMap: Map[String, Seq[(String, Double)]],
-      maxAttrsToComputeDomains: Int,
-      pairwiseAttrCorrThreshold: Double): Map[String, Seq[(String, Double)]] = {
-    assert(pairwiseStatMap.nonEmpty)
-    assert(maxAttrsToComputeDomains > 0)
-    assert(pairwiseAttrCorrThreshold > 0.0)
-
-    pairwiseStatMap.map { case (k, v) =>
-      val attrs = v.filter(_._2 <= pairwiseAttrCorrThreshold)
-      (k, if (attrs.size > maxAttrsToComputeDomains) {
-        attrs.take(maxAttrsToComputeDomains)
-      } else if (attrs.isEmpty) {
-        // If correlated attributes not found, we pick up data from its domain randomly
-        logInfo(s"Correlated attributes not found for $k")
-        Nil
-      } else {
-        attrs
-      })
-    }
-  }
-
   def computeDomainInErrorCells(
       discretizedInputView: String,
       errCellView: String,
@@ -456,20 +434,18 @@ object RepairApi extends RepairBase {
       pairwiseStatMapAsJson: String,
       domainStatMapAsJson: String,
       maxAttrsToComputeDomains: Int,
-      pairwiseAttrCorrThreshold: Double,
       domain_threshold_alpha: Double,
       domain_threshold_beta: Double): DataFrame = {
     logBasedOnLevel(s"computeDomainInErrorCells called with: " +
       s"discretizedInputView=$discretizedInputView errCellView=$errCellView rowId=$rowId " +
       s"continousAttrList=${if (continuousAttrList.nonEmpty) continuousAttrList else "<none>"} " +
       s"targetAttrList=$targetAttrList freqAttrStatView=$freqAttrStatView " +
-      s"maxAttrsToComputeDomains=$maxAttrsToComputeDomains pairwiseAttrCorrThreshold=$pairwiseAttrCorrThreshold " +
+      s"maxAttrsToComputeDomains=$maxAttrsToComputeDomains " +
       s"domain_threshold=alpha:$domain_threshold_alpha,beta=$domain_threshold_beta")
 
     assert(spark.table(discretizedInputView).columns.length > 1)
     assert(checkSchema(errCellView, "attribute STRING, current_value STRING", rowId, strict = true))
     assert(0 < maxAttrsToComputeDomains, "maxAttrsToComputeDomains should be greater than 0.")
-    assert(0.0 < pairwiseAttrCorrThreshold, "pairwiseAttrCorrThreshold should be positive.")
     assert(0.0 <= domain_threshold_alpha && domain_threshold_alpha < 1.0,
       "domain_threashold_alpha should be in [0.0, 1.0].")
     assert(0.0 <= domain_threshold_beta && domain_threshold_beta < 1.0,
@@ -497,7 +473,7 @@ object RepairApi extends RepairBase {
     }
 
     withJobDescription("compute domain values with posteriori probability") {
-      val corrAttrMap = filterPairwiseStatMap(pairwiseStatMap, maxAttrsToComputeDomains, pairwiseAttrCorrThreshold)
+      val corrAttrMap = pairwiseStatMap.map { case (k, attrs) => (k, attrs.take(maxAttrsToComputeDomains)) }
       val domainInitValue = s"CAST(NULL AS ARRAY<STRUCT<n: STRING, cnt: DOUBLE>>)"
       val repairCellDf = spark.table(errCellView).where(
         s"attribute IN (${attrsToRepair.map(a => s"'$a'").mkString(", ")})")

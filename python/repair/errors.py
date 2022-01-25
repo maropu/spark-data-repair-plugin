@@ -307,9 +307,6 @@ class ErrorModel():
     _opt_freq_attr_stat_threshold = \
         _option('error.freq_attr_stat_threshold', 0.0, float,
                 lambda v: 0.0 <= v and v <= 1.0, '`{}` should be in [0.0, 1.0]')
-    _opt_pairwise_attr_corr_threshold = \
-        _option('error.pairwise_attr_corr_threshold', 1.0, float,
-                lambda v: 0.0 < v, '`{}` should be positive')
     _opt_max_attrs_to_compute_domains = \
         _option('error.max_attrs_to_compute_domains', 4, int,
                 lambda v: v >= 2, '`{}` should be greater than 1')
@@ -322,7 +319,6 @@ class ErrorModel():
 
     option_keys = set([
         _opt_freq_attr_stat_threshold.key,
-        _opt_pairwise_attr_corr_threshold.key,
         _opt_max_attrs_to_compute_domains.key,
         _opt_domain_threshold_alpha.key,
         _opt_domain_threshold_beta.key])
@@ -460,7 +456,6 @@ class ErrorModel():
             json.dumps(pairwise_attr_corr_stats),
             json.dumps(domain_stats),
             self._get_option_value(*self._opt_max_attrs_to_compute_domains),
-            self._get_option_value(*self._opt_pairwise_attr_corr_threshold),
             self._get_option_value(*self._opt_domain_threshold_alpha),
             self._get_option_value(*self._opt_domain_threshold_beta))
 
