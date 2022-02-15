@@ -311,6 +311,7 @@ delphi.repair
 
 ## TODO
 
+ - Supports a simple syntax to represent functional dependencies for `ConstraintErrorDetector`, e.g., `ConstraintErrorDetector(constraints='X->Y;Y->Z')`
  - Implements a rule-based repair strategy using regular expressions (See [17])
 
 ## Bug Reports
