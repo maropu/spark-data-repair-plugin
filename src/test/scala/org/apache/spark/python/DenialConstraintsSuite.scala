@@ -25,36 +25,44 @@ class DenialConstraintsSuite extends SparkFunSuite {
   val rightIdent = DenialConstraints.rightRelationIdent
 
   test("constraint parsing") {
-    def testValidConstraintSyntax(lines: Seq[String], preds: Set[String], refs: Set[String]): Unit = {
-      val constraints = DenialConstraints.parse(lines.toIterator)
-      assert(constraints.predicates.map(_.map(_.toString).toSet).toSet === Set(preds))
+    def testValidConstraintSyntax(c: String, preds: Set[String], refs: Set[String]): Unit = {
+      val parsedPreds = DenialConstraints.parse(c)
+      val parsedRefs = parsedPreds.flatMap(_.references).distinct
+      assert(parsedPreds.map(_.toString).toSet === preds)
+      assert(parsedRefs.toSet === refs)
     }
-    testValidConstraintSyntax("""t1&EQ(t1.v1,"abc")&EQ(t1.v2,"def")""" ::
-        "" :: "  " :: Nil, // Blanks and spaces just ignored
+    testValidConstraintSyntax("""t1&EQ(t1.v1,"abc")&EQ(t1.v2,"def")""",
       Set(s"""$leftIdent.v1 <=> "abc"""", s"""$leftIdent.v2 <=> "def""""),
       Set("v1", "v2"))
-    testValidConstraintSyntax("""t1&t2&EQ(t1.v1,t2.v1)&IQ(t1.v2,t2.v2)""" :: Nil,
+    testValidConstraintSyntax("""t1&t2&EQ(t1.v1,t2.v1)&IQ(t1.v2,t2.v2)""",
       Set(s"""$leftIdent.v1 <=> $rightIdent.v1""", s"""NOT($leftIdent.v2 <=> $rightIdent.v2)"""),
       Set("v1", "v2"))
-    testValidConstraintSyntax("""t1&t2&LT(t1.v1,t2.v1)&GT(t1.v2,t2.v2)&EQ(t1.v1,t2.v1)""" :: Nil,
+    testValidConstraintSyntax("""t1&t2&LT(t1.v1,t2.v1)&GT(t1.v2,t2.v2)&EQ(t1.v1,t2.v1)""",
       Set(s"""$leftIdent.v1 < $rightIdent.v1""", s"""$leftIdent.v2 > $rightIdent.v2""",
         s"""$leftIdent.v1 <=> $rightIdent.v1"""),
       Set("v1", "v2"))
-    testValidConstraintSyntax(""" t1 & EQ ( t1.v1 , "abc") & EQ ( t1.v2 , "def" ) """ :: Nil,
+    testValidConstraintSyntax(""" t1 & EQ ( t1.v1 , "abc") & EQ ( t1.v2 , "def" ) """,
       Set(s"""$leftIdent.v1 <=> "abc"""", s"""$leftIdent.v2 <=> "def""""),
       Set("v1", "v2"))
-    testValidConstraintSyntax("""t1 & t2 & EQ ( t1.v1 , t2.v1 ) & IQ ( t1.v2 , t2.v2 ) """ :: Nil,
+    testValidConstraintSyntax("""t1 & t2 & EQ ( t1.v1 , t2.v1 ) & IQ ( t1.v2 , t2.v2 ) """,
       Set(s"""$leftIdent.v1 <=> $rightIdent.v1""", s"""NOT($leftIdent.v2 <=> $rightIdent.v2)"""),
       Set("v1", "v2"))
   }
 
   test("constraint parsing - invalid cases") {
     def testInvalidConstraintSyntax(dc: String, expectedErrMsg: String): Unit = {
+      val errMsg = intercept[IllegalArgumentException] {
+        DenialConstraints.parse(dc)
+      }.getMessage
+      assert(errMsg.contains("Failed to parse an input string") ||
+        errMsg.contains("Illegal predicates found") ||
+        errMsg.contains("At least two predicate candidates should be given"))
+
       val logAppender = new LogAppender("invalid constraint parsing tests")
       withLogAppender(logAppender) {
-        val c1 = DenialConstraints.parse(Iterator(dc))
-        assert(c1.references === Nil)
-        assert(c1.predicates.map(_.map(_.toString).toSet) === Nil)
+        val c = DenialConstraints.parseAndVerifyConstraints(Seq(dc), "", Seq("v1", "v2"))
+        assert(c.references === Nil)
+        assert(c.predicates === Nil)
       }
       val messages = logAppender.loggingEvents
         .filter(_.getRenderedMessage.contains(expectedErrMsg))
@@ -65,31 +73,33 @@ class DenialConstraintsSuite extends SparkFunSuite {
     testInvalidConstraintSyntax("""1a&IQ(1a.v,"abc")""",
       """Illegal constraint format found: 1a&IQ(1a.v,"abc")""")
     testInvalidConstraintSyntax("""key&EQ(noexistent.v1,"abc")&EQ(key,"def")""",
-      """Illegal predicates found: EQ(noexistent.v1,"abc"), EQ(key,"def")""")
+      """Illegal constraint format found: key&EQ(noexistent.v1,"abc")&EQ(key,"def")""")
     testInvalidConstraintSyntax("""t1&1a&EQ(t1.v,"abc")&IQ(1a.v,"def")""",
-      """Illegal predicates found: 1a, IQ(1a.v,"def")""")
+      """Illegal constraint format found: t1&1a&EQ(t1.v,"abc")&IQ(1a.v,"def")""")
     testInvalidConstraintSyntax("""t1&EQ(t1.v1,"abc")&IL(t1.v1, "def")&EQ(t1.v2,"ghi")""",
-      """Illegal predicates found: IL(t1.v1, "def")""")
+      """Illegal constraint format found: t1&EQ(t1.v1,"abc")&IL(t1.v1, "def")&EQ(t1.v2,"ghi")""")
     testInvalidConstraintSyntax("""t1&t2&GT(t3.v0,"abc")&EQ(t1.v1,t2.v1)&IQ(t1.v2,t2.v2)""",
-      """Illegal predicates found: GT(t3.v0,"abc")""")
+      """Illegal constraint format found: t1&t2&GT(t3.v0,"abc")&EQ(t1.v1,t2.v1)&IQ(t1.v2,t2.v2)""")
     testInvalidConstraintSyntax("""t1&t2&GT(t3.v0,"abc")&EQ(t1.v1,t2.v1)&IL(t1.v2,t2.v2)""",
-      """Illegal predicates found: GT(t3.v0,"abc"), IL(t1.v2,t2.v2)""")
+      """Illegal constraint format found: t1&t2&GT(t3.v0,"abc")&EQ(t1.v1,t2.v1)&IL(t1.v2,t2.v2)""")
     testInvalidConstraintSyntax("""t1&EQ(t1.v1,"abc")""",
-      """At least two predicate candidates should be given, but 1 candidates found: t1&EQ(t1.v1,"abc")""")
+      """Illegal constraint format found: t1&EQ(t1.v1,"abc")""")
     testInvalidConstraintSyntax("""t1&""",
-      """At least two predicate candidates should be given, but 0 candidates found: t1&""")
+      """Illegal constraint format found: t1&""")
     testInvalidConstraintSyntax("""t1""",
-      """At least two predicate candidates should be given, but 0 candidates found: t1""")
+      """Illegal constraint format found: t1""")
     testInvalidConstraintSyntax("""a&b&""",
-      """At least two predicate candidates should be given, but 0 candidates found: a&b&""")
+      """Illegal constraint format found: a&b&""")
     testInvalidConstraintSyntax("""k1&k2""",
-      """At least two predicate candidates should be given, but 0 candidates found: k1&k2""")
+      """Illegal constraint format found: k1&k2""")
   }
 
   test("constraint parsing - adult") {
-    val constraints = DenialConstraints.parse(Iterator(
+    val constraints = DenialConstraints.parseAndVerifyConstraints(Seq(
       """t1&EQ(t1.Sex,"Female")&EQ(t1.Relationship,"Husband")""",
-      """t1&EQ(t1.Sex,"Male")&EQ(t1.Relationship,"Wife")"""))
+      """t1&EQ(t1.Sex,"Male")&EQ(t1.Relationship,"Wife")"""),
+      "adult",
+      Seq("Sex", "Relationship"))
     assert(constraints.references.toSet === Set("Sex", "Relationship"))
     assert(constraints.predicates.map(_.map(_.toString).toSet).toSet === Set(
       Set(s"""$leftIdent.Sex <=> "Female"""", s"""$leftIdent.Relationship <=> "Husband""""),
@@ -97,22 +107,26 @@ class DenialConstraintsSuite extends SparkFunSuite {
   }
 
   test("constraint parsing - hospital") {
-    val constraints = DenialConstraints.parse(Iterator(
-      s"""t1&t2&EQ(t1.Condition,t2.Condition)&EQ(t1.MeasureName,t2.MeasureName)&IQ(t1.HospitalType,t2.HospitalType)""",
-      s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.ZipCode,t2.ZipCode)""",
-      s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.PhoneNumber,t2.PhoneNumber)""",
-      s"""t1&t2&EQ(t1.MeasureCode,t2.MeasureCode)&IQ(t1.MeasureName,t2.MeasureName)""",
-      s"""t1&t2&EQ(t1.MeasureCode,t2.MeasureCode)&IQ(t1.Stateavg,t2.Stateavg)""",
-      s"""t1&t2&EQ(t1.ProviderNumber,t2.ProviderNumber)&IQ(t1.HospitalName,t2.HospitalName)""",
-      s"""t1&t2&EQ(t1.MeasureCode,t2.MeasureCode)&IQ(t1.Condition,t2.Condition)""",
-      s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.Address1,t2.Address1)""",
-      s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.HospitalOwner,t2.HospitalOwner)""",
-      s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.ProviderNumber,t2.ProviderNumber)""",
-      s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&EQ(t1.PhoneNumber,t2.PhoneNumber)&EQ(t1.HospitalOwner,t2.HospitalOwner)&IQ(t1.State,t2.State)""",
-      s"""t1&t2&EQ(t1.City,t2.City)&IQ(t1.CountyName,t2.CountyName)""",
-      s"""t1&t2&EQ(t1.ZipCode,t2.ZipCode)&IQ(t1.EmergencyService,t2.EmergencyService)""",
-      s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.City,t2.City)""",
-      s"""t1&t2&EQ(t1.MeasureName,t2.MeasureName)&IQ(t1.MeasureCode,t2.MeasureCode)"""))
+    val constraints = DenialConstraints.parseAndVerifyConstraints(Seq(
+        s"""t1&t2&EQ(t1.Condition,t2.Condition)&EQ(t1.MeasureName,t2.MeasureName)&IQ(t1.HospitalType,t2.HospitalType)""",
+        s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.ZipCode,t2.ZipCode)""",
+        s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.PhoneNumber,t2.PhoneNumber)""",
+        s"""t1&t2&EQ(t1.MeasureCode,t2.MeasureCode)&IQ(t1.MeasureName,t2.MeasureName)""",
+        s"""t1&t2&EQ(t1.MeasureCode,t2.MeasureCode)&IQ(t1.Stateavg,t2.Stateavg)""",
+        s"""t1&t2&EQ(t1.ProviderNumber,t2.ProviderNumber)&IQ(t1.HospitalName,t2.HospitalName)""",
+        s"""t1&t2&EQ(t1.MeasureCode,t2.MeasureCode)&IQ(t1.Condition,t2.Condition)""",
+        s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.Address1,t2.Address1)""",
+        s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.HospitalOwner,t2.HospitalOwner)""",
+        s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.ProviderNumber,t2.ProviderNumber)""",
+        s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&EQ(t1.PhoneNumber,t2.PhoneNumber)&EQ(t1.HospitalOwner,t2.HospitalOwner)&IQ(t1.State,t2.State)""",
+        s"""t1&t2&EQ(t1.City,t2.City)&IQ(t1.CountyName,t2.CountyName)""",
+        s"""t1&t2&EQ(t1.ZipCode,t2.ZipCode)&IQ(t1.EmergencyService,t2.EmergencyService)""",
+        s"""t1&t2&EQ(t1.HospitalName,t2.HospitalName)&IQ(t1.City,t2.City)""",
+        s"""t1&t2&EQ(t1.MeasureName,t2.MeasureName)&IQ(t1.MeasureCode,t2.MeasureCode)"""),
+      "hospital",
+      Seq("HospitalOwner", "MeasureName", "Condition", "PhoneNumber", "CountyName", "ProviderNumber",
+        "HospitalName", "HospitalType", "EmergencyService", "City", "ZipCode", "Address1",
+        "State", "Stateavg", "MeasureCode"))
     assert(constraints.references.toSet === Set(
       "HospitalOwner", "MeasureName", "Condition", "PhoneNumber", "CountyName", "ProviderNumber",
       "HospitalName", "HospitalType", "EmergencyService", "City", "ZipCode", "Address1",
@@ -151,5 +165,93 @@ class DenialConstraintsSuite extends SparkFunSuite {
         s"NOT($leftIdent.EmergencyService <=> $rightIdent.EmergencyService)"),
       Set(s"$leftIdent.City <=> $rightIdent.City",
         s"NOT($leftIdent.CountyName <=> $rightIdent.CountyName)")))
+  }
+
+  test("simple constraint parsing") {
+    def testValidConstraintSyntax(cs: String, preds: Set[Set[String]], refs: Set[String]): Unit = {
+      val parsedPreds = cs.split(";").map(_.trim()).filter(_.nonEmpty).map(DenialConstraints.parseAlt).toSeq
+      val parsedRefs = parsedPreds.flatMap(_.flatMap(_.references)).distinct
+      assert(parsedPreds.map(_.map(_.toString).toSet).toSet === preds)
+      assert(parsedRefs.toSet === refs)
+    }
+    testValidConstraintSyntax("X->Y;Y->Z",
+      Set(Set(s"$leftIdent.X <=> $rightIdent.X", s"NOT($leftIdent.Y <=> $rightIdent.Y)"),
+        Set(s"$leftIdent.Y <=> $rightIdent.Y", s"NOT($leftIdent.Z <=> $rightIdent.Z)")),
+      Set("X", "Y", "Z"))
+    testValidConstraintSyntax("",
+      Set.empty,
+      Set.empty)
+    testValidConstraintSyntax("X->Y;Y->Z",
+      Set(Set(s"$leftIdent.X <=> $rightIdent.X", s"NOT($leftIdent.Y <=> $rightIdent.Y)"),
+        Set(s"$leftIdent.Y <=> $rightIdent.Y", s"NOT($leftIdent.Z <=> $rightIdent.Z)")),
+      Set("X", "Y", "Z"))
+    testValidConstraintSyntax("X->Y;Y->Z;",
+      Set(Set(s"$leftIdent.X <=> $rightIdent.X", s"NOT($leftIdent.Y <=> $rightIdent.Y)"),
+        Set(s"$leftIdent.Y <=> $rightIdent.Y", s"NOT($leftIdent.Z <=> $rightIdent.Z)")),
+      Set("X", "Y", "Z"))
+    testValidConstraintSyntax(";X ->  Y; Y-> Z   ",
+      Set(Set(s"$leftIdent.X <=> $rightIdent.X", s"NOT($leftIdent.Y <=> $rightIdent.Y)"),
+        Set(s"$leftIdent.Y <=> $rightIdent.Y", s"NOT($leftIdent.Z <=> $rightIdent.Z)")),
+      Set("X", "Y", "Z"))
+  }
+
+  test("simple constraint parsing - verification") {
+    def testValidConstraintSyntax(
+        input: String, inputAttrs: Seq[String], preds: Set[Set[String]], refs: Set[String]): Unit = {
+      val cs = input.split(";").map(_.trim()).filter(_.nonEmpty).toSeq
+      val constraints = DenialConstraints.parseAndVerifyConstraints(cs, "", inputAttrs)
+      assert(constraints.predicates.map(_.map(_.toString).toSet).toSet === preds)
+      assert(constraints.references.toSet === refs)
+    }
+    testValidConstraintSyntax("X->Y;Y->Z", Seq("X", "Y", "Z"),
+      Set(Set(s"$leftIdent.X <=> $rightIdent.X", s"NOT($leftIdent.Y <=> $rightIdent.Y)"),
+        Set(s"$leftIdent.Y <=> $rightIdent.Y", s"NOT($leftIdent.Z <=> $rightIdent.Z)")),
+      Set("X", "Y", "Z"))
+    testValidConstraintSyntax("X->Y;Y->Z", Seq("X", "Y"),
+      Set(Set(s"$leftIdent.X <=> $rightIdent.X", s"NOT($leftIdent.Y <=> $rightIdent.Y)")),
+      Set("X", "Y"))
+    testValidConstraintSyntax("X->Y;Y->Z", Seq("Y", "Z"),
+      Set(Set(s"$leftIdent.Y <=> $rightIdent.Y", s"NOT($leftIdent.Z <=> $rightIdent.Z)")),
+      Set("Y", "Z"))
+    testValidConstraintSyntax("X->Y;Y->Z", Seq("Y"),
+      Set.empty,
+      Set.empty)
+  }
+
+  test("simple constraint parsing - invalid cases") {
+    def testInvalidConstraintSyntax(s: String, expectedErrMsgs: Seq[String]): Unit = {
+      val constraints = s.split(";").map(_.trim()).filter(_.nonEmpty)
+      constraints.foreach { s =>
+        val errMsg = intercept[IllegalArgumentException] {
+          DenialConstraints.parseAlt(s)
+        }.getMessage
+        assert(errMsg.contains("Failed to parse an input string"))
+      }
+      val logAppender = new LogAppender("invalid constraint parsing tests")
+      withLogAppender(logAppender) {
+        val c = DenialConstraints.parseAndVerifyConstraints(constraints, "", Seq("v1", "v2"))
+        assert(c.references === Nil)
+        assert(c.predicates === Nil)
+      }
+      expectedErrMsgs.foreach { expectedErrMsg =>
+        val messages = logAppender.loggingEvents
+          .filter(_.getRenderedMessage.contains(expectedErrMsg))
+        assert(messages.size === 1)
+      }
+    }
+    testInvalidConstraintSyntax("""X=>Y;A""", Seq(
+      """Illegal constraint format found: X=>Y""",
+      """Illegal constraint format found: A""",
+    ))
+    testInvalidConstraintSyntax("""X- >Y;A=>B;;""", Seq(
+      """Illegal constraint format found: X- >Y""",
+      """Illegal constraint format found: A=>B""",
+    ))
+    testInvalidConstraintSyntax("""A ;X -<  Y; B =>  C; Y- > Z  """, Seq(
+      """Illegal constraint format found: A""",
+      """Illegal constraint format found: X -<  Y""",
+      """Illegal constraint format found: B =>  C""",
+      """Illegal constraint format found: Y- > Z"""
+    ))
   }
 }

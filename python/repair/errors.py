@@ -147,18 +147,30 @@ class RegExErrorDetector(ErrorDetector):
 
 class ConstraintErrorDetector(ErrorDetector):
 
-    def __init__(self, constraint_path: str, targets: List[str] = []) -> None:
+    def __init__(self, constraint_path: str = '', constraints: str = '', targets: List[str] = []) -> None:
         ErrorDetector.__init__(self, targets)
+
+        if not constraint_path and not constraints:
+            raise ValueError('At least one of `constraint_path` or `constraints` should be specified')
+
         self.constraint_path = constraint_path
+        self.constraints = constraints
 
     def __str__(self) -> str:
-        param_targets = f',targets={",".join(self.targets)}' if self.targets else ''
-        params = f'path={self.constraint_path}{param_targets}'
-        return f'{self.__class__.__name__}({params})'
+        params = []
+        if self.constraint_path:
+            params.append(f'constraint_path={self.constraint_path}')
+        if self.constraints:
+            params.append(f'constraints={self.constraints}')
+        if self.targets:
+            params.append(f'targets={",".join(self.targets)}')
+
+        return f'{self.__class__.__name__}({",".join(params)})'
 
     def _detect_impl(self) -> DataFrame:
         jdf = self._detector_api.detectErrorCellsFromConstraints(
-            self.qualified_input_name, self.row_id, self._to_target_list(), self.constraint_path)
+            self.qualified_input_name, self.row_id, self._to_target_list(),
+            self.constraint_path, self.constraints)
         return DataFrame(jdf, self._spark._wrapped)  # type: ignore
 
 
@@ -182,10 +194,12 @@ class ScikitLearnBasedErrorDetector(ErrorDetector):
 
     def __init__(self, parallel_mode_threshold: int = 10000, num_parallelism: Optional[int] = None) -> None:
         ErrorDetector.__init__(self)
-        self.parallel_mode_threshold = parallel_mode_threshold
-        self.num_parallelism = num_parallelism
+
         if num_parallelism is not None and int(num_parallelism) <= 0:
             raise ValueError(f'`num_parallelism` must be positive, got {num_parallelism}')
+
+        self.parallel_mode_threshold = parallel_mode_threshold
+        self.num_parallelism = num_parallelism
 
     def __str__(self) -> str:
         return f'{self.__class__.__name__}()'

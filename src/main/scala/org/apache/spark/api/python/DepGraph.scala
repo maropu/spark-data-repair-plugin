@@ -260,7 +260,7 @@ private[python] object DepGraph extends RepairBase {
     val constraints = try {
       file = Source.fromFile(new URI(constraintFilePath).getPath)
       file.getLines()
-      DenialConstraints.parseAndVerifyConstraints(file.getLines(), qualifiedName, inputDf.columns)
+      DenialConstraints.parseAndVerifyConstraints(file.getLines().toSeq, qualifiedName, inputDf.columns)
     } finally {
       if (file != null) {
         file.close()

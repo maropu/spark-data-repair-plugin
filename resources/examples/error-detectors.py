@@ -66,14 +66,24 @@ error_cells_df = delphi.repair \
 
 error_cells_df.show(3)
 
-# For `ConstraintErrorDetector`
-target_columns = ['MeasureName', 'ZipCode', 'EmergencyService', 'CountyName']
+# For `ConstraintErrorDetector` (denial constraint form)
+target_columns = ['City', 'HospitalName', 'Address1', 'CountyName']
 
 error_cells_df = delphi.repair \
     .setTableName("hospital") \
     .setRowId("tid") \
     .setTargets(target_columns) \
     .setErrorDetectors([ConstraintErrorDetector(constraint_path="./testdata/hospital_constraints.txt")]) \
+    .run(detect_errors_only=True)
+
+error_cells_df.show(3)
+
+# For `ConstraintErrorDetector` (simple form)
+error_cells_df = delphi.repair \
+    .setTableName("hospital") \
+    .setRowId("tid") \
+    .setTargets(target_columns) \
+    .setErrorDetectors([ConstraintErrorDetector(constraints="City->CountyName;HospitalName->Address1")]) \
     .run(detect_errors_only=True)
 
 error_cells_df.show(3)

@@ -40,7 +40,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
   test("Error detector - common error handling") {
     Seq[String => DataFrame](ErrorDetectorApi.detectNullCells(_, "tid", ""),
       ErrorDetectorApi.detectErrorCellsFromRegEx(_, "tid", "", "v", null),
-      ErrorDetectorApi.detectErrorCellsFromConstraints(_, "tid", "", null),
+      ErrorDetectorApi.detectErrorCellsFromConstraints(_, "tid", "", null, ""),
       ErrorDetectorApi.detectErrorCellsFromOutliers(_, "tid", "", "")
     ).foreach { f =>
       val errMsg = intercept[AnalysisException] { f("nonexistent") }.getMessage()
@@ -140,7 +140,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
 
         def test(targetAttrList: String, expected: Seq[Row]): Unit = {
           val df = ErrorDetectorApi
-            .detectErrorCellsFromConstraints("default.t", "tid", targetAttrList, constraintFilePath)
+            .detectErrorCellsFromConstraints("default.t", "tid", targetAttrList, constraintFilePath, "")
           checkAnswer(df, expected)
         }
         test("v1,v2",
@@ -191,7 +191,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
       spark.read.option("header", true).format("csv").load(adultFilePath).write.saveAsTable("adult")
       val constraintFilePath = resourcePath("adult_constraints.txt")
       val df = ErrorDetectorApi
-        .detectErrorCellsFromConstraints("default.adult", "tid", "Sex,Relationship", constraintFilePath)
+        .detectErrorCellsFromConstraints("default.adult", "tid", "Sex,Relationship", constraintFilePath, "")
       checkAnswer(df,
         Row("4", "Relationship") ::
         Row("4", "Sex") ::
@@ -205,7 +205,7 @@ class ErrorDetectorSuite extends QueryTest with SharedSparkSession {
     withTempView("t") {
       spark.range(1).selectExpr("id AS tid", "1 AS value").createOrReplaceTempView("t")
       def test(constraintFilePath: String): Unit = {
-        val df = ErrorDetectorApi.detectErrorCellsFromConstraints("t", "tid", "", constraintFilePath)
+        val df = ErrorDetectorApi.detectErrorCellsFromConstraints("t", "tid", "", constraintFilePath, "")
         checkAnswer(df, Nil)
       }
       test(null)

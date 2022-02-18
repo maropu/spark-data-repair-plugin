@@ -138,24 +138,91 @@ named [Transformation by Example](https://docs.trifacta.com/display/SS/Transform
 to implement it. Few existing tools can handle the error cases in the `adult` example above and,
 therefore, our plugin is complementary to those other tools.
 
-
 ## Error Detection
 
-You can take advantage of constraint rules to detect error cells if you use the built-in error detector
-`ConstraintErrorDetector` that is initialized with a file having the rules.
-Note that the file format follows the [HoloClean](http://www.holoclean.io/) one;
-they use the [denial constraints](https://www.sciencedirect.com/science/article/pii/S0890540105000179) [5]
-whose predicates cannot hold true simultaneously.
+To detect error cells, you can use some of bult-in error detectors below:
+
+ - NullErrorDetector
+ - DomainValues
+ - RegExErrorDetector
+ - ConstraintErrorDetector
+ - GaussianOutlierErrorDetector
+ - LOFOutlierErrorDetector
+
+Please check [the example code](./resources/examples/error-detectors.py) for how to use these error detectors.
+If you specify no error detector, `DomainValues`s for each attribute and `NullErrorDetector` are used by default.
+
+```
+# Setting `True` to `detect_errors_only` lets you get detected error cells only
+>>> error_cells_df = delphi.repair \
+...   .setInput("adult") \
+...   .setRowId("tid") \
+...   .setErrorDetectors([NullErrorDetector()]) \
+...   .run(detect_errors_only=True)
+
+>>> error_cells_df.show()
++---+---------+-------------+
+|tid|attribute|current_value|
++---+---------+-------------+
+| 12|      Age|         null|
+|  5|      Age|         null|
+| 12|      Sex|         null|
+|  7|      Sex|         null|
+|  3|      Sex|         null|
+| 16|   Income|         null|
+|  5|   Income|         null|
++---+---------+-------------+
+
+# `DomainValue`s and `NullErrorDetector` are used by default
+>>> error_cells_df = delphi.repair \
+...   .setInput("adult") \
+...   .setRowId("tid") \
+...   .run(detect_errors_only=True)
+
+>>> error_cells_df.show()
++---+----------+--------------+
+|tid| attribute| current_value|
++---+----------+--------------+
+| 12|       Age|          null|
+|  5|       Age|          null|
+|  7|       Sex|          null|
+| 12|       Sex|          null|
+|  3|       Sex|          null|
+|  5|    Income|          null|
+| 16|    Income|          null|
+|  4|       Age|         22-30|
+|  8|       Age|         18-21|
+|  3|       Age|         22-30|
+| 13|       Age|         22-30|
+| 15|       Age|         22-30|
+| 10| Education|     Assoc-voc|
+|  7| Education|   Prof-school|
+| 14| Education|    Assoc-acdm|
+| 12| Education|     Bachelors|
+|  2| Education|     Bachelors|
+| 18| Education|          10th|
+|  0|Occupation|  Craft-repair|
+|  6|Occupation|Prof-specialty|
++---+----------+--------------+
+only showing top 20 rows
+```
+
+Note that `ConstraintErrorDetector` is the most powerful choice; it uses [denial constraints](https://www.sciencedirect.com/science/article/pii/S0890540105000179) [5]
+that an input tabular data should follow. The constraints consist of the predicates that cannot hold true simultaneously.
 
 ```
 # Constraints below mean that `Sex="Female"` and `Relationship="Husband"`
 # (`Sex="Male"` and `Relationship="Wife"`) does not hold true simultaneously.
+# Note that the syntax for denial constraints follows the HoloClean [7] one and
+# it is a research-backed statistical inference engine to clean data.
 $ cat ./testdata/adult_constraints.txt
 t1&EQ(t1.Sex,"Female")&EQ(t1.Relationship,"Husband")
 t1&EQ(t1.Sex,"Male")&EQ(t1.Relationship,"Wife")
 
-# Use the constraints to detect errors then repair them.
->>> repair_updates_df = delphi.repair.setInput("adult").setRowId("tid") \
+# Use the constraints to detect errors and then repair them
+>>> repair_updates_df = delphi.repair \
+...   .setInput("adult") \
+...   .setRowId("tid") \
 ...   .setErrorDetectors([NullErrorDetector(), ConstraintErrorDetector(constraint_path="./testdata/adult_constraints.txt")]) \
 ...   .run()
 
@@ -177,26 +244,21 @@ t1&EQ(t1.Sex,"Male")&EQ(t1.Relationship,"Wife")
 | 12|         Sex|         null|       Male|
 | 16|      Income|         null|LessThan50K|
 +---+------------+-------------+-----------+
-```
 
-If you want to know detected error cells, you can set `True` to `detect_errors_only`
-for getting them in pre-processing as follows;
+# If the "adult" table has a functional dependency from "Age" to "Income",
+# its dependency is represented as a following denial constraint:
+>>> repair_updates_df = delphi.repair \
+...   .setInput("adult") \
+...   .setRowId("tid") \
+...   .setErrorDetectors([ConstraintErrorDetector(constraints="t1&t2&EQ(t1.Age,t2.Age)&IQ(t1.Income,t2.Income)")]) \
+...   .run()
 
-```
-# Runs a job to detect error cells
->>> error_cells_df = delphi.repair.setInput("adult").setRowId("tid").run(detect_errors_only=True)
->>> error_cells_df.show()
-+---+---------+-------------+
-|tid|attribute|current_value|
-+---+---------+-------------+
-| 12|      Age|         null|
-|  5|      Age|         null|
-| 12|      Sex|         null|
-|  7|      Sex|         null|
-|  3|      Sex|         null|
-| 16|   Income|         null|
-|  5|   Income|         null|
-+---+---------+-------------+
+# Or, you can use syntactic sugar instead
+>>> repair_updates_df = delphi.repair \
+...   .setInput("adult") \
+...   .setRowId("tid") \
+...   .setErrorDetectors([ConstraintErrorDetector(constraints="Age->Income")]) \
+...   .run()
 ```
 
 ## Repairing based on Predicted Probabilities
@@ -311,7 +373,6 @@ delphi.repair
 
 ## TODO
 
- - Supports a simple syntax to represent functional dependencies for `ConstraintErrorDetector`, e.g., `ConstraintErrorDetector(constraints='X->Y;Y->Z')`
  - Implements a rule-based repair strategy using regular expressions (See [17])
 
 ## Bug Reports

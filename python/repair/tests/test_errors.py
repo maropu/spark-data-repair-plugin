@@ -190,6 +190,11 @@ class ErrorDetectorTests(ReusedSQLTestCase):
                 Row(tid=4, attribute="Sex"),
                 Row(tid=11, attribute="Sex")])
 
+        self.assertRaisesRegexp(
+            ValueError,
+            "At least one of `constraint_path` or `constraints` should be specified",
+            lambda: ConstraintErrorDetector())
+
     def test_ConstraintErrorDetector_empty_result(self):
         constraint_path = "{}/adult_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
         errors = ConstraintErrorDetector(constraint_path) \

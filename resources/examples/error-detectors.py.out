@@ -113,7 +113,7 @@ only showing top 3 rows
 only showing top 3 rows
 
 >>> # For `ConstraintErrorDetector`
->>> target_columns = ['MeasureName', 'ZipCode', 'EmergencyService', 'CountyName']
+>>> target_columns = ['City', 'HospitalName', 'Address1', 'CountyName']
 >>>
 >>> error_cells_df = delphi.repair \
 ...     .setTableName("hospital") \
@@ -123,13 +123,31 @@ only showing top 3 rows
 ...     .run(detect_errors_only=True)
 >>>
 >>> error_cells_df.show(3)
-+---+---------+-------------+
-|tid|attribute|current_value|
-+---+---------+-------------+
-| 44|  ZipCode|        x5957|
-|290|  ZipCode|        x5007|
-|325|  ZipCode|        36x01|
-+---+---------+-------------+
++---+------------+----------------+
+|tid|   attribute|   current_value|
++---+------------+----------------+
+|199|HospitalName|st vincents east|
+|201|HospitalName|st vincents east|
+|203|HospitalName|st vincents east|
++---+------------+----------------+
+only showing top 3 rows
+
+>>> # For `ConstraintErrorDetector` (simple form)
+>>> error_cells_df = delphi.repair \
+...     .setTableName("hospital") \
+...     .setRowId("tid") \
+...     .setTargets(target_columns) \
+...     .setErrorDetectors([ConstraintErrorDetector(constraints="City->CountyName;HospitalName->Address1")]) \
+...     .run(detect_errors_only=True)
+>>>
+>>> error_cells_df.show(3)
++---+----------+-------------+
+|tid| attribute|current_value|
++---+----------+-------------+
+|  8|      City|    sheffield|
+| 16|      City|    sheffield|
+|238|CountyName|      xe kalb|
++---+----------+-------------+
 only showing top 3 rows
 
 >>> # For `GaussianOutlierErrorDetector`

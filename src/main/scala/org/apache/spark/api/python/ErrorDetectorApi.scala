@@ -21,6 +21,7 @@ import java.net.URI
 
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
+import scala.util.control.NonFatal
 
 import org.apache.spark.python.DenialConstraints
 import org.apache.spark.sql._
@@ -52,11 +53,12 @@ object ErrorDetectorApi extends LoggingBasedOnLevel {
       qualifiedName: String,
       rowId: String,
       targetAttrList: String,
-      constraintFilePath: String): DataFrame = {
+      constraintFilePath: String,
+      constraints: String): DataFrame = {
     logBasedOnLevel(s"detectErrorCellsFromConstraints called with: qualifiedName=$qualifiedName " +
       s"rowId=$rowId targetAttrlist=$targetAttrList constraintFilePath=$constraintFilePath")
     ConstraintErrorDetector.detect(qualifiedName, rowId, SparkUtils.stringToSeq(targetAttrList),
-      Map("constraintFilePath" -> constraintFilePath))
+      Map("constraintFilePath" -> constraintFilePath, "constraints" -> constraints))
   }
 
   def detectErrorCellsFromOutliers(
@@ -195,40 +197,51 @@ object ConstraintErrorDetector extends ErrorDetector {
       rowId: String,
       targetAttrs: Seq[String],
       options: Map[String, Any] = Map.empty): DataFrame = {
-
     val inputDf = spark.table(qualifiedName)
+    val constraintStrings = {
+      val constraintsFromFile = {
+        // Loads all the denial constraints from a given file path
+        val path = getOptionValue[String]("constraintFilePath", options)
+        if (path != null && path.trim.nonEmpty) {
+          var file: Source = null
+          try {
+            file = Source.fromFile(new URI(path).getPath)
+            file.getLines().toArray.toSeq
+          } catch {
+            case NonFatal(_) =>
+              logWarning(s"Failed to load constrains from '$path'")
+              Nil
+          } finally {
+            if (file != null) {
+              file.close()
+            }
+          }
+        } else {
+          Nil
+        }
+      }
 
-    // If `constraintFilePath` not given, just returns an empty table
-    val constraintFilePath = getOptionValue[String]("constraintFilePath", options)
-    if (constraintFilePath == null || constraintFilePath.trim.isEmpty) {
+      val constraintsFromString = {
+        val input = getOptionValue[String]("constraints", options)
+        if (input != null) {
+          input.split(";").map(_.trim()).filter(_.nonEmpty).toSeq
+        } else {
+          Nil
+        }
+      }
+
+      constraintsFromFile ++ constraintsFromString
+    }
+
+    if (constraintStrings.isEmpty) {
       createEmptyResultDfFrom(inputDf, rowId)
     } else {
       withTempView(inputDf, "constraint_err_detector_input", cache = true) { inputView =>
-        // Loads all the denial constraints from a given file path
-        var file: Source = null
-        val constraints = try {
-          file = Source.fromFile(new URI(constraintFilePath).getPath)
-          file.getLines()
-          DenialConstraints.parseAndVerifyConstraints(file.getLines(), qualifiedName, inputDf.columns.toSeq)
-        } finally {
-          if (file != null) {
-            file.close()
-          }
-        }
-
+        val constraints = DenialConstraints.parseAndVerifyConstraints(
+          constraintStrings, qualifiedName, inputDf.columns.toSeq)
         if (constraints.predicates.isEmpty) {
           createEmptyResultDfFrom(inputDf, rowId)
         } else {
-          logBasedOnLevel({
-            val constraintLists = constraints.predicates.zipWithIndex.map { case (preds, i) =>
-              preds.map(_.toString).mkString(s" [$i] ", ",", "")
-            }
-            s"""
-               |Loads constraints from '$constraintFilePath':
-               |${constraintLists.mkString("\n")}
-             """.stripMargin
-          })
-
           // Detects error erroneous cells in a given table
           val sqls = constraints.predicates.flatMap { preds =>
             import DenialConstraints._

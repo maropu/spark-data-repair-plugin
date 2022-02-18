@@ -17,7 +17,9 @@
 
 package org.apache.spark.python
 
-import scala.collection.mutable
+import scala.util.control.NonFatal
+import scala.util.Try
+
 import org.apache.spark.internal.Logging
 
 sealed trait Expr
@@ -73,94 +75,119 @@ object DenialConstraints extends Logging {
     "LT" -> ((l: String, r: String) => s"$l < $r"),
     "GT" -> ((l: String, r: String) => s"$l > $r"))
 
+
   def parseAndVerifyConstraints(
-      lines: Iterator[String],
+      lines: Seq[String],
       inputName: String,
       tableAttrs: Seq[String]): DenialConstraints = {
-    val allConstraints = DenialConstraints.parse(lines)
+    val predicates = lines.flatMap { c =>
+      try {
+        Some(Try(parse(c)).getOrElse(parseAlt(c)))
+      } catch {
+        case NonFatal(_) =>
+          logWarning(s"Illegal constraint format found: $c")
+          None
+      }
+    }
+
     // Checks if all the attributes contained in `constraintFilePath` exist in `table`
-    val attrsInConstraints = allConstraints.references
+    val refs = predicates.flatMap(_.flatMap(_.references)).distinct
+    val constraints = DenialConstraints(predicates.filter(_.nonEmpty), refs)
+    val attrsInConstraints = constraints.references
     val tableAttrSet = tableAttrs.toSet
     val absentAttrs = attrsInConstraints.filterNot(tableAttrSet.contains)
     if (absentAttrs.nonEmpty) {
       logWarning(s"Non-existent constraint attributes found in '$inputName': ${absentAttrs.mkString(", ")}")
-      val absentAttrSet = absentAttrs.toSet
-      val newPredEntries = allConstraints.predicates.filterNot { preds =>
-        preds.exists { p =>
-          absentAttrSet.subsetOf(p.references.toSet)
+      val newPredEntries = constraints.predicates.filter { ps =>
+        ps.forall { p =>
+          p.references.forall(tableAttrSet.contains)
         }
       }
       if (newPredEntries.nonEmpty) {
-        allConstraints.copy(predicates = newPredEntries)
+        constraints.copy(
+          predicates = newPredEntries,
+          references = constraints.references.filter(tableAttrs.contains))
       } else {
         DenialConstraints.emptyConstraints
       }
     } else {
-      allConstraints
+      constraints
     }
   }
 
-  // The format like this: "t1&t2&EQ(t1.fk1,t2.fk1)&IQ(t1.v4,t2.v4)"
-  def parse(lines: Iterator[String]): DenialConstraints = {
-    val isIdentifier = (s: String) => s.matches("[a-zA-Z]+[a-zA-Z0-9]*")
-    val predicates = mutable.ArrayBuffer[Seq[Predicate]]()
-    case class ParseResult(p: Option[Predicate], origText: String = "")
-    lines.foreach { dcStr => dcStr.split("&").map(_.trim).toSeq match {
-        case t1 +: t2 +: constraints if isIdentifier(t1) && isIdentifier(t2) =>
-          if (constraints.length >= 2) {
-            val predicateDef = s"""(${opSigns.mkString("|")})\\s*\\(\\s*$t1\\.(.*)\\s*,\\s*$t2\\.(.*)\\s*\\)""".r
-            val parsed = constraints.map {
-              case predicateDef(cmp, leftAttr, rightAttr) =>
-                ParseResult(Some(Predicate(cmp, signMap(cmp),
-                  AttrRef(leftAttr.trim), AttrRef(rightAttr.trim))))
-              case s =>
-                ParseResult(None, s)
-            }
-            if (parsed.forall(_.p.isDefined)) {
-              val es = parsed.flatMap(_.p)
-              logDebug(s"$dcStr => ${es.mkString(" AND ")}")
-              predicates.append(es)
-            } else {
-              logWarning("Illegal predicates found: " +
-                parsed.filterNot(_.p.isDefined).map(_.origText).mkString(", "))
-            }
-          } else {
-            logWarning(s"At least two predicate candidates should be given, " +
-              s"but ${constraints.length} candidates found: $dcStr")
-          }
-        case t1 +: constraints if isIdentifier(t1) =>
-          if (constraints.length >= 2) {
-            val predicateDef = s"""(${opSigns.mkString("|")})\\s*\\(\\s*$t1\\.(.*)\\s*,\\s*(.*)\\)""".r
-            val parsed = constraints.map {
-              case predicateDef(cmp, leftAttr, value) =>
-                ParseResult(Some(Predicate(cmp, signMap(cmp),
-                  AttrRef(leftAttr.trim), Constant(value.trim))))
-              case s =>
-                ParseResult(None, s)
-            }
-            if (parsed.forall(_.p.isDefined)) {
-              val es = parsed.flatMap(_.p)
-              logDebug(s"$dcStr => ${es.mkString(",")}")
-              predicates.append(es)
-            } else {
-              logWarning("Illegal predicates found: " +
-                parsed.filterNot(_.p.isDefined).map(_.origText).mkString(", "))
-            }
-          } else {
-            logWarning(s"At least two predicate candidates should be given, " +
-              s"but ${constraints.length} candidates found: $dcStr")
-          }
-        case Nil => // Just ignores this case
-        case Seq(s) if s.trim.isEmpty =>
-        case _ => logWarning(s"Illegal constraint format found: $dcStr")
-      }
-    }
+  case class ParseResult(p: Option[Predicate], origText: String = "")
 
-    if (predicates.nonEmpty) {
-      val references = predicates.flatMap { _.flatMap(_.references) }.distinct
-      DenialConstraints(predicates, references)
-    } else {
-      emptyConstraints
+  private def isIdentifier(s: String): Boolean = {
+    s.matches("[a-zA-Z]+[a-zA-Z0-9]*")
+  }
+
+  // The format like this: "t1&t2&EQ(t1.fk1,t2.fk1)&IQ(t1.v4,t2.v4)"
+  private[python] def parse(c: String): Seq[Predicate] = {
+    c.split("&").map(_.trim).toSeq match {
+      case t1 +: t2 +: constraints if isIdentifier(t1) && isIdentifier(t2) =>
+        if (constraints.length >= 2) {
+          val predicateDef = s"""(${opSigns.mkString("|")})\\s*\\(\\s*$t1\\.(.*)\\s*,\\s*$t2\\.(.*)\\s*\\)""".r
+          val parsed = constraints.map {
+            case predicateDef(cmp, leftAttr, rightAttr) =>
+              ParseResult(Some(Predicate(cmp, signMap(cmp),
+                AttrRef(leftAttr.trim), AttrRef(rightAttr.trim))))
+            case s =>
+              ParseResult(None, s)
+          }
+          if (parsed.forall(_.p.isDefined)) {
+            val es = parsed.flatMap(_.p)
+            logDebug(s"$c => ${es.mkString(" AND ")}")
+            es
+          } else {
+            throw new IllegalArgumentException("Illegal predicates found: " +
+              parsed.filterNot(_.p.isDefined).map(_.origText).mkString(", "))
+          }
+        } else {
+          throw new IllegalArgumentException("At least two predicate candidates should be given, " +
+            s"but ${constraints.length} candidates found: $c")
+        }
+
+      case t1 +: constraints if isIdentifier(t1) =>
+        if (constraints.length >= 2) {
+          val predicateDef = s"""(${opSigns.mkString("|")})\\s*\\(\\s*$t1\\.(.*)\\s*,\\s*(.*)\\)""".r
+          val parsed = constraints.map {
+            case predicateDef(cmp, leftAttr, value) =>
+              ParseResult(Some(Predicate(cmp, signMap(cmp),
+                AttrRef(leftAttr.trim), Constant(value.trim))))
+            case s =>
+              ParseResult(None, s)
+          }
+          if (parsed.forall(_.p.isDefined)) {
+            val es = parsed.flatMap(_.p)
+            logDebug(s"$c => ${es.mkString(",")}")
+            es
+          } else {
+            throw new IllegalArgumentException("Illegal predicates found: " +
+              parsed.filterNot(_.p.isDefined).map(_.origText).mkString(", "))
+          }
+        } else {
+          throw new IllegalArgumentException("At least two predicate candidates should be given, " +
+            s"but ${constraints.length} candidates found: $c")
+        }
+
+      case ps if ps.nonEmpty =>
+        throw new IllegalArgumentException(s"Failed to parse an input string: '$c'")
+
+      case _ =>
+        Nil
+    }
+  }
+
+  // The format like this: "X->Y;Y->Z"
+  private[python] def parseAlt(c: String): Seq[Predicate] = {
+    c.split("->").map(_.trim()).filter(_.nonEmpty).toSeq match {
+      case Seq(x, y) =>
+        Seq(Predicate("EQ", signMap("EQ"), AttrRef(x), AttrRef(x)),
+          Predicate("IQ", signMap("IQ"), AttrRef(y), AttrRef(y)))
+      case ps if ps.nonEmpty =>
+        throw new IllegalArgumentException(s"Failed to parse an input string: '$c'")
+      case _ =>
+        Nil
     }
   }
 }
