@@ -17,6 +17,9 @@
 
 package org.apache.spark.python
 
+import java.net.URI
+
+import scala.io.Source
 import scala.util.control.NonFatal
 import scala.util.Try
 
@@ -188,6 +191,35 @@ object DenialConstraints extends Logging {
         throw new IllegalArgumentException(s"Failed to parse an input string: '$c'")
       case _ =>
         Nil
+    }
+  }
+
+  // Loads all the denial constraints from a given file path
+  def loadConstraintStmtsFromFile(path: String): Seq[String] = {
+    if (path != null && path.trim.nonEmpty) {
+      var file: Source = null
+      try {
+        file = Source.fromFile(new URI(path).getPath)
+        file.getLines().toArray.toSeq
+      } catch {
+        case NonFatal(_) =>
+          logWarning(s"Failed to load constrains from '$path'")
+          Nil
+      } finally {
+        if (file != null) {
+          file.close()
+        }
+      }
+    } else {
+      Nil
+    }
+  }
+
+  def loadConstraintStmtsFromString(s: String): Seq[String] = {
+    if (s != null) {
+      s.split(";").map(_.trim()).filter(_.nonEmpty).toSeq
+    } else {
+      Nil
     }
   }
 }

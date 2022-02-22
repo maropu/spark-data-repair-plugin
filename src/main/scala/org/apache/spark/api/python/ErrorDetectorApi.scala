@@ -198,47 +198,18 @@ object ConstraintErrorDetector extends ErrorDetector {
       targetAttrs: Seq[String],
       options: Map[String, Any] = Map.empty): DataFrame = {
     val inputDf = spark.table(qualifiedName)
-    val constraintStrings = {
-      val constraintsFromFile = {
-        // Loads all the denial constraints from a given file path
-        val path = getOptionValue[String]("constraintFilePath", options)
-        if (path != null && path.trim.nonEmpty) {
-          var file: Source = null
-          try {
-            file = Source.fromFile(new URI(path).getPath)
-            file.getLines().toArray.toSeq
-          } catch {
-            case NonFatal(_) =>
-              logWarning(s"Failed to load constrains from '$path'")
-              Nil
-          } finally {
-            if (file != null) {
-              file.close()
-            }
-          }
-        } else {
-          Nil
-        }
-      }
-
-      val constraintsFromString = {
-        val input = getOptionValue[String]("constraints", options)
-        if (input != null) {
-          input.split(";").map(_.trim()).filter(_.nonEmpty).toSeq
-        } else {
-          Nil
-        }
-      }
-
-      constraintsFromFile ++ constraintsFromString
+    val constraintStmts = {
+      val path = getOptionValue[String]("constraintFilePath", options)
+      val constraintString = getOptionValue[String]("constraints", options)
+      DenialConstraints.loadConstraintStmtsFromFile(path) ++
+        DenialConstraints.loadConstraintStmtsFromString(constraintString)
     }
-
-    if (constraintStrings.isEmpty) {
+    if (constraintStmts.isEmpty) {
       createEmptyResultDfFrom(inputDf, rowId)
     } else {
       withTempView(inputDf, "constraint_err_detector_input", cache = true) { inputView =>
         val constraints = DenialConstraints.parseAndVerifyConstraints(
-          constraintStrings, qualifiedName, inputDf.columns.toSeq)
+          constraintStmts, qualifiedName, inputDf.columns.toSeq)
         if (constraints.predicates.isEmpty) {
           createEmptyResultDfFrom(inputDf, rowId)
         } else {

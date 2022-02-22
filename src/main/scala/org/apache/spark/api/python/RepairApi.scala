@@ -207,11 +207,15 @@ object RepairApi extends RepairBase {
     Seq("repair_base_cells" -> repairBaseView).asJson
   }
 
-  def computeFunctionalDeps(inputView: String, constraintFilePath: String, targetAttrList: String): String = {
+  def computeFunctionalDeps(
+      inputView: String,
+      constraintFilePath: String,
+      constraints: String,
+      targetAttrList: String): String = {
     logBasedOnLevel(s"computeFunctionalDep called with: discretizedInputView=$inputView " +
       s"constraintFilePath=$constraintFilePath targetAttrList=$targetAttrList")
     val targetAttrs = SparkUtils.stringToSeq(targetAttrList)
-    DepGraph.computeFunctionalDeps(inputView, constraintFilePath, targetAttrs)
+    DepGraph.computeFunctionalDeps(inputView, constraintFilePath, constraints, targetAttrs)
   }
 
   def computeFunctionalDepMap(inputView: String, X: String, Y: String): String = {

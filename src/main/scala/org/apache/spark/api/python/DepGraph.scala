@@ -254,55 +254,45 @@ private[python] object DepGraph extends RepairBase {
     tryGenerateImageFile(format, srcFile, dstFile)
   }
 
-  def computeFunctionalDeps(inputView: String, constraintFilePath: String, targetAttrs: Seq[String]): String = {
+  def computeFunctionalDeps(
+      inputView: String,
+      constraintFilePath: String,
+      constraints: String,
+      targetAttrs: Seq[String]): String = {
     val (inputDf, qualifiedName) = checkAndGetQualifiedInputName("", inputView)
-    var file: Source = null
-    val constraints = try {
-      file = Source.fromFile(new URI(constraintFilePath).getPath)
-      file.getLines()
-      DenialConstraints.parseAndVerifyConstraints(file.getLines().toSeq, qualifiedName, inputDf.columns)
-    } finally {
-      if (file != null) {
-        file.close()
+    val constraintStmts = {
+      val constraintStmts = {
+        DenialConstraints.loadConstraintStmtsFromFile(constraintFilePath) ++
+          DenialConstraints.loadConstraintStmtsFromString(constraints)
       }
-    }
-
-    // TODO: Reuse the previous computation result
-    val domainSizes = {
-      // TODO: `StringType` only supported now
-      val supported = inputDf.schema.filter(_.dataType == StringType).map(_.name).toSet
-      RepairApi.computeAndGetTableStats(inputView).mapValues(_.distinctCount)
-        .filter(kv => supported.contains(kv._1))
+      DenialConstraints.parseAndVerifyConstraints(
+        constraintStmts, qualifiedName, inputDf.columns.toSeq)
     }
 
     val fdMap = mutable.Map[String, mutable.Set[String]]()
 
+    // TODO: Needs more strict checks
     def hasNoCyclic(ref1: String, ref2: String): Boolean = {
       !fdMap.get(ref1).exists(_.contains(ref2)) && !fdMap.get(ref2).exists(_.contains(ref1))
     }
 
-    constraints.predicates.filter { preds =>
-      // Filters predicate candidates that might mean functional deps
-      preds.length == 2 && preds.flatMap(_.references).distinct.length == 2
-    }.foreach {
-      case Seq(p1, p2) if Set(p1.sign, p2.sign) == Set("EQ", "IQ") &&
-        p1.references.length == 1 && p2.references.length == 1 =>
-        val ref1 = p1.references.head
-        val ref2 = p2.references.head
-        (domainSizes.get(ref1), domainSizes.get(ref2)) match {
-          case (Some(ds1), Some(ds2)) if ds1 < ds2 =>
-            fdMap.getOrElseUpdate(ref1, mutable.Set[String]()) += ref2
-          case (Some(ds1), Some(ds2)) if ds1 > ds2 =>
-            fdMap.getOrElseUpdate(ref2, mutable.Set[String]()) += ref1
-          case (Some(_), Some(_)) if hasNoCyclic(ref1, ref2) =>
-            fdMap(ref1) = mutable.Set(ref2)
-          case _ =>
+    constraintStmts.predicates.foreach {
+      case preds @ Seq(p1, p2) if Set(p1.sign, p2.sign) == Set("EQ", "IQ") &&
+          p1.references.length == 1 && p2.references.length == 1 =>
+        val (x, y) = preds.partition(_.sign == "EQ") match {
+          case (Seq(x), Seq(y)) => (x.references.head, y.references.head)
+          case _ => throw new IllegalStateException("Cannot find functional deps")
         }
+        if (targetAttrs.contains(y) && hasNoCyclic(x, y)) {
+          fdMap.getOrElseUpdate(y, mutable.Set[String]()) += x
+        }
+
       case _ =>
+        // Just ignore it
     }
 
     // TODO: We need a smarter way to convert Scala data to a json string
-    fdMap.filterKeys(targetAttrs.contains).map { case (k, values) =>
+    fdMap.map { case (k, values) =>
       s""""$k": [${values.toSeq.sorted.map { v => s""""$v"""" }.mkString(",")}]"""
     }.mkString("{", ",", "}")
   }

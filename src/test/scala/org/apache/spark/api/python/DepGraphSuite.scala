@@ -235,7 +235,8 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
       val data1 = {
         val targetAttrs = Seq("HospitalOwner", "Condition", "CountyName", "HospitalName",
           "EmergencyService", "ZipCode", "MeasureCode")
-        val jsonString = DepGraph.computeFunctionalDeps("hospital", constraintFilePath, targetAttrs)
+        val jsonString = DepGraph.computeFunctionalDeps(
+          "hospital", constraintFilePath, "City->ZipCode", targetAttrs)
         val jsonObj = parse(jsonString)
         jsonObj.asInstanceOf[JObject].values
       }
@@ -243,21 +244,24 @@ class DepGraphSuite extends QueryTest with SharedSparkSession {
         "HospitalOwner" -> Seq("HospitalName"),
         "Condition" -> Seq("MeasureCode"),
         "CountyName" -> Seq("City"),
-        "HospitalName" -> Seq("Address1", "City", "PhoneNumber", "ProviderNumber"),
+        "HospitalName" -> Seq("ProviderNumber"),
         "EmergencyService" -> Seq("ZipCode"),
-        "ZipCode" -> Seq("HospitalName"),
-        "MeasureCode" -> Seq("MeasureName", "Stateavg")))
+        "ZipCode" -> Seq("City", "HospitalName"),
+        "MeasureCode" -> Seq("MeasureName")
+      ))
 
       val data2 = {
         val targetAttrs = Seq("CountyName", "HospitalName", "ZipCode")
-        val jsonString = DepGraph.computeFunctionalDeps("hospital", constraintFilePath, targetAttrs)
+        val jsonString = DepGraph.computeFunctionalDeps(
+          "hospital", constraintFilePath, "City->ZipCode", targetAttrs)
         val jsonObj = parse(jsonString)
         jsonObj.asInstanceOf[JObject].values
       }
       assert(data2 === Map(
+        "ZipCode" -> Seq("City", "HospitalName"),
         "CountyName" -> Seq("City"),
-        "HospitalName" -> Seq("Address1", "City", "PhoneNumber", "ProviderNumber"),
-        "ZipCode" -> Seq("HospitalName")))
+        "HospitalName" -> Seq("ProviderNumber")
+      ))
     }
   }
 
