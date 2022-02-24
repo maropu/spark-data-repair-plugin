@@ -19,6 +19,7 @@ import os
 import unittest
 
 from pyspark import SparkConf
+from pyspark.sql import functions as f
 
 from repair.model import RepairModel
 from repair.errors import ConstraintErrorDetector, NullErrorDetector, RegExErrorDetector
@@ -197,14 +198,22 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
 
         df = error_cells_df.join(
             self.spark.table("hospital_error_cells"),
-            ["tid", "attribute"], "inner")
+            ["tid", "attribute"],
+            "inner")
 
         # Computes performance numbers (precision & recall)
         precision = df.count() / error_cells_df.count()
         recall = df.count() / self.spark.table("hospital_error_cells").count()
         f1 = (2.0 * precision * recall) / (precision + recall)
 
-        msg = f"target:hospital-error-detection precision:{precision} recall:{recall} f1:{f1}"
+        def incorrect_cell_hist() -> str:
+            df = error_cells_df.withColumn('l', f.expr('1')).join(
+                spark.table("hospital_error_cells").withColumn('r', f.expr('1')), ["tid", "attribute"], "full_outer")
+            df = df.where('l IS NULL OR r IS NULL').groupBy('attribute').count().toPandas()
+            return ','.join(map(lambda r: f'{r.attribute}:{r.count}', df.itertuples()))
+
+        msg = f"target:hospital-error-detection precision:{precision} recall:{recall} f1:{f1} " \
+            f"stats:{incorrect_cell_hist()}"
         _logger.info(msg)
         self.assertTrue(precision > 0.95 and recall > 0.95 and f1 > 0.95, msg=msg)
 
@@ -280,10 +289,12 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         repair_targets_set = ",".join(map(lambda x: f"'{x}'", repair_targets))
         pdf = repaired_df.join(
             self.spark.table("hospital_clean").where(f"attribute IN ({repair_targets_set})"),
-            ["tid", "attribute"], "inner")
+            ["tid", "attribute"],
+            "inner")
         rdf = repaired_df.join(
             self.spark.table("hospital_error_cells").where(f"attribute IN ({repair_targets_set})"),
-            ["tid", "attribute"], "right_outer")
+            ["tid", "attribute"],
+            "right_outer")
 
         # Computes performance numbers (precision & recall)
         #  - Precision: the fraction of correct repairs, i.e., repairs that match
@@ -293,16 +304,16 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         recall = rdf.where("correct_val IS NULL OR repaired <=> correct_val").count() / rdf.count()
         f1 = (2.0 * precision * recall) / (precision + recall)
 
-        def hospital_incorrect_cell_hist(rdf) -> str:
-            pdf = rdf.where('NOT(repaired <=> correct_val)').groupBy('attribute').count().toPandas()
-            return ','.join(map(lambda r: f'{r.attribute}:{r.count}', pdf.itertuples()))
+        def incorrect_cell_hist() -> str:
+            df = rdf.where('NOT(repaired <=> correct_val)').groupBy('attribute').count().toPandas()
+            return ','.join(map(lambda r: f'{r.attribute}:{r.count}', df.itertuples()))
 
-        def hospital_incorrect_rows(rdf) -> str:
+        def incorrect_rows() -> str:
             rows = rdf.where('NOT(repaired <=> correct_val)').selectExpr('tid', 'attribute').collect()
             return ','.join(sorted(map(lambda r: f'{r.attribute}:{r.tid}', rows)))
 
         msg = f"target:hospital precision:{precision} recall:{recall} f1:{f1} " \
-            f"errors:{hospital_incorrect_rows(rdf)}(stats:{hospital_incorrect_cell_hist(pdf)})"
+            f"errors:{incorrect_rows()}(stats:{incorrect_cell_hist()})"
         _logger.info(msg)
         self.assertTrue(precision > 0.95 and recall > 0.95 and f1 > 0.95, msg=msg)
 
