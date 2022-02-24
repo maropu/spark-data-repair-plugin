@@ -95,7 +95,7 @@ class FunctionalDepModel():
                 pmf.append(probs)
             else:
                 _logger.warning(f'Unknown "{self.x}" domain value found: {x}')
-                pmf.append(None)
+                pmf.append(None)  # type: ignore
 
         return pmf
 

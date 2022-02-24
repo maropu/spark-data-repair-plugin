@@ -19,7 +19,7 @@ dependencies:
   - matplotlib=3.2.2
   - sphinx=3.0.4
   - pydata-sphinx-theme=0.4.3
-  - numpy=1.19.5
+  - numpy=1.21.0
   - numpydoc=1.1.0
   - mypy=0.910
   - flake8=3.8.4

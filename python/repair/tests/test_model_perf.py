@@ -208,7 +208,9 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
 
         def incorrect_cell_hist() -> str:
             df = error_cells_df.withColumn('l', f.expr('1')).join(
-                spark.table("hospital_error_cells").withColumn('r', f.expr('1')), ["tid", "attribute"], "full_outer")
+                self.spark.table("hospital_error_cells").withColumn('r', f.expr('1')),
+                ["tid", "attribute"],
+                "full_outer")
             df = df.where('l IS NULL OR r IS NULL').groupBy('attribute').count().toPandas()
             return ','.join(map(lambda r: f'{r.attribute}:{r.count}', df.itertuples()))
 
