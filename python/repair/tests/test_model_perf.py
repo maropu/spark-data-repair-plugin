@@ -103,7 +103,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .collect()[0] \
             .rmse
 
-    def test_perf_iris_target_num_1(self):
+    def test_repair_perf_iris_target_num_1(self):
         test_params = [
             ("sepal_width", 0.23277956498564178),
             ("sepal_length", 0.3980215999372857),
@@ -117,7 +117,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 _logger.info(f"target:iris({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
-    def test_perf_iris_target_num_2(self):
+    def test_repair_perf_iris_target_num_2(self):
         test_params = [
             ("sepal_width", "sepal_length", 0.3355876190363502),
             ("sepal_length", "petal_width", 0.38612750734279966),
@@ -131,7 +131,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 _logger.info(f"target:iris({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
-    def test_perf_boston_target_num_1(self):
+    def test_repair_perf_boston_target_num_1(self):
         test_params = [
             ("CRIM", 6.134364848429722),
             ("RAD", 0.9903379376602871),
@@ -145,7 +145,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 _logger.info(f"target:boston({target}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
-    def test_perf_boston_target_num_2(self):
+    def test_repair_perf_boston_target_num_2(self):
         test_params = [
             ("CRIM", "RAD", 3.871610580555785),
             ("RAD", "TAX", 56.96715426988806),
@@ -159,7 +159,57 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 _logger.info(f"target:boston({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
-    def test_perf_hospital(self):
+    def test_error_detection_perf_hospital(self):
+        repair_targets = [
+            "City",
+            "HospitalName",
+            "ZipCode",
+            "Score",
+            "ProviderNumber",
+            "Sample",
+            "Address1",
+            "HospitalType",
+            "HospitalOwner",
+            "PhoneNumber",
+            "EmergencyService",
+            "State",
+            "Stateavg",
+            "CountyName",
+            "MeasureCode",
+            "MeasureName",
+            "Condition"
+        ]
+
+        # Sets params for a hospital repair model
+        constraint_path = "{}/hospital_constraints.txt".format(os.getenv("REPAIR_TESTDATA"))
+        error_detectors = [
+            NullErrorDetector(),
+            ConstraintErrorDetector(constraint_path),
+            RegExErrorDetector("Sample", "^[0-9]{1,3} patients$"),
+            RegExErrorDetector("Score", "^[0-9]{1,3}%$")
+        ]
+
+        error_cells_df = self._build_model("hospital") \
+            .setDiscreteThreshold(400) \
+            .setTargets(repair_targets) \
+            .setErrorDetectors(error_detectors) \
+            .run(detect_errors_only=True)
+
+        df = error_cells_df.join(
+            self.spark.table("hospital_error_cells"),
+            ["tid", "attribute"], "inner")
+
+        # Computes performance numbers (precision & recall)
+        precision = df.count() / error_cells_df.count()
+        recall = df.count() / self.spark.table("hospital_error_cells").count()
+        f1 = (2.0 * precision * recall) / (precision + recall)
+
+        msg = f"target:hospital-error-detection precision:{precision} recall:{recall} f1:{f1}"
+        _logger.info(msg)
+        self.assertTrue(precision > 0.95 and recall > 0.95 and f1 > 0.95, msg=msg)
+
+    @unittest.skip('TODO: temporarily disabled')
+    def test_repair_perf_hospital(self):
         repair_targets = [
             "City",
             "HospitalName",
@@ -239,8 +289,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         #  - Precision: the fraction of correct repairs, i.e., repairs that match
         #    the ground truth, over the total number of repairs performed
         #  - Recall: correct repairs over the total number of errors
-        #
-        # NOTE: Since some correct values are NULL in the 'Score' column, we ignore them here
         precision = pdf.where("correct_val IS NULL OR repaired <=> correct_val").count() / pdf.count()
         recall = rdf.where("correct_val IS NULL OR repaired <=> correct_val").count() / rdf.count()
         f1 = (2.0 * precision * recall) / (precision + recall)
