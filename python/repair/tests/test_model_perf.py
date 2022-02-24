@@ -160,6 +160,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 _logger.info(f"target:boston({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
+    @unittest.skip('TODO: temporarily disabled because of OOM')
     def test_error_detection_perf_hospital(self):
         repair_targets = [
             "City",
@@ -219,7 +220,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
         _logger.info(msg)
         self.assertTrue(precision > 0.95 and recall > 0.95 and f1 > 0.95, msg=msg)
 
-    @unittest.skip('TODO: temporarily disabled')
     def test_repair_perf_hospital(self):
         repair_targets = [
             "City",
