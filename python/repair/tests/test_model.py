@@ -42,8 +42,7 @@ class RepairModelTests(ReusedSQLTestCase):
     @classmethod
     def conf(cls):
         return SparkConf() \
-            .set("spark.master", "local[*]") \
-            .set("spark.driver.memory", "4g") \
+            .set("spark.driver.memory", "6g") \
             .set("spark.jars", os.getenv("REPAIR_API_LIB")) \
             .set("spark.sql.cbo.enabled", "true") \
             .set("spark.sql.statistics.histogram.enabled", "true") \

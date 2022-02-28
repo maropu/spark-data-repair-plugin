@@ -32,7 +32,6 @@ class ErrorDetectorTests(ReusedSQLTestCase):
     def conf(cls):
         return SparkConf() \
             .set("spark.jars", os.getenv("REPAIR_API_LIB")) \
-            .set("spark.sql.crossJoin.enabled", "true") \
             .set("spark.sql.cbo.enabled", "true") \
             .set("spark.sql.statistics.histogram.enabled", "true") \
             .set("spark.sql.statistics.histogram.numBins", "254")

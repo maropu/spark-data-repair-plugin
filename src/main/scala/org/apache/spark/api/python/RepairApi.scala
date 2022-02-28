@@ -248,7 +248,7 @@ object RepairApi extends RepairBase {
 
     withTempView(spark.table(inputView), "input_to_compute_freq_stats") { inputView =>
       val filterClauseOption = if (freqAttrStatThreshold > 0.0) {
-        val rowCount = spark.table(inputView).count
+        val rowCount = spark.table(inputView).count()
         val cond = s"HAVING cnt > ${(rowCount * freqAttrStatThreshold).toInt}"
         logBasedOnLevel(s"Attributes stats filter enabled: $cond")
         cond
@@ -420,8 +420,8 @@ object RepairApi extends RepairBase {
       "freq_attr_stats",
       cache = true)
     val rowCount = spark.table(discretizedInputView).count()
-    val pairwiseStatMap = computePairwiseStats(
-      rowCount, freqAttrStatView, attrPairs, domainStatMap)
+    val pairwiseStatMap = computePairwiseStats(rowCount, freqAttrStatView, attrPairs, domainStatMap)
+    assert(pairwiseStatMap.keySet == attrsToRepair.toSet)
     Seq(
       "freq_attr_stats" -> freqAttrStatView,
       "pairwise_attr_corr_stats" -> pairwiseStatMap.mapValues(seqToJson)
@@ -503,6 +503,7 @@ object RepairApi extends RepairBase {
       }
 
       withTempView(rvDf, "rv", cache = true) { rvView =>
+        val rowCount = spark.table(discretizedInputView).count()
         val continousAttrs = SparkUtils.stringToSeq(continuousAttrList).toSet
         corrAttrMap.map { case (attribute, corrAttrsWithScores) =>
           // Adds an empty domain for initial state
@@ -513,7 +514,6 @@ object RepairApi extends RepairBase {
                |WHERE attribute = '$attribute'
              """.stripMargin)
 
-          val rowCount = spark.table(discretizedInputView).count()
           val domainDf = if (!continousAttrs.contains(attribute) && corrAttrsWithScores.nonEmpty) {
             val corrAttrs = corrAttrsWithScores.map(_._1)
             logBasedOnLevel(s"Computing '$attribute' domain from ${corrAttrs.size} correlated " +

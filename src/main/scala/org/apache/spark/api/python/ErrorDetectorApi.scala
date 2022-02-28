@@ -17,11 +17,7 @@
 
 package org.apache.spark.api.python
 
-import java.net.URI
-
 import scala.collection.mutable.ArrayBuffer
-import scala.io.Source
-import scala.util.control.NonFatal
 
 import org.apache.spark.python.DenialConstraints
 import org.apache.spark.sql._
