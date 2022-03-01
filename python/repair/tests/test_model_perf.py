@@ -159,7 +159,6 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 _logger.info(f"target:boston({target1},{target2}) RMSE:{rmse}")
                 self.assertLess(rmse, ulimit + 0.10)
 
-    @unittest.skip('TODO: temporarily disabled because of OOM')
     def test_error_detection_perf_hospital(self):
         repair_targets = [
             "City",
@@ -194,15 +193,17 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setDiscreteThreshold(400) \
             .setTargets(repair_targets) \
             .setErrorDetectors(error_detectors) \
-            .option("error.freq_attr_stat_threshold", "0.0") \
-            .option("error.max_attrs_to_compute_domains", "4") \
+            .option("error.attr_freq_ratio_threshold", "0.0") \
+            .option("error.pairwise_freq_ratio_threshold", "0.05") \
+            .option("error.max_attrs_to_compute_pairwise_stats", "3") \
+            .option("error.max_attrs_to_compute_domains", "2") \
             .option("error.domain_threshold_alpha", "0.0") \
             .option("error.domain_threshold_beta", "0.7") \
             .run(detect_errors_only=True) \
             .cache()
 
         error_cells_df = predicted_error_cells_df.withColumn('l', f.expr('1')).join(
-            self.spark.table("error_cells_ground_truth").withColumn('r', f.expr('1')),
+            self.spark.table("hospital_error_cells").withColumn('r', f.expr('1')),
             ["tid", "attribute"],
             "full_outer").cache()
 

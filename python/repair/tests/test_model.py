@@ -281,8 +281,10 @@ class RepairModelTests(ReusedSQLTestCase):
         test_option_keys = [
             ('error.domain_threshold_alpha', '0.0'),
             ('error.domain_threshold_beta', '0.7'),
-            ('error.max_attrs_to_compute_domains', '4'),
-            ('error.freq_attr_stat_threshold', '0.0'),
+            ('error.max_attrs_to_compute_pairwise_stats', '3'),
+            ('error.max_attrs_to_compute_domains', '2'),
+            ('error.attr_freq_ratio_threshold', '0.0'),
+            ('error.pairwise_freq_ratio_threshold', '0.05'),
             ('model.max_training_row_num', '100000'),
             ('model.max_training_column_num', '65536'),
             ('model.small_domain_threshold', '12'),
@@ -320,8 +322,8 @@ class RepairModelTests(ReusedSQLTestCase):
             .setRowId("tid")
         self.assertRaisesRegexp(
             ValueError,
-            'Failed to cast "invalid" into float data: key=error.freq_attr_stat_threshold',
-            lambda: test_model.option('error.freq_attr_stat_threshold', 'invalid').run())
+            'Failed to cast "invalid" into float data: key=error.attr_freq_ratio_threshold',
+            lambda: test_model.option('error.attr_freq_ratio_threshold', 'invalid').run())
 
     def test_multiple_run(self):
         # Checks if auto-generated views are dropped finally
@@ -333,8 +335,10 @@ class RepairModelTests(ReusedSQLTestCase):
                 .setRowId("tid") \
                 .option('error.domain_threshold_alpha', '0.0') \
                 .option('error.domain_threshold_beta', '0.70') \
-                .option('error.max_attrs_to_compute_domains', '4') \
-                .option('error.freq_attr_stat_threshold', '0.0') \
+                .option('error.max_attrs_to_compute_pairwise_stats', '3') \
+                .option('error.max_attrs_to_compute_domains', '2') \
+                .option('error.attr_freq_ratio_threshold', '0.0') \
+                .option('error.pairwise_freq_ratio_threshold', '0.05') \
                 .option('model.max_training_row_num', '10000') \
                 .option('model.max_training_column_num', '65536') \
                 .option('model.small_domain_threshold', '12') \

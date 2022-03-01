@@ -379,13 +379,13 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         def computeAttrStats(freqAttrStatThreshold: Double): Map[String, Any] = {
           val domainStatMapAsJson = s"""{"$tid": 9,"$x": 3,"$y": 4}"""
           val jsonString = RepairApi.computeAttrStats(
-            "tempView", tid, s"$x,$y", domainStatMapAsJson, freqAttrStatThreshold)
+            "tempView", tid, s"$x,$y", domainStatMapAsJson, freqAttrStatThreshold, 1.0, 256)
           val jsonObj = parse(jsonString)
           jsonObj.asInstanceOf[JObject].values
         }
 
         val data1 = computeAttrStats(0.0)
-        checkAnswer(spark.table(data1("freq_attr_stats").toString), Seq(
+        checkAnswer(spark.table(data1("attr_freq_stats").toString), Seq(
           Row("1", "test-1", 3),
           Row("2", "test-2a", 1),
           Row(null, "test-2a", 1),
@@ -408,7 +408,7 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         assert(pairwiseStatMap1(s"$y").head._2 <= 1.0)
 
         val data2 = computeAttrStats(1.0)
-        checkAnswer(spark.table(data2("freq_attr_stats").toString), Nil)
+        checkAnswer(spark.table(data2("attr_freq_stats").toString), Nil)
         val pairwiseStatMap2 = data2("pairwise_attr_corr_stats")
           .asInstanceOf[Map[String, Seq[Seq[String]]]]
           .mapValues(_.map { case Seq(attr, sv) => (attr, sv.toDouble) })
