@@ -22,7 +22,7 @@ from pyspark import SparkConf
 from pyspark.sql import functions as f
 
 from repair.model import RepairModel
-from repair.errors import ConstraintErrorDetector, NullErrorDetector, RegExErrorDetector
+from repair.errors import ConstraintErrorDetector, DomainValues, NullErrorDetector, RegExErrorDetector
 from repair.tests.requirements import have_pandas, have_pyarrow, \
     pandas_requirement_message, pyarrow_requirement_message
 from repair.tests.testutils import ReusedSQLTestCase, load_testdata
@@ -186,7 +186,15 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             NullErrorDetector(),
             ConstraintErrorDetector(constraint_path),
             RegExErrorDetector("Sample", "^[0-9]{1,3} patients$"),
-            RegExErrorDetector("Score", "^[0-9]{1,3}%$")
+            RegExErrorDetector("Score", "^[0-9]{1,3}%$"),
+            RegExErrorDetector("PhoneNumber", "^[0-9]{10}$"),
+            RegExErrorDetector("ZipCode", "^[0-9]{5}$"),
+            DomainValues(attr='Condition', values=[
+                "children s asthma care", "pneumonia", "heart attack", "surgical infection prevention",
+                "heart failure"]),
+            DomainValues(attr='HospitalType', values=['acute care hospitals']),
+            DomainValues(attr='EmergencyService', values=['yes', 'no']),
+            DomainValues(attr='State', values=['al', 'al'])
         ]
 
         predicted_error_cells_df = self._build_model("hospital") \
@@ -195,8 +203,8 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setErrorDetectors(error_detectors) \
             .option("error.attr_freq_ratio_threshold", "0.0") \
             .option("error.pairwise_freq_ratio_threshold", "0.05") \
-            .option("error.max_attrs_to_compute_pairwise_stats", "3") \
-            .option("error.max_attrs_to_compute_domains", "2") \
+            .option("error.max_attrs_to_compute_pairwise_stats", "4") \
+            .option("error.max_attrs_to_compute_domains", "3") \
             .option("error.domain_threshold_alpha", "0.0") \
             .option("error.domain_threshold_beta", "0.7") \
             .run(detect_errors_only=True) \
@@ -219,10 +227,10 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             df = error_cells_df.where('l IS NULL OR r IS NULL').groupBy('attribute').count().toPandas()
             return ','.join(map(lambda r: f'{r.attribute}:{r.count}', df.itertuples()))
 
-        msg = f"target:hospital-error-detection precision:{precision} recall:{recall} f1:{f1} " \
+        msg = f"target:hospital(error detection) precision:{precision} recall:{recall} f1:{f1} " \
             f"stats:{incorrect_cell_hist()}"
         _logger.info(msg)
-        self.assertTrue(precision > 0.01 and recall > 0.95 and f1 > 0.05, msg=msg)
+        self.assertTrue(precision > 0.17 and recall > 0.98 and f1 > 0.28, msg=msg)
 
     def test_repair_perf_hospital(self):
         repair_targets = [
