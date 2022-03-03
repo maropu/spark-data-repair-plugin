@@ -254,27 +254,27 @@ class RepairSuite extends QueryTest with SharedSparkSession {
         val attrsToComputeFreqStats = Seq(Seq(x), Seq(y), Seq(x, y))
         val df1 = RepairApi.computeFreqStats("tempView", attrsToComputeFreqStats, 0.0)
         checkAnswer(df1, Seq(
-          Row("1", "test-1", 3),
-          Row("2", "test-2a", 1),
-          Row(null, "test-2a", 1),
-          Row("2", "test-2", 2),
-          Row(null, "test-2", 2),
-          Row("3", null, 3),
-          Row("3", "test-3", 3),
-          Row(null, "test-1", 3),
-          Row("2", null, 3),
-          Row(null, "test-3", 3),
-          Row("1", null, 3)
+          Row("1", 0, "test-1", 0, 3),
+          Row("2", 0, "test-2a", 0, 1),
+          Row(null, 1, "test-2a", 0, 1),
+          Row("2", 0, "test-2", 0, 2),
+          Row(null, 1, "test-2", 0, 2),
+          Row("3", 0, null, 1, 3),
+          Row("3", 0, "test-3", 0, 3),
+          Row(null, 1, "test-1", 0, 3),
+          Row("2", 0, null, 1, 3),
+          Row(null, 1, "test-3", 0, 3),
+          Row("1", 0, null, 1, 3)
         ))
         val df2 = RepairApi.computeFreqStats("tempView", attrsToComputeFreqStats, 0.3)
         checkAnswer(df2, Seq(
-          Row("1", "test-1", 3),
-          Row("3", null, 3),
-          Row("3", "test-3", 3),
-          Row(null, "test-1", 3),
-          Row("2", null, 3),
-          Row(null, "test-3", 3),
-          Row("1", null, 3)
+          Row("1", 0, "test-1", 0, 3),
+          Row("3", 0, null, 1, 3),
+          Row("3", 0, "test-3", 0, 3),
+          Row(null, 1, "test-1", 0, 3),
+          Row("2", 0, null, 1, 3),
+          Row(null, 1, "test-3", 0, 3),
+          Row("1", 0, null, 1, 3)
         ))
 
         val errMsg = intercept[IllegalStateException] {
@@ -311,7 +311,12 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
   test("computePairwiseStats - no frequency stat") {
     withTempView("emptyFreqAttrStats") {
-      spark.range(1).selectExpr("id AS x", "id AS y", "id AS cnt")
+      spark.range(1).selectExpr(
+          "id AS x",
+          "0 __generated_freq_group_x",
+          "id AS y",
+          "0 __generated_freq_group_y",
+          "id AS cnt")
         .where("1 == 0")
         .createOrReplaceTempView("emptyFreqAttrStats")
 
@@ -331,20 +336,20 @@ class RepairSuite extends QueryTest with SharedSparkSession {
       withTempView("freqAttrStats") {
         spark.sql(
           s"""
-             |CREATE TEMPORARY VIEW freqAttrStats(`$x`, `$y`, cnt) AS SELECT * FROM VALUES
-             |  ("2", "test-2", 2),
-             |  ("2", "test-1", 2),
-             |  ("3", "test-1", 1),
-             |  ("1", "test-1", 1),
-             |  ("2", "test-2a", 1),
-             |  ("3", "test-3", 2),
-             |  (null, "test-2", 2),
-             |  ("3", null, 3),
-             |  ("2", null, 5),
-             |  (null, "test-1", 4),
-             |  (null, "test-2a", 1),
-             |  (null, "test-3", 2),
-             |  ("1", null, 1)
+             |CREATE TEMPORARY VIEW freqAttrStats(`$x`, `__generated_freq_group_$x`, `$y`, `__generated_freq_group_$y`, cnt) AS SELECT * FROM VALUES
+             |  ("2", 0, "test-2", 0, 2),
+             |  ("2", 0, "test-1", 0, 2),
+             |  ("3", 0, "test-1", 0, 1),
+             |  ("1", 0, "test-1", 0, 1),
+             |  ("2", 0, "test-2a", 0, 1),
+             |  ("3", 0, "test-3", 0, 2),
+             |  (null, 1, "test-2", 0, 2),
+             |  ("3", 0, null, 1, 3),
+             |  ("2", 0, null, 1, 5),
+             |  (null, 1, "test-1", 0, 4),
+             |  (null, 1, "test-2a", 0, 1),
+             |  (null, 1, "test-3", 0, 2),
+             |  ("1", 0, null, 1, 1)
              """.stripMargin)
 
         val domainStatMap = Map(tid -> 9L, s"$x" -> 3L, s"$y" -> 4L)
@@ -386,17 +391,17 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
         val data1 = computeAttrStats(0.0)
         checkAnswer(spark.table(data1("attr_freq_stats").toString), Seq(
-          Row("1", "test-1", 3),
-          Row("2", "test-2a", 1),
-          Row(null, "test-2a", 1),
-          Row("2", "test-2", 2),
-          Row(null, "test-2", 2),
-          Row("3", null, 3),
-          Row("3", "test-3", 3),
-          Row(null, "test-1", 3),
-          Row("2", null, 3),
-          Row(null, "test-3", 3),
-          Row("1", null, 3)
+          Row("1", 0, "test-1", 0, 3),
+          Row("2", 0, "test-2a", 0, 1),
+          Row(null, 1, "test-2a", 0, 1),
+          Row("2", 0, "test-2", 0, 2),
+          Row(null, 1, "test-2", 0, 2),
+          Row("3", 0, null, 1, 3),
+          Row("3", 0, "test-3", 0, 3),
+          Row(null, 1, "test-1", 0, 3),
+          Row("2", 0, null, 1, 3),
+          Row(null, 1, "test-3", 0, 3),
+          Row("1", 0, null, 1, 3)
         ))
         val pairwiseStatMap1 = data1("pairwise_attr_corr_stats")
           .asInstanceOf[Map[String, Seq[Seq[String]]]]
@@ -448,35 +453,35 @@ class RepairSuite extends QueryTest with SharedSparkSession {
 
         spark.sql(
           s"""
-             |CREATE TEMPORARY VIEW freqAttrStats(`$x`, `$y`, `$z`, cnt) AS SELECT * FROM VALUES
-             |  ("2", null, 1, 3),
-             |  (null, "test-1", 1, 3),
-             |  ("2", null, 2, 2),
-             |  ("2", null, null, 5),
-             |  (null, "test-1", null, 4),
-             |  ("2", "test-2", null, 2),
-             |  (null, null, 3, 2),
-             |  (null, "test-1", 3, 1),
-             |  (null, "test-2", 1, 1),
-             |  ("3", null, null, 3),
-             |  (null, "test-2", 2, 1),
-             |  (null, null, 1, 4),
-             |  ("2", "test-1", null, 2),
-             |  (null, "test-2", null, 2),
-             |  ("3", "test-1", null, 1),
-             |  (null, null, 2, 3),
-             |  ("3", null, 3, 2),
-             |  ("1", "test-1", null, 1),
-             |  (null, "test-3", 2, 1),
-             |  (null, "test-3", 3, 1),
-             |  (null, "test-2a", 2, 1),
-             |  ("1", null, null, 1),
-             |  ("3", "test-3", null, 2),
-             |  (null, "test-2a", null, 1),
-             |  ("2", "test-2a", null, 1),
-             |  (null, "test-3", null, 2),
-             |  ("3", null, 2, 1),
-             |  ("1", null, 1, 1)
+             |CREATE TEMPORARY VIEW freqAttrStats(`$x`, `__generated_freq_group_$x`, `$y`, `__generated_freq_group_$y`, `$z`, `__generated_freq_group_$z`, cnt) AS SELECT * FROM VALUES
+             |  ("2", 0, null, 1, 1, 0, 3),
+             |  (null, 1, "test-1", 0, 1, 0, 3),
+             |  ("2", 0, null, 1, 2, 0, 2),
+             |  ("2", 0, null, 1, null, 1, 5),
+             |  (null, 1, "test-1", 0, null, 1, 4),
+             |  ("2", 0, "test-2", 0, null, 1, 2),
+             |  (null, 1, null, 1, 3, 0, 2),
+             |  (null, 1, "test-1", 0, 3, 0, 1),
+             |  (null, 1, "test-2", 0, 1, 0, 1),
+             |  ("3", 0, null, 1, null, 1, 3),
+             |  (null, 1, "test-2", 0, 2, 0, 1),
+             |  (null, 1, null, 1, 0, 0, 4),
+             |  ("2", 0, "test-1", 0, null, 1, 2),
+             |  (null, 1, "test-2", 0, null, 1, 2),
+             |  ("3", 0, "test-1", 0, null, 1, 1),
+             |  (null, 1, null, 1, 2, 0, 3),
+             |  ("3", 0, null, 1, 3, 0, 2),
+             |  ("1", 0, "test-1", 0, null, 0, 1),
+             |  (null, 1, "test-3", 0, 2, 0, 1),
+             |  (null, 1, "test-3", 0, 3, 0, 1),
+             |  (null, 1, "test-2a", 0, 2, 0, 1),
+             |  ("1", 0, null, 1, null, 1, 1),
+             |  ("3", 0, "test-3", 0, null, 1, 2),
+             |  (null, 1, "test-2a", 0, null, 1, 1),
+             |  ("2", 0, "test-2a", 0, null, 1, 1),
+             |  (null, 1, "test-3", 0, null, 1, 2),
+             |  ("3", 0, null, 1, 2, 0, 1),
+             |  ("1", 0, null, 1, 1, 0, 1)
            """.stripMargin)
 
         val pairwiseStatMapAsJson = s"""{"$x": [["$y","1.0"]], "$y": [["$x","0.846950694324252"]]}"""

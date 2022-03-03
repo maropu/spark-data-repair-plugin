@@ -194,7 +194,7 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
                 "heart failure"]),
             DomainValues(attr='HospitalType', values=['acute care hospitals']),
             DomainValues(attr='EmergencyService', values=['yes', 'no']),
-            DomainValues(attr='State', values=['al', 'al'])
+            DomainValues(attr='State', values=['al', 'ak'])
         ]
 
         predicted_error_cells_df = self._build_model("hospital") \

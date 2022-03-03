@@ -210,6 +210,8 @@ object RepairApi extends RepairBase {
     Seq("repair_base_cells" -> repairBaseView).asJson
   }
 
+  private def freqGroupPrefix: String = "__generated_freq_group_"
+
   def computeFunctionalDeps(
       inputView: String,
       constraintFilePath: String,
@@ -260,7 +262,7 @@ object RepairApi extends RepairBase {
       }
       spark.sql(
         s"""
-           |SELECT ${targetAttrs.map(a => s"`$a`").mkString(", ")}, COUNT(1) cnt
+           |SELECT ${targetAttrs.map(a => s"`$a`, grouping(`$a`) `$freqGroupPrefix$a`").mkString(", ")}, COUNT(1) cnt
            |FROM $inputView
            |GROUP BY GROUPING SETS (
            |  ${groupingSetSeq.mkString(", ")}
@@ -270,8 +272,9 @@ object RepairApi extends RepairBase {
     }
   }
 
-  private def whereCaluseToFilterStat(a: String, attrs: Seq[String]): String = {
-    s"`$a` IS NOT NULL AND ${attrs.filter(_ != a).map(a => s"`$a` IS NULL").mkString(" AND ")}"
+  private def whereCaluseToFilterFreqGroups(targetAttr: String, otherAttrs: Seq[String]): String = {
+    s"`$freqGroupPrefix$targetAttr` = 0 AND ${otherAttrs.filter(_ != targetAttr)
+      .map(a => s"`$freqGroupPrefix$a` = 1").mkString(" AND ")}"
   }
 
   private def log2(v: Double): Double = {
@@ -286,7 +289,7 @@ object RepairApi extends RepairBase {
     if (targetAttrPairsToComputeStats.isEmpty) {
       Map.empty
     } else {
-      val freqStatAttrs = spark.table(freqStatView).columns.filter(_ != "cnt")
+      val freqStatAttrs = spark.table(freqStatView).columns.filter { x => x != "cnt" && !x.startsWith(freqGroupPrefix) }
       val targetAttrs = targetAttrPairsToComputeStats.flatMap(p => Seq(p._1, p._2)).distinct
 
       assert(rowCount > 0)
@@ -305,8 +308,8 @@ object RepairApi extends RepairBase {
                 s"""
                    |SELECT COUNT(1), COALESCE(SUM(cnt), 0)
                    |FROM $freqStatView
-                   |WHERE `$x` IS NOT NULL AND
-                   |  `$y` IS NOT NULL
+                   |WHERE `$freqGroupPrefix$x` = 0 AND
+                   |  `$freqGroupPrefix$y` = 0
                  """.stripMargin)
               val (domainSize, totalCount) = df.take(1).map {
                 case Row(cnt: Long, sum: Long) => (cnt, sum)
@@ -328,8 +331,8 @@ object RepairApi extends RepairBase {
                  |FROM (
                  |  SELECT `$x` X, `$y` Y, (cnt / $rowCount) * log2(cnt / $rowCount) $hXY
                  |  FROM $freqStatView
-                 |  WHERE `$x` IS NOT NULL AND
-                 |    `$y` IS NOT NULL
+                 |WHERE `$freqGroupPrefix$x` = 0 AND
+                 |  `$freqGroupPrefix$y` = 0
                  |)
                """.stripMargin)
 
@@ -346,7 +349,7 @@ object RepairApi extends RepairBase {
                 s"""
                    |SELECT COUNT(1), COALESCE(SUM(cnt), 0)
                    |FROM $freqStatView
-                   |WHERE ${whereCaluseToFilterStat(attr, freqStatAttrs)}
+                   |WHERE ${whereCaluseToFilterFreqGroups(attr, freqStatAttrs)}
                  """.stripMargin)
               val (domainSize, totalCount) = df.take(1).map {
                 case Row(cnt: Long, sum: Long) => (cnt, sum)
@@ -368,7 +371,7 @@ object RepairApi extends RepairBase {
                  |FROM (
                  |  SELECT `$attr` Y, (cnt / $rowCount) * log2(cnt / $rowCount) $hY
                  |  FROM $freqStatView
-                 |  WHERE ${whereCaluseToFilterStat(attr, freqStatAttrs)}
+                 |  WHERE ${whereCaluseToFilterFreqGroups(attr, freqStatAttrs)}
                  |)
                """.stripMargin)
 
@@ -631,7 +634,7 @@ object RepairApi extends RepairBase {
                  |  ) d LEFT OUTER JOIN (
                  |    SELECT `$attribute`, MAX(cnt) cnt
                  |    FROM $freqAttrStatView
-                 |    WHERE ${whereCaluseToFilterStat(attribute, discretizedAttrs)}
+                 |    WHERE ${whereCaluseToFilterFreqGroups(attribute, discretizedAttrs)}
                  |    GROUP BY `$attribute`
                  |  ) s
                  |  ON
@@ -650,7 +653,7 @@ object RepairApi extends RepairBase {
                  |  l.`$rowId`,
                  |  l.attribute,
                  |  current_value,
-                 |  filter(collect_set(named_struct('n', domain_value, 'prob', $score / $denom)), x -> x.prob > $domainThresholdBeta) domain
+                 |  array_sort(filter(collect_set(named_struct('n', domain_value, 'prob', $score / $denom)), x -> x.prob > $domainThresholdBeta), (l, r) -> case when l.prob > r.prob then -1 when l.prob < r.prob then 1 else 0 end) domain
                  |FROM
                  |  $domainWithScoreView l, (
                  |    SELECT
