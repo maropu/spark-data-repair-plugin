@@ -202,11 +202,11 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             .setTargets(repair_targets) \
             .setErrorDetectors(error_detectors) \
             .option("error.attr_freq_ratio_threshold", "0.0") \
-            .option("error.pairwise_freq_ratio_threshold", "0.05") \
+            .option("error.pairwise_freq_ratio_threshold", "1.0") \
             .option("error.max_attrs_to_compute_pairwise_stats", "4") \
-            .option("error.max_attrs_to_compute_domains", "3") \
+            .option("error.max_attrs_to_compute_domains", "2") \
             .option("error.domain_threshold_alpha", "0.0") \
-            .option("error.domain_threshold_beta", "0.7") \
+            .option("error.domain_threshold_beta", "0.5") \
             .run(detect_errors_only=True) \
             .cache()
 
@@ -215,22 +215,30 @@ class RepairModelPerformanceTests(ReusedSQLTestCase):
             ["tid", "attribute"],
             "full_outer").cache()
 
-        correct_error_cell_num = error_cells_df \
-            .where('l IS NOT NULL AND r IS NOT NULL').count()
+        def check_precision_and_recall(test_error_cells_df, cf) -> None:
+            correct_error_cell_num = test_error_cells_df \
+                .where('l IS NOT NULL AND r IS NOT NULL').count()
 
-        # Computes performance numbers (precision & recall)
-        precision = correct_error_cell_num / predicted_error_cells_df.count()
-        recall = correct_error_cell_num / self.spark.table("hospital_error_cells").count()
-        f1 = (2.0 * precision * recall) / (precision + recall)
+            # Computes performance numbers (precision & recall)
+            precision = correct_error_cell_num / test_error_cells_df.where('l IS NOT NULL').count()
+            recall = correct_error_cell_num / test_error_cells_df.where('r IS NOT NULL').count()
+            f1 = (2.0 * precision * recall) / (precision + recall)
 
-        def incorrect_cell_hist() -> str:
-            df = error_cells_df.where('l IS NULL OR r IS NULL').groupBy('attribute').count().toPandas()
-            return ','.join(map(lambda r: f'{r.attribute}:{r.count}', df.itertuples()))
+            def incorrect_cell_hist() -> str:
+                df = test_error_cells_df.where('l IS NULL OR r IS NULL').groupBy('attribute').count().toPandas()
+                return ','.join(map(lambda r: f'{r.attribute}:{r.count}', df.itertuples()))
 
-        msg = f"target:hospital(error detection) precision:{precision} recall:{recall} f1:{f1} " \
-            f"stats:{incorrect_cell_hist()}"
-        _logger.info(msg)
-        self.assertTrue(precision > 0.17 and recall > 0.98 and f1 > 0.28, msg=msg)
+            msg = f"target:hospital(error detection) precision:{precision} recall:{recall} f1:{f1} " \
+                f"stats:{incorrect_cell_hist()}"
+            _logger.info(msg)
+            self.assertTrue(cf(precision, recall, f1), msg=msg)
+
+        check_precision_and_recall(error_cells_df, lambda p, r, f1: p > 0.65 and r > 0.98 and f1 > 0.78)
+
+        # The 'Score' and 'Sample' columns have many NULL cells that are not true dirty data, so
+        # checks the case where the two columns are filtered out.
+        check_precision_and_recall(error_cells_df.where('attribute NOT IN ("Score", "Sample")'),
+                                   lambda p, r, f1: p > 0.95 and r > 0.98 and f1 > 0.96)
 
     def test_repair_perf_hospital(self):
         repair_targets = [
